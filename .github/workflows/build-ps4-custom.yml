@@ -2,7 +2,7 @@ name: build-ps4-custom
 
 on:
   push:
-    branches: [ ps4-safe-sources ]
+    branches: [ dev, ps4-safe-sources ]
     paths:
       - custom/ps4-safe-sources.patch
       - .github/workflows/build-ps4-custom.yml
@@ -18,14 +18,18 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          submodules: recursive
+          fetch-depth: 0
 
-      - name: Verify upstream baseline and apply custom patch
+      - name: Reset to exact upstream v1.1.0 and apply custom patch
         run: |
           git config --global --add safe.directory '*'
-          git merge-base --is-ancestor a62f471a1804ca08dfc7cce732edd142c13ef712 HEAD
-          git apply --check custom/ps4-safe-sources.patch
-          git apply --verbose custom/ps4-safe-sources.patch
+          cp custom/ps4-safe-sources.patch /tmp/ps4-safe-sources.patch
+          git fetch --tags --force
+          git checkout --detach v1.1.0
+          git submodule update --init --recursive
+          test "$(git rev-parse HEAD)" = "a62f471a1804ca08dfc7cce732edd142c13ef712"
+          git apply --check /tmp/ps4-safe-sources.patch
+          git apply --verbose /tmp/ps4-safe-sources.patch
           git diff --check
           git diff --stat
 
