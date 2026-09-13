@@ -1,0 +1,70 @@
+name: build-ps4-custom
+
+on:
+  push:
+    branches: [ ps4-safe-sources ]
+    paths:
+      - custom/ps4-safe-sources.patch
+      - .github/workflows/build-ps4-custom.yml
+  workflow_dispatch:
+
+jobs:
+  build-ps4-custom:
+    runs-on: ubuntu-latest
+    container:
+      image: xfangfang/pacbrew:250221
+    env:
+      BASE_URL: https://github.com/dragonflylee/switchfin/releases/download/pacbrew
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Verify upstream baseline and apply custom patch
+        run: |
+          git config --global --add safe.directory '*'
+          git merge-base --is-ancestor a62f471a1804ca08dfc7cce732edd142c13ef712 HEAD
+          git apply --check custom/ps4-safe-sources.patch
+          git apply --verbose custom/ps4-safe-sources.patch
+          git diff --check
+          git diff --stat
+
+      - name: Apply borealis patches
+        run: git -C library/borealis apply --verbose ../../scripts/patches/borealis-fixes.patch
+
+      - name: Update dependencies
+        run: |
+          for pkg in musl-1.5-3 mbedtls-2.28.10-2 sdl2-2.0.18-19 libcurl-7.80.0-5 dav1d-1.5.3-1 ffmpeg-7.1.5-3 libmpv-0.36.0-2; do
+            pacman --noconfirm -U $BASE_URL/ps4-openorbis-${pkg}-any.pkg.tar.gz
+          done
+          git config --system --add safe.directory $GITHUB_WORKSPACE
+
+      - name: Build custom PS4 package
+        env:
+          OPENORBIS: /opt/pacbrew/ps4/openorbis
+        run: |
+          cmake -B build -DPLATFORM_PS4=ON -DVERSION_BUILD=${{ github.run_number }}
+          make -C build -j$(nproc)
+
+      - name: Verify package and hashes
+        run: |
+          set -eux
+          test -f build/IV0001-GMCA00000_00-GMCA000000002700.pkg
+          stat -c '%n %s bytes' build/*.pkg
+          sha256sum build/*.pkg | tee build/SHA256SUMS
+
+      - name: Upload custom PS4 package
+        uses: actions/upload-artifact@v6
+        with:
+          name: GMCA-PS4-safe-${{ github.run_number }}
+          path: |
+            build/*.pkg
+            build/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Upload oelf for diagnostics
+        uses: actions/upload-artifact@v6
+        with:
+          name: GMCA-PS4-safe-oelf-${{ github.run_number }}
+          path: build/GMCA.oelf
+          if-no-files-found: error
