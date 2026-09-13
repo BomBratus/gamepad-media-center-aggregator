@@ -1,0 +1,356 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -62,4 +62,7 @@
+ # regresses; 00.23 shipped with the broken v1.0.3 VPK, 00.24 is the first that
+ # actually installs.
+ set(VITA_VERSION "00.26")
++# Custom PS4 package revision. Keep the upstream Title ID so this installs as an
++# update over v1.1.0, but use a higher app version for an easy rollback path.
++set(PS4_VERSION "00.27")
+ set(PROJECT_ICON ${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/icon.jpg)
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -250,5 +253,8 @@
+     BUILD_TAG_SHORT=${GIT_TAG_SHORT}
+     BUILD_PACKAGE_NAME=${PROJECT_NAME}
+ )
++if (PLATFORM_PS4)
++    target_compile_definitions(${PROJECT_NAME} PRIVATE GMCA_PS4_SAFE_SOURCES=1)
++endif ()
+ 
+ # building release file
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -357,6 +363,6 @@
+             ${CMAKE_BINARY_DIR}/ps4
+             ${PSN_TITLE_ID}
+             ${PROJECT_NAME}
+-            ${VITA_VERSION}
++            ${PS4_VERSION}
+             8388608
+     )
+diff --git a/app/include/api/media/types.hpp b/app/include/api/media/types.hpp
+--- a/app/include/api/media/types.hpp
++++ b/app/include/api/media/types.hpp
+@@ -200,4 +200,6 @@
+     // ---- source presentation (Stremio picker; empty/default on Plex/Jellyfin) ----
+     std::string label;   // primary line: source/addon name (+ release group)
+     std::string detail;  // secondary line: codec · size · seeders (our own re-render)
++    std::string sourceName;   // raw Stremio stream.name (PS4 safety hints / picker)
++    std::string sourceTitle;  // raw Stremio stream.title (release name / HDR hints)
+     SourceKind kind = SourceKind::Direct;
+diff --git a/app/include/api/stremio/types.hpp b/app/include/api/stremio/types.hpp
+--- a/app/include/api/stremio/types.hpp
++++ b/app/include/api/stremio/types.hpp
+@@ -642,5 +642,7 @@
+     std::string blob = s.name + " " + s.title;
+     m.videoResolution = qualityLabel(blob);
+     m.label = addonName;
++    m.sourceName = s.name;
++    m.sourceTitle = s.title;
+ 
+     if (!s.url.empty()) {
+diff --git a/app/include/api/stremio/types.hpp b/app/include/api/stremio/types.hpp
+--- a/app/include/api/stremio/types.hpp
++++ b/app/include/api/stremio/types.hpp
+@@ -680,4 +682,55 @@
+     return m;
+ }
+ 
++/// Conservative PS4 source classification. The codec/resolution fields are
++/// structured values parsed above; HDR/Dolby Vision are inferred only from the
++/// original Stremio name/title text and never from an absent token.
++struct Ps4SourceSafety {
++    bool highResolution = false;
++    bool hdr = false;
++    bool dolbyVision = false;
++    bool hevc = false;
++    bool av1 = false;
++};
++
++inline Ps4SourceSafety ps4SourceSafety(const media::Media& m) {
++    Ps4SourceSafety s;
++    s.highResolution = m.videoResolution == "4K" || m.videoResolution == "1440p";
++    s.hevc = m.videoCodec == "HEVC";
++    s.av1 = m.videoCodec == "AV1";
++
++    std::string text = m.sourceName + " " + m.sourceTitle;
++    for (auto& c : text) c = (char)std::tolower((unsigned char)c);
++    s.dolbyVision = text.find("dolby vision") != std::string::npos || text.find("dovi") != std::string::npos;
++    s.hdr = text.find("hdr") != std::string::npos;
++    return s;
++}
++
++/// Higher is safer for the PS4. Unknown codec stays Unknown (rank 4): it is not
++/// promoted to H.264 just because the addon omitted a codec token.
++inline int ps4SafeRank(const media::Media& m) {
++    Ps4SourceSafety s = ps4SourceSafety(m);
++    if (s.av1) return 0;
++    if (s.highResolution) return 1;
++    if (s.hdr || s.dolbyVision) return 2;
++    if (s.hevc) return 3;
++    if (m.videoCodec == "H.264") return 5;
++    return 4;
++}
++
++inline std::string ps4WarningLabel(const media::Media& m) {
++    Ps4SourceSafety s = ps4SourceSafety(m);
++    std::string out;
++    auto add = [&out](const char* value) {
++        if (!out.empty()) out += " / ";
++        out += value;
++    };
++    if (s.av1) add("AV1");
++    if (s.highResolution) add(m.videoResolution == "4K" ? "4K" : "1440p");
++    if (s.dolbyVision) add("Dolby Vision");
++    else if (s.hdr) add("HDR");
++    if (s.hevc) add("HEVC");
++    return out.empty() ? out : "PS4 RISK: " + out;
++}
++
+ /// ---- Subtitles (subtitles resource) ----------------------------------------
+diff --git a/app/src/api/stremio/backend.cpp b/app/src/api/stremio/backend.cpp
+--- a/app/src/api/stremio/backend.cpp
++++ b/app/src/api/stremio/backend.cpp
+@@ -221,6 +221,13 @@
+         int ax = audioRankVita(x.audioCodec), ay = audioRankVita(y.audioCodec);
+         if (ax != ay) return ax > ay;
+         int qx = qualityRankVita(x.videoResolution), qy = qualityRankVita(y.videoResolution);
++#elif defined(GMCA_PS4_SAFE_SOURCES)
++        // PS4 custom build: never hide a source, but put the combinations most
++        // likely to render reliably first. This also makes binge/Next fallback
++        // safer when no explicit picker is shown.
++        int sx = ps4SafeRank(x), sy = ps4SafeRank(y);
++        if (sx != sy) return sx > sy;
++        int qx = qualityRank(x.videoResolution), qy = qualityRank(y.videoResolution);
+ #else
+         int qx = qualityRank(x.videoResolution), qy = qualityRank(y.videoResolution);
+ #endif
+diff --git a/app/src/tab/media_movie.cpp b/app/src/tab/media_movie.cpp
+--- a/app/src/tab/media_movie.cpp
++++ b/app/src/tab/media_movie.cpp
+@@ -12,2 +12,3 @@
+ #include "api/backend.hpp"
++#include "api/stremio/types.hpp"
+ #include "utils/misc.hpp"
+diff --git a/app/src/tab/media_movie.cpp b/app/src/tab/media_movie.cpp
+--- a/app/src/tab/media_movie.cpp
++++ b/app/src/tab/media_movie.cpp
+@@ -444,3 +445,7 @@
++#if defined(GMCA_PS4_SAFE_SOURCES)
++        std::string warning = stremio::ps4WarningLabel(m);
++        if (!warning.empty()) cells.push_back(sourcePill(warning, goldBg, goldFg));
++#endif
+         // source name (grows) + meta (codec · size)
+         cells.push_back(sourceLabel(m.label, 15, textCol, true));
+         if (!m.detail.empty()) cells.push_back(sourceLabel(m.detail, 13, greyCol));
+diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
+--- a/app/src/tab/media_series.cpp
++++ b/app/src/tab/media_series.cpp
+@@ -7,2 +7,3 @@
+ #include "api/backend.hpp"
++#include "api/stremio/types.hpp"
+ #include "tab/media_series.hpp"
+diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
+--- a/app/src/tab/media_series.cpp
++++ b/app/src/tab/media_series.cpp
+@@ -27,6 +28,169 @@
+ #include "tab/remote_view.hpp"
++#include <borealis/views/dialog.hpp>
++#include <borealis/views/label.hpp>
++#include <borealis/views/scrolling_frame.hpp>
+ #include <fmt/ranges.h>
+ 
+ using namespace brls::literals;  // for _i18n
+ 
++namespace {
++
++brls::Label* episodeSourceLabel(const std::string& text, float size, NVGcolor color, bool grow = false) {
++    auto* label = new brls::Label();
++    label->setText(text);
++    label->setFontSize(size);
++    label->setTextColor(color);
++    label->setSingleLine(true);
++    if (grow) label->setGrow(1);
++    return label;
++}
++
++brls::Box* episodeSourcePill(const std::string& text, NVGcolor bg, NVGcolor fg) {
++    auto* box = new brls::Box();
++    box->setAxis(brls::Axis::ROW);
++    box->setAlignItems(brls::AlignItems::CENTER);
++    box->setHeight(22);
++    box->setCornerRadius(11);
++    box->setBackgroundColor(bg);
++    box->setPaddingLeft(9);
++    box->setPaddingRight(9);
++    box->setMarginRight(8);
++    box->addView(episodeSourceLabel(text, 12, fg));
++    return box;
++}
++
++class EpisodeSourceRow : public brls::Box {
++public:
++    EpisodeSourceRow() {
++        this->setAxis(brls::Axis::COLUMN);
++        this->setHeight(78);
++        this->setCornerRadius(8);
++        this->setHighlightCornerRadius(8);
++        this->setFocusable(true);
++        this->setPaddingTop(7);
++        this->setPaddingBottom(7);
++        this->setPaddingLeft(12);
++        this->setPaddingRight(12);
++        this->setMarginBottom(6);
++        this->setHideHighlightBackground(true);
++    }
++
++    void onFocusGained() override {
++        brls::Box::onFocusGained();
++        NVGcolor c = brls::Application::getTheme().getColor("color/app");
++        c.a = 0.22f;
++        this->setBackgroundColor(c);
++    }
++
++    void onFocusLost() override {
++        brls::Box::onFocusLost();
++        this->setBackgroundColor(nvgRGBA(0, 0, 0, 0));
++    }
++};
++
++std::string episodeDisplayTitle(const plex::Item& item) {
++    return item.grandparentTitle.empty()
++               ? fmt::format("S{}E{} — {}", item.parentIndex, item.index, item.title)
++               : fmt::format("{} · S{}E{} — {}", item.grandparentTitle, item.parentIndex, item.index, item.title);
++}
++
++void playResolvedEpisode(const plex::Item& item, int64_t seekMs, int mediaIndex) {
++    PlayerView* view = new PlayerView(item, seekMs, mediaIndex);
++    view->setTitie(episodeDisplayTitle(item));
++    if (!item.grandparentRatingKey.empty()) view->setSeries(item.grandparentRatingKey);
++    brls::sync([view]() { brls::Application::giveFocus(view); });
++}
++
++void showEpisodeSourcePicker(const plex::Item& item, int64_t seekMs) {
++    std::vector<int> playable;
++    for (size_t i = 0; i < item.media.size(); ++i)
++        if (item.media[i].playable()) playable.push_back((int)i);
++
++    if (playable.empty()) {
++        Dialog::show("main/stremio/source/none"_i18n);
++        return;
++    }
++
++    auto theme = brls::Application::getTheme();
++    NVGcolor pillBg = theme.getColor("color/pill");
++    NVGcolor textCol = theme.getColor("brls/text");
++    NVGcolor greyCol = theme.getColor("font/grey");
++    NVGcolor warningBg = theme.getColor("color/app");
++    NVGcolor warningFg = theme.getColor("brls/button/primary_enabled_text");
++
++    auto* content = new brls::Box();
++    content->setAxis(brls::Axis::COLUMN);
++    content->setWidth(940);
++    content->setHeight(610);
++    content->setPaddingTop(18);
++    content->setPaddingBottom(10);
++    content->setPaddingLeft(20);
++    content->setPaddingRight(20);
++
++    auto* heading = episodeSourceLabel("Scegli il flusso · " + episodeDisplayTitle(item), 22, textCol);
++    heading->setHeight(42);
++    content->addView(heading);
++
++    auto* scroll = new brls::ScrollingFrame();
++    scroll->setGrow(1);
++    scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
++    auto* list = new brls::Box();
++    list->setAxis(brls::Axis::COLUMN);
++    list->setWidthPercentage(100);
++    scroll->setContentView(list);
++    content->addView(scroll);
++
++    auto* dialog = new brls::Dialog(content);
++    dialog->addButton("Annulla", []() {});
++    dialog->setCancelable(true);
++
++    for (int mediaIndex : playable) {
++        const media::Media& m = item.media[(size_t)mediaIndex];
++        auto* row = new EpisodeSourceRow();
++
++        auto* top = new brls::Box();
++        top->setAxis(brls::Axis::ROW);
++        top->setAlignItems(brls::AlignItems::CENTER);
++        top->setHeight(28);
++        if (!m.videoResolution.empty())
++            top->addView(episodeSourcePill(m.videoResolution, pillBg, textCol));
++        if (!m.videoCodec.empty())
++            top->addView(episodeSourcePill(m.videoCodec, pillBg, textCol));
++#if defined(GMCA_PS4_SAFE_SOURCES)
++        std::string warning = stremio::ps4WarningLabel(m);
++        if (!warning.empty()) top->addView(episodeSourcePill(warning, warningBg, warningFg));
++#endif
++        std::string primary = !m.sourceTitle.empty() ? m.sourceTitle : (!m.sourceName.empty() ? m.sourceName : m.label);
++        top->addView(episodeSourceLabel(primary, 16, textCol, true));
++        row->addView(top);
++
++        std::string secondary = m.label;
++        if (!m.detail.empty()) secondary += (secondary.empty() ? "" : " · ") + m.detail;
++        if (m.kind == media::SourceKind::Debrid)
++            secondary += (secondary.empty() ? "" : " · ") + std::string(m.cached ? "Debrid cached" : "Debrid");
++        auto* sub = episodeSourceLabel(secondary, 13, greyCol);
++        sub->setHeight(26);
++        row->addView(sub);
++
++        row->registerClickAction([dialog, item, seekMs, mediaIndex](...) {
++            dialog->close([item, seekMs, mediaIndex]() { playResolvedEpisode(item, seekMs, mediaIndex); });
++            return true;
++        });
++        list->addView(row);
++    }
++
++    dialog->open();
++}
++
++void resolveAndShowEpisodeSourcePicker(const plex::Item& item) {
++    const std::string id = item.ratingKey;
++    const int64_t seekMs = item.viewOffset;
++    AppConfig::instance().backend().getItemDetail(
++        id, true,
++        [seekMs](const media::Item& resolved) { showEpisodeSourcePicker(resolved, seekMs); },
++        [](const std::string& error) { Dialog::show(error); });
++}
++
++}  // namespace
++
+ class EpisodeCardCell : public BaseCardCell {
+diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
+--- a/app/src/tab/media_series.cpp
++++ b/app/src/tab/media_series.cpp
+@@ -203,3 +367,8 @@
++        if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
++            resolveAndShowEpisodeSourcePicker(item);
++            return;
++        }
++
+         PlayerView* view = new PlayerView(item);
+         view->setTitie(item.grandparentTitle.empty()
+                            ? fmt::format("S{}E{} — {}", item.parentIndex, item.index, item.title)
+diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
+--- a/app/src/tab/media_series.cpp
++++ b/app/src/tab/media_series.cpp
+@@ -579,5 +748,11 @@
+     plex::Item item = this->onDeck;
+     if (this->replay) item.viewOffset = 0;
++    if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
++        // doOnDeck already resolved this episode with getItemDetail(), so the
++        // picker can reuse the exact source list without another network round-trip.
++        showEpisodeSourcePicker(item, item.viewOffset);
++        return;
++    }
+     PlayerView* view = new PlayerView(item);
+     view->setTitie(item.grandparentTitle.empty()
+                        ? fmt::format("S{}E{} — {}", item.parentIndex, item.index, item.title)
