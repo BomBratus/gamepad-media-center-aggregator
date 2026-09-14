@@ -30,6 +30,7 @@ jobs:
           python3 custom/apply-ps4-search-ui.py
           sed -i 's/set(PS4_VERSION "00.27")/set(PS4_VERSION "00.28")/' CMakeLists.txt
           grep -q 'set(PS4_VERSION "00.28")' CMakeLists.txt
+          git checkout -- custom/ps4-safe-sources.patch custom/ps4-ui-followups.patch
           git diff --check
 
       - name: Apply borealis patches
