@@ -18,12 +18,15 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Apply PS4 safe source picker patch
+      - name: Apply PS4 source picker and UI patches
         run: |
           git config --global --add safe.directory '*'
           printf '\n' >> custom/ps4-safe-sources.patch
+          printf '\n' >> custom/ps4-ui-followups.patch
           git apply --check custom/ps4-safe-sources.patch
           git apply --verbose custom/ps4-safe-sources.patch
+          git apply --check --recount custom/ps4-ui-followups.patch
+          git apply --verbose --recount custom/ps4-ui-followups.patch
           git diff --check
 
       - name: Apply borealis patches
@@ -47,22 +50,22 @@ jobs:
       - name: Verify package
         run: |
           set -eux
-          test -f build/IV0001-GMCA00000_00-GMCA000000002700.pkg
-          stat -c '%n %s bytes' build/IV0001-GMCA00000_00-GMCA000000002700.pkg
-          sha256sum build/IV0001-GMCA00000_00-GMCA000000002700.pkg | tee build/SHA256SUMS
+          test -f build/IV0001-GMCA00000_00-GMCA000000002800.pkg
+          stat -c '%n %s bytes' build/IV0001-GMCA00000_00-GMCA000000002800.pkg
+          sha256sum build/IV0001-GMCA00000_00-GMCA000000002800.pkg | tee build/SHA256SUMS
 
       - name: Upload pkg
         uses: actions/upload-artifact@v6
         with:
-          name: GMCA-PS4-recovery-safe-${{ github.run_number }}
+          name: GMCA-PS4-recovery-ui-${{ github.run_number }}
           path: |
-            build/IV0001-GMCA00000_00-GMCA000000002700.pkg
+            build/IV0001-GMCA00000_00-GMCA000000002800.pkg
             build/SHA256SUMS
           if-no-files-found: error
 
       - name: Upload oelf
         uses: actions/upload-artifact@v6
         with:
-          name: ps4-recovery-safe-oelf-${{ github.run_number }}
+          name: ps4-recovery-ui-oelf-${{ github.run_number }}
           path: build/GMCA.oelf
           if-no-files-found: error
