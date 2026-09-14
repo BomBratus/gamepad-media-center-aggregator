@@ -1,0 +1,16 @@
+diff --git a/library/lib/views/dropdown.cpp b/library/lib/views/dropdown.cpp
+index 65c6b9ad..5e95eb7c 100644
+--- a/library/lib/views/dropdown.cpp
++++ b/library/lib/views/dropdown.cpp
+@@ -112,6 +112,11 @@ Dropdown::Dropdown(std::string title, std::vector<std::string> values, ValueSele
+         RadioCell* cell = new RadioCell();
+         cell->setHeight(Application::getStyle()["brls/dropdown/listItemHeight"]);
+         cell->title->setFontSize(Application::getStyle()["brls/dropdown/listItemTextSize"]);
++        // Dropdown entries (notably media/source names) can be much wider than
++        // the picker. Keep each title on one line so Label truncates it to the
++        // available width instead of wrapping outside the fixed-height cell.
++        // Focused labels still use Label's clipped marquee to reveal the rest.
++        cell->title->setSingleLine(true);
+         return cell; });
+     recycler->setDefaultCellFocus(IndexPath(0, selected));
+     recycler->setDataSource(this, false);
