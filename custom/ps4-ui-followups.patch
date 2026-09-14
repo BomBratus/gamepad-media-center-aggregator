@@ -61,7 +61,7 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
      auto* content = new brls::Box();
      content->setAxis(brls::Axis::COLUMN);
 -    content->setWidth(940);
-+    content->setWidth(1120);
++    content->setWidthPercentage(100);
      content->setHeight(610);
 @@ -136,2 +149,3 @@
          top->setAlignItems(brls::AlignItems::CENTER);
