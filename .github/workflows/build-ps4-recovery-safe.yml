@@ -29,8 +29,8 @@ jobs:
           git apply --verbose --recount custom/ps4-ui-followups.patch
           awk -f custom/apply-ps4-search-ui.awk app/src/tab/search_tab.cpp > /tmp/search_tab.cpp
           mv /tmp/search_tab.cpp app/src/tab/search_tab.cpp
-          sed -i 's/set(PS4_VERSION "00.27")/set(PS4_VERSION "00.28")/' CMakeLists.txt
-          grep -q 'set(PS4_VERSION "00.28")' CMakeLists.txt
+          sed -i 's/set(PS4_VERSION "00.27")/set(PS4_VERSION "00.29")/' CMakeLists.txt
+          grep -q 'set(PS4_VERSION "00.29")' CMakeLists.txt
           git checkout -- custom/ps4-safe-sources.patch custom/ps4-ui-followups.patch
           git diff --check
 
@@ -55,16 +55,16 @@ jobs:
       - name: Verify package
         run: |
           set -eux
-          test -f build/IV0001-GMCA00000_00-GMCA000000002800.pkg
-          stat -c '%n %s bytes' build/IV0001-GMCA00000_00-GMCA000000002800.pkg
-          sha256sum build/IV0001-GMCA00000_00-GMCA000000002800.pkg | tee build/SHA256SUMS
+          test -f build/IV0001-GMCA00000_00-GMCA000000002900.pkg
+          stat -c '%n %s bytes' build/IV0001-GMCA00000_00-GMCA000000002900.pkg
+          sha256sum build/IV0001-GMCA00000_00-GMCA000000002900.pkg | tee build/SHA256SUMS
 
       - name: Upload pkg
         uses: actions/upload-artifact@v6
         with:
           name: GMCA-PS4-recovery-ui-${{ github.run_number }}
           path: |
-            build/IV0001-GMCA00000_00-GMCA000000002800.pkg
+            build/IV0001-GMCA00000_00-GMCA000000002900.pkg
             build/SHA256SUMS
           if-no-files-found: error
 
