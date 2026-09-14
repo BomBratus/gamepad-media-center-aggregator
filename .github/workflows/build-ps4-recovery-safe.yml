@@ -21,6 +21,7 @@ jobs:
       - name: Apply PS4 safe source picker patch
         run: |
           git config --global --add safe.directory '*'
+          printf '\n' >> custom/ps4-safe-sources.patch
           git apply --check custom/ps4-safe-sources.patch
           git apply --verbose custom/ps4-safe-sources.patch
           git diff --check
