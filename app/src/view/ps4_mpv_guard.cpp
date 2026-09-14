@@ -10,7 +10,6 @@
 #include <GLES2/gl2.h>
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -25,6 +24,7 @@ constexpr int64_t WATCHDOG_SAMPLE_MS = 1000;
 constexpr int64_t STALLED_FRAME_MS = 3500;
 constexpr int64_t RECOVERY_COOLDOWN_MS = 6000;
 constexpr int64_t STABLE_RESET_MS = 10000;
+constexpr int64_t HEARTBEAT_MS = 15000;
 constexpr std::streamoff MAX_DIAGNOSTIC_LOG = 2 * 1024 * 1024;
 
 struct GuardContext {
@@ -46,11 +46,17 @@ struct GuardContext {
     int64_t last_recovery_ms = 0;
     int64_t last_watchdog_sample_ms = 0;
     int64_t last_reconfig_ms = 0;
+    int64_t last_heartbeat_ms = 0;
     double last_watchdog_playback = 0.0;
 
     int recovery_stage = 0;  // 0=healthy, 1=video-reload attempted, 2=context rebuilt
     int reconfig_count = 0;
     int gl_error_count = 0;
+
+    int last_fbo = -1;
+    int last_fbo_w = 0;
+    int last_fbo_h = 0;
+    int last_fbo_format = 0;
 
     bool hard_recovery_pending = false;
     std::string hard_recovery_reason;
@@ -88,11 +94,14 @@ void prepareDiagnosticLog() {
 
     const std::string path = diagnosticPath();
     std::ifstream existing(path, std::ios::binary | std::ios::ate);
-    if (existing.is_open() && existing.tellg() > MAX_DIAGNOSTIC_LOG) {
-        existing.close();
-        const std::string oldPath = path + ".old";
-        std::remove(oldPath.c_str());
-        std::rename(path.c_str(), oldPath.c_str());
+    if (existing.is_open()) {
+        const auto size = existing.tellg();
+        if (size != std::streampos(-1) && size > std::streampos(MAX_DIAGNOSTIC_LOG)) {
+            existing.close();
+            const std::string oldPath = path + ".old";
+            std::remove(oldPath.c_str());
+            std::rename(path.c_str(), oldPath.c_str());
+        }
     }
 }
 
@@ -130,6 +139,11 @@ double propDouble(mpv_handle *mpv, const char *name, double fallback = -1.0) {
     return value;
 }
 
+std::string glString(GLenum name) {
+    const GLubyte *value = glGetString(name);
+    return value ? flatten(reinterpret_cast<const char *>(value)) : "-";
+}
+
 GuardContext *guardFrom(mpv_render_context *ctx) {
     auto *candidate = reinterpret_cast<GuardContext *>(ctx);
     return candidate == g_active_guard ? candidate : nullptr;
@@ -147,6 +161,7 @@ std::string snapshot(GuardContext *g, const char *reason) {
         "codec={} format={} pixfmt={} size={}x{} fps(container/estimated)={:.3f}/{:.3f} "
         "color(primaries/gamma/levels)={}/{}/{} hwdec={} vo={} pause={} cache_pause={} core_idle={} "
         "drops(decoder/frame/mistimed)={}/{}/{} cache={:.3f}s "
+        "fbo(id/size/format)={}/{}x{}/{} "
         "guard(update_calls/frame_updates/renders/swaps)={}/{}/{}/{} ages(frame/render)={}/{}ms "
         "reconfigs={} stage={} gl_errors={}",
         reason,
@@ -173,6 +188,10 @@ std::string snapshot(GuardContext *g, const char *reason) {
         propInt(g->mpv, "frame-drop-count"),
         propInt(g->mpv, "mistimed-frame-count"),
         propDouble(g->mpv, "demuxer-cache-duration"),
+        g->last_fbo,
+        g->last_fbo_w,
+        g->last_fbo_h,
+        g->last_fbo_format,
         g->update_calls,
         g->frame_updates,
         g->render_calls,
@@ -193,9 +212,11 @@ void resetPlaybackWatchdog(GuardContext *g) {
     const int64_t now = monotonicMs();
     g->last_frame_update_ms = now;
     g->last_render_ms = now;
+    g->last_recovery_ms = 0;
     g->last_watchdog_sample_ms = 0;
     g->last_watchdog_playback = 0.0;
     g->last_reconfig_ms = 0;
+    g->last_heartbeat_ms = now;
     g->recovery_stage = 0;
     g->reconfig_count = 0;
     g->hard_recovery_pending = false;
@@ -304,6 +325,11 @@ void watchdogPlayback(GuardContext *g, double playbackTime) {
     const bool suspiciousVo = hasVideo && voConfigured == 0;
     const bool noFreshVideoFrame = hasVideo && frameAge > STALLED_FRAME_MS;
 
+    if (playbackAdvancing && now - g->last_heartbeat_ms >= HEARTBEAT_MS) {
+        logSnapshot(g, "HEARTBEAT");
+        g->last_heartbeat_ms = now;
+    }
+
     if (!paused && !cachePaused && playbackAdvancing && (suspiciousVo || noFreshVideoFrame)) {
         const bool cooldownExpired = g->last_recovery_ms == 0 || now - g->last_recovery_ms >= RECOVERY_COOLDOWN_MS;
         if (cooldownExpired) {
@@ -387,13 +413,14 @@ int gmca_ps4_mpv_render_context_create(mpv_render_context **res, mpv_handle *mpv
 
     mpv_render_context *real = nullptr;
     const int result = mpv_render_context_create(&real, mpv, params);
-    if (result < 0 || !real) return result;
+    if (result < 0 || !real) return result < 0 ? result : MPV_ERROR_UNINITIALIZED;
 
     auto *guard = new GuardContext();
     guard->real = real;
     guard->mpv = mpv;
     guard->last_frame_update_ms = monotonicMs();
     guard->last_render_ms = guard->last_frame_update_ms;
+    guard->last_heartbeat_ms = guard->last_frame_update_ms;
 
     if (params) {
         for (mpv_render_param *param = params; param->type != MPV_RENDER_PARAM_INVALID; ++param) {
@@ -408,7 +435,15 @@ int gmca_ps4_mpv_render_context_create(mpv_render_context **res, mpv_handle *mpv
     *res = reinterpret_cast<mpv_render_context *>(guard);
 
     prepareDiagnosticLog();
-    diagnostic(fmt::format("guard=active gl_init={} log={}", guard->has_gl_init ? "yes" : "no", diagnosticPath()));
+    diagnostic(fmt::format(
+        "guard=active gl_init={} log={} gl_vendor={} gl_renderer={} gl_version={} mpv={} ffmpeg={}",
+        guard->has_gl_init ? "yes" : "no",
+        diagnosticPath(),
+        glString(GL_VENDOR),
+        glString(GL_RENDERER),
+        glString(GL_VERSION),
+        propString(mpv, "mpv-version"),
+        propString(mpv, "ffmpeg-version")));
     brls::Logger::info("PS4 video guard active; diagnostics: {}", diagnosticPath());
     return 0;
 }
@@ -445,13 +480,29 @@ int gmca_ps4_mpv_render_context_render(mpv_render_context *ctx, mpv_render_param
     if (!guard) return mpv_render_context_render(ctx, params);
     if (!guard->real) return MPV_ERROR_UNINITIALIZED;
 
-    // Clear one pre-existing GL error so an error left by the UI renderer is not
-    // blamed on libmpv.  We only trigger recovery from errors observed after
-    // the libmpv render call.
-    (void)glGetError();
+    if (params) {
+        for (mpv_render_param *param = params; param->type != MPV_RENDER_PARAM_INVALID; ++param) {
+            if (param->type == MPV_RENDER_PARAM_OPENGL_FBO && param->data) {
+                auto *fbo = static_cast<mpv_opengl_fbo *>(param->data);
+                guard->last_fbo = fbo->fbo;
+                guard->last_fbo_w = fbo->w;
+                guard->last_fbo_h = fbo->h;
+                guard->last_fbo_format = fbo->internal_format;
+                break;
+            }
+        }
+    }
+
+    // Drain pre-existing GL errors so an error left by NanoVG/UI rendering is
+    // not blamed on libmpv. Bound the loop in case a broken driver keeps
+    // returning an error forever.
+    for (int i = 0; i < 8; ++i) {
+        if (glGetError() == GL_NO_ERROR) break;
+    }
+
     const int result = mpv_render_context_render(guard->real, params);
 
-    // PS4's GLES path is deliberately serialized.  Switchfin already needed a
+    // PS4's GLES path is deliberately serialized. Switchfin already needed a
     // similar glFinish workaround on another constrained GL backend; here it
     // also prevents the next NanoVG frame from racing unfinished video work.
     glFinish();
@@ -509,10 +560,13 @@ mpv_event *gmca_ps4_mpv_wait_event(mpv_handle *mpv, double timeout) {
     GuardContext *guard = g_active_guard;
     if (guard && guard->mpv == mpv) {
         inspectEvent(guard, event);
-        // Deferred execution keeps context destruction/recreation out of the
-        // render call itself. MPVCore drains events on Borealis' main thread,
-        // after the UI frame, which is the safe point for this operation.
-        performHardRecoveryIfRequested(guard);
+        // Only rebuild the real render context once MPVCore has drained the
+        // event queue. This keeps the event currently being delivered valid and
+        // performs teardown/recreation at the safest point in the Borealis sync
+        // phase, outside the UI render call.
+        if (!event || event->event_id == MPV_EVENT_NONE) {
+            performHardRecoveryIfRequested(guard);
+        }
     }
     return event;
 }
