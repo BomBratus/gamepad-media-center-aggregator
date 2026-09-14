@@ -6,9 +6,11 @@
 
 #include "api/stremio/addons.hpp"
 #include "api/stremio/auth.hpp"
+#include "api/stremio/requests.hpp"
 #include "utils/config.hpp"
 #include <borealis/core/logger.hpp>
 #include <algorithm>
+#include <map>
 
 namespace stremio {
 
@@ -37,6 +39,12 @@ void AddonEngine::ensureLoaded() {
     // AppConfig::instance().getStremioAddons() returns the configured list of
     // transportUrls (each ending in /manifest.json). Provided by the config layer.
     const std::vector<std::string>& transports = AppConfig::instance().getStremioAddons();
+
+    // Manifest requests are independent. Register them as a lazy bounded batch
+    // before consuming them in collection order below. The first getSync starts
+    // the batch; parsing/error handling remains exactly as before.
+    requests::registerBatch(transports);
+
     addons.clear();
     addons.reserve(transports.size());
     for (const auto& transport : transports) {
@@ -61,14 +69,28 @@ void AddonEngine::ensureLoaded() {
 void AddonEngine::invalidate() {
     std::lock_guard<std::mutex> lock(mtx);
     loaded = false;
+    requests::clear();
 }
 
 std::vector<Addon> AddonEngine::addonsFor(
     const std::string& resource, const std::string& type, const std::string& id) {
-    std::lock_guard<std::mutex> lock(mtx);
     std::vector<Addon> out;
-    for (const auto& a : addons)
-        if (a.supports(resource, type, id)) out.push_back(a);
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        for (const auto& a : addons)
+            if (a.supports(resource, type, id)) out.push_back(a);
+    }
+
+    // Meta/stream/subtitle fallbacks are consumed serially by backend.cpp to
+    // preserve addon precedence. Coalesce the underlying HTTP waits so a slow
+    // provider no longer adds its entire timeout after every previous provider.
+    if (out.size() > 1) {
+        std::vector<std::string> urls;
+        urls.reserve(out.size());
+        for (const auto& a : out) urls.push_back(resourceUrl(a, resource, type, id));
+        long timeout = (resource == "stream" || resource == "subtitles") ? 15000L : HTTP::TIMEOUT;
+        requests::registerBatch(urls, timeout);
+    }
     return out;
 }
 
@@ -86,22 +108,46 @@ bool AddonEngine::hasResource(const std::string& resource) const {
 }
 
 std::vector<std::pair<Addon, Catalog>> AddonEngine::allCatalogs() {
-    std::lock_guard<std::mutex> lock(mtx);
     std::vector<std::pair<Addon, Catalog>> out;
-    for (const auto& a : addons) {
-        if (a.manifest.resources.count("catalog") == 0) continue;
-        for (const auto& c : a.manifest.catalogs) out.emplace_back(a, c);
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        for (const auto& a : addons) {
+            if (a.manifest.resources.count("catalog") == 0) continue;
+            for (const auto& c : a.manifest.catalogs) out.emplace_back(a, c);
+        }
     }
+
+    // Search adds its query only after allCatalogs() returns. Register URL roots
+    // grouped by type; requests::get materializes the concrete /search=... URLs
+    // lazily when the first catalog is actually queried.
+    std::map<std::string, std::vector<std::string>> searchRoots;
+    for (const auto& pc : out) {
+        if (!pc.second.hasSearch()) continue;
+        searchRoots[pc.second.type].push_back(
+            pc.first.base + "/catalog/" + pc.second.type + "/" + encodeURIComponent(pc.second.id));
+    }
+    for (const auto& group : searchRoots) requests::registerSearchBatch(group.second);
     return out;
 }
 
 std::vector<std::pair<Addon, Catalog>> AddonEngine::catalogsForType(const std::string& stremioType) {
-    std::lock_guard<std::mutex> lock(mtx);
     std::vector<std::pair<Addon, Catalog>> out;
-    for (const auto& a : addons) {
-        if (a.manifest.resources.count("catalog") == 0) continue;
-        for (const auto& c : a.manifest.catalogs)
-            if (c.browsable && c.type == stremioType) out.emplace_back(a, c);
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        for (const auto& a : addons) {
+            if (a.manifest.resources.count("catalog") == 0) continue;
+            for (const auto& c : a.manifest.catalogs)
+                if (c.browsable && c.type == stremioType) out.emplace_back(a, c);
+        }
+    }
+
+    // Home/section rows consume these plain catalog URLs one-by-one. Registering
+    // is intentionally lazy, so callers that only enumerate tabs cause no I/O.
+    if (out.size() > 1) {
+        std::vector<std::string> urls;
+        urls.reserve(out.size());
+        for (const auto& pc : out) urls.push_back(resourceUrl(pc.first, "catalog", pc.second.type, pc.second.id));
+        requests::registerBatch(urls);
     }
     return out;
 }
