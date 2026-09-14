@@ -1,0 +1,76 @@
+name: PS4 recovery + safe sources
+
+on:
+  push:
+    branches:
+      - fix/ps4-video-recovery-diagnostics
+  workflow_dispatch:
+
+jobs:
+  build-ps4:
+    runs-on: ubuntu-latest
+    container:
+      image: xfangfang/pacbrew:250221
+    env:
+      BASE_URL: https://github.com/dragonflylee/switchfin/releases/download/pacbrew
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Apply PS4 source picker and UI patches
+        run: |
+          git config --global --add safe.directory '*'
+          printf '\n' >> custom/ps4-safe-sources.patch
+          printf '\n' >> custom/ps4-ui-followups.patch
+          git apply --check custom/ps4-safe-sources.patch
+          git apply --verbose custom/ps4-safe-sources.patch
+          git apply --check --recount custom/ps4-ui-followups.patch
+          git apply --verbose --recount custom/ps4-ui-followups.patch
+          awk -f custom/apply-ps4-search-ui.awk app/src/tab/search_tab.cpp > /tmp/search_tab.cpp
+          mv /tmp/search_tab.cpp app/src/tab/search_tab.cpp
+          sed -i 's/set(PS4_VERSION "00.27")/set(PS4_VERSION "00.30")/' CMakeLists.txt
+          grep -q 'set(PS4_VERSION "00.30")' CMakeLists.txt
+          git checkout -- custom/ps4-safe-sources.patch custom/ps4-ui-followups.patch
+          git diff --check
+
+      - name: Apply borealis patches
+        run: |
+          git -C library/borealis apply --verbose ../../scripts/patches/borealis-fixes.patch
+
+      - name: Update dependencies
+        run: |
+          for pkg in musl-1.5-3 mbedtls-2.28.10-2 sdl2-2.0.18-19 libcurl-7.80.0-5 dav1d-1.5.4-1 ffmpeg-7.1.5-3 libmpv-0.36.0-2; do
+            pacman --noconfirm -U $BASE_URL/ps4-openorbis-${pkg}-any.pkg.tar.gz
+          done
+          git config --system --add safe.directory $GITHUB_WORKSPACE
+
+      - name: Build PS4
+        env:
+          OPENORBIS: /opt/pacbrew/ps4/openorbis
+        run: |
+          cmake -B build -DPLATFORM_PS4=ON -DVERSION_BUILD=${{ github.run_number }}
+          make -C build -j$(nproc)
+
+      - name: Verify package
+        run: |
+          set -eux
+          test -f build/IV0001-GMCA00000_00-GMCA000000003000.pkg
+          stat -c '%n %s bytes' build/IV0001-GMCA00000_00-GMCA000000003000.pkg
+          sha256sum build/IV0001-GMCA00000_00-GMCA000000003000.pkg | tee build/SHA256SUMS
+
+      - name: Upload pkg
+        uses: actions/upload-artifact@v6
+        with:
+          name: GMCA-PS4-recovery-ui-${{ github.run_number }}
+          path: |
+            build/IV0001-GMCA00000_00-GMCA000000003000.pkg
+            build/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Upload oelf
+        uses: actions/upload-artifact@v6
+        with:
+          name: ps4-recovery-ui-oelf-${{ github.run_number }}
+          path: build/GMCA.oelf
+          if-no-files-found: error

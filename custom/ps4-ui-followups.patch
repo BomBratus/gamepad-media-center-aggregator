@@ -1,0 +1,106 @@
+diff --git a/app/src/api/stremio/backend.cpp b/app/src/api/stremio/backend.cpp
+--- a/app/src/api/stremio/backend.cpp
++++ b/app/src/api/stremio/backend.cpp
+@@ -239,2 +239,6 @@
+ #endif
++#if defined(GMCA_PS4_SAFE_SOURCES)
++    // Preserve the addon's own ordering (Torrentio quality/seeders/language rules).
++    // Only keep unplayable placeholders after playable rows, without re-ranking either group.
++    std::stable_partition(all.begin(), all.end(), [](const media::Media& m) { return m.playable(); });
++#else
+     std::stable_sort(all.begin(), all.end(), [](const media::Media& x, const media::Media& y) {
+@@ -269,3 +273,4 @@
+         return false;
+     });
++#endif
+     return all;
+ }
+
+diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
+--- a/app/src/tab/media_series.cpp
++++ b/app/src/tab/media_series.cpp
+@@ -15,2 +15,3 @@
+ #include "view/video_source.hpp"
++#include "view/recycling_grid.hpp"
+ #include "view/recyling_video.hpp"
+@@ -39,3 +40,8 @@
+     label->setTextColor(color);
+     label->setSingleLine(true);
+-    if (grow) label->setGrow(1);
++    // Borealis auto-scrolls truncated labels whenever a parent row is focused.
++    // Keep picker text clipped/ellipsized instead of allowing the marquee to draw outside the dialog.
++    label->setAutoAnimate(false);
++    if (grow) {
++        label->setGrow(1);
++        label->setShrink(1);
++        label->setMinWidth(0);
++    }
+     return label;
+ }
+@@ -54,2 +60,3 @@
+         this->setAxis(brls::Axis::COLUMN);
++        this->setWidthPercentage(100);
+         this->setHeight(78);
+@@ -78,2 +85,8 @@
+ };
+ 
++struct EpisodePickerOrigin {
++    RecyclingGrid* grid = nullptr;
++    size_t index = 0;
++    float offset = 0;
++};
++
+ std::string episodeDisplayTitle(const plex::Item& item) {
+@@ -92,3 +105,3 @@
+ }
+ 
+-void showEpisodeSourcePicker(const plex::Item& item, int64_t seekMs) {
++void showEpisodeSourcePicker(const plex::Item& item, int64_t seekMs, EpisodePickerOrigin origin = {}) {
+     std::vector<int> playable;
+@@ -113,3 +126,3 @@
+     auto* content = new brls::Box();
+     content->setAxis(brls::Axis::COLUMN);
+-    content->setWidth(940);
++    content->setWidthPercentage(100);
+     content->setHeight(610);
+@@ -136,2 +149,3 @@
+         top->setAlignItems(brls::AlignItems::CENTER);
+         top->setHeight(28);
++        top->setWidthPercentage(100);
+         if (!m.videoResolution.empty())
+@@ -174,3 +188,8 @@
+     }
+ 
++    if (origin.grid) origin.grid->setDefaultCellFocus(origin.index);
+     dialog->open();
++    // Pushing a modal Activity can make CENTERED scrolling recompute from row 0.
++    // Restore the exact pre-dialog offset without stealing focus back from the dialog.
++    if (origin.grid) {
++        origin.grid->setContentOffsetY(origin.offset, false);
++        origin.grid->setDefaultCellFocus(origin.index);
++    }
+ }
+ 
+-void resolveAndShowEpisodeSourcePicker(const plex::Item& item) {
++void resolveAndShowEpisodeSourcePicker(const plex::Item& item, brls::Box* recycler, size_t index) {
+     const std::string id = item.ratingKey;
+     const int64_t seekMs = item.viewOffset;
++    EpisodePickerOrigin origin;
++    if (auto* grid = dynamic_cast<RecyclingGrid*>(recycler)) {
++        origin.grid = grid;
++        origin.index = index;
++        origin.offset = grid->getContentOffsetY();
++        grid->setDefaultCellFocus(index);
++    }
+     AppConfig::instance().backend().getItemDetail(
+         id, true,
+-        [seekMs](const media::Item& resolved) { showEpisodeSourcePicker(resolved, seekMs); },
++        [seekMs, origin](const media::Item& resolved) { showEpisodeSourcePicker(resolved, seekMs, origin); },
+         [](const std::string& error) { Dialog::show(error); });
+ }
+@@ -367,3 +393,3 @@
+         if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
+-            resolveAndShowEpisodeSourcePicker(item);
++            resolveAndShowEpisodeSourcePicker(item, recycler, index);
+             return;
+         }
