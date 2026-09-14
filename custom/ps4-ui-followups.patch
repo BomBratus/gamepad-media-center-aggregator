@@ -1,13 +1,3 @@
-diff --git a/CMakeLists.txt b/CMakeLists.txt
---- a/CMakeLists.txt
-+++ b/CMakeLists.txt
-@@ -65,4 +65,4 @@
- # Custom PS4 package revision. Keep the upstream Title ID so this installs as an
- # update over v1.1.0, but use a higher app version for an easy rollback path.
--set(PS4_VERSION "00.27")
-+set(PS4_VERSION "00.28")
- set(PROJECT_ICON ${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/icon.jpg)
-
 diff --git a/app/src/api/stremio/backend.cpp b/app/src/api/stremio/backend.cpp
 --- a/app/src/api/stremio/backend.cpp
 +++ b/app/src/api/stremio/backend.cpp
@@ -102,113 +92,110 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
              return;
          }
 
-diff --git a/app/include/tab/search_tab.hpp b/app/include/tab/search_tab.hpp
---- a/app/include/tab/search_tab.hpp
-+++ b/app/include/tab/search_tab.hpp
-@@ -5,2 +5,3 @@
- #include <view/auto_tab_frame.hpp>
-+#include <cstdint>
- 
-@@ -35,4 +36,5 @@
-     void launchSearch();
-     void doSuggest();
--    void doSearch(const std::string& searchTerm);
-+    void doSearch(const std::string& searchTerm, uint64_t generation);
-+    void runPendingSearch();
-     void updateInput();
-@@ -41,2 +43,6 @@
-     std::string currentSearch;
-     std::unique_ptr<SearchHistory> history;
-+    brls::VoidEvent::Subscription searchTickSubscription;
-+    bool searchTickSubscribed = false;
-+    int searchDebounceFrames = 0;
-+    uint64_t searchGeneration = 0;
- };
-
 diff --git a/app/src/tab/search_tab.cpp b/app/src/tab/search_tab.cpp
 --- a/app/src/tab/search_tab.cpp
 +++ b/app/src/tab/search_tab.cpp
-@@ -16,2 +16,3 @@
+@@ -16,2 +16,5 @@
  #include "api/backend.hpp"
 +#include <algorithm>
++#include <cstdint>
  #include <fstream>
-@@ -151,3 +152,8 @@
-     this->registerAction("main/tabs/search"_i18n, brls::BUTTON_START, [this](...) {
-         this->launchSearch();
-         return true;
-     });
-+    if (!this->searchTickSubscribed) {
-+        this->searchTickSubscription =
-+            brls::Application::getRunLoopEvent()->subscribe([this]() { this->runPendingSearch(); });
-+        this->searchTickSubscribed = true;
-+    }
-     this->updateInput();
++#include <map>
+@@ -52,2 +55,12 @@
+ };
+ 
++namespace {
++struct SearchDebounceState {
++    int frames = 0;
++    uint64_t generation = 0;
++};
++
++std::map<SearchTab*, SearchDebounceState> searchDebounceStates;
++std::map<SearchTab*, brls::VoidEvent::Subscription> searchDebounceSubscriptions;
++}  // namespace
++
+ /// Removes the last UTF-8 code point: the IME can input multi-byte
+@@ -175,3 +188,13 @@
+ 
+     this->searchSuggest->registerCell("Cell", VideoCardCell::create);
++    searchDebounceStates[this] = {};
++    auto subscription = brls::Application::getRunLoopEvent()->subscribe([this]() {
++        auto it = searchDebounceStates.find(this);
++        if (it == searchDebounceStates.end() || it->second.frames <= 0) return;
++        if (--it->second.frames > 0 || this->currentSearch.empty()) return;
++        this->searchSuggest->showSkeleton();
++        this->doSearch(this->currentSearch);
++    });
++    searchDebounceSubscriptions.emplace(this, subscription);
+ }
+@@ -193,3 +216,11 @@
  }
  
 -SearchTab::~SearchTab() { brls::Logger::debug("SearchTab: deleted"); }
 +SearchTab::~SearchTab() {
-+    if (this->searchTickSubscribed)
-+        brls::Application::getRunLoopEvent()->unsubscribe(this->searchTickSubscription);
++    auto sub = searchDebounceSubscriptions.find(this);
++    if (sub != searchDebounceSubscriptions.end()) {
++        brls::Application::getRunLoopEvent()->unsubscribe(sub->second);
++        searchDebounceSubscriptions.erase(sub);
++    }
++    searchDebounceStates.erase(this);
 +    brls::Logger::debug("SearchTab: deleted");
 +}
-@@ -337,2 +348,3 @@
+ 
+@@ -337,2 +368,3 @@
          [ASYNC_TOKEN](const media::Container<media::Item>& r) {
              ASYNC_RELEASE
 +            if (!this->currentSearch.empty()) return;
              // poster grid: the suggestions are complete items
-@@ -342,2 +354,3 @@
+@@ -342,2 +374,3 @@
          [ASYNC_TOKEN](const std::string& ex) {
              ASYNC_RELEASE
 +            if (!this->currentSearch.empty()) return;
              this->searchSuggest->setError(ex);
-@@ -347,3 +360,4 @@
- }
+@@ -348,2 +381,5 @@
  
--void SearchTab::doSearch(const std::string& searchTerm) {
-+void SearchTab::doSearch(const std::string& searchTerm, uint64_t generation) {
-+    if (generation != this->searchGeneration || searchTerm != this->currentSearch) return;
+ void SearchTab::doSearch(const std::string& searchTerm) {
++    auto state = searchDebounceStates.find(this);
++    const uint64_t generation = state == searchDebounceStates.end() ? 0 : state->second.generation;
++
      // offline: search the local catalog (title contains, case-insensitive)
-@@ -369,4 +383,5 @@
+@@ -370,5 +406,9 @@
      // a single page: search does not paginate reliably
      AppConfig::instance().backend().search(searchTerm, media::MediaKind::Any, 40,
 -        [ASYNC_TOKEN](const media::Container<media::Item>& r) {
 +        [ASYNC_TOKEN, searchTerm, generation](const media::Container<media::Item>& r) {
              ASYNC_RELEASE
-+            if (generation != this->searchGeneration || searchTerm != this->currentSearch) return;
++            auto state = searchDebounceStates.find(this);
++            if (state == searchDebounceStates.end() || state->second.generation != generation ||
++                searchTerm != this->currentSearch)
++                return;
              if (r.Items.empty()) {
-@@ -380,3 +395,7 @@
+@@ -381,4 +421,10 @@
              }
          },
 -        [ASYNC_TOKEN](const std::string& ex) {
 +        [ASYNC_TOKEN, searchTerm, generation](const std::string& ex) {
              ASYNC_RELEASE
-+            if (generation != this->searchGeneration || searchTerm != this->currentSearch) return;
++            auto state = searchDebounceStates.find(this);
++            if (state == searchDebounceStates.end() || state->second.generation != generation ||
++                searchTerm != this->currentSearch)
++                return;
              brls::Application::notify(ex);
          });
  }
  
-+void SearchTab::runPendingSearch() {
-+    if (this->searchDebounceFrames <= 0) return;
-+    if (--this->searchDebounceFrames > 0) return;
-+    if (this->currentSearch.empty()) return;
-+
-+    const std::string term = this->currentSearch;
-+    const uint64_t generation = this->searchGeneration;
-+    this->searchSuggest->showSkeleton();
-+    this->doSearch(term, generation);
-+}
-+
  void SearchTab::updateInput() {
-+    ++this->searchGeneration;
-+    this->searchDebounceFrames = 0;
++    auto& debounce = searchDebounceStates[this];
++    ++debounce.generation;
++    debounce.frames = 0;
      auto theme = brls::Application::getTheme();
-@@ -405,4 +434,6 @@
+@@ -405,4 +451,5 @@
          }
          this->suggestHeader->setTitle("main/search/results"_i18n);
 -        this->searchSuggest->showSkeleton();
 -        this->doSearch(this->currentSearch);
 +        size_t fps = brls::Application::getFPS();
 +        if (fps == 0) fps = 60;
-+        this->searchDebounceFrames = std::max(1, (int)(fps * 450 / 1000));
++        debounce.frames = std::max(1, (int)(fps * 450 / 1000));
      }
  }
