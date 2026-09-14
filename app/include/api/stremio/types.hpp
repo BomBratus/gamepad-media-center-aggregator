@@ -39,6 +39,7 @@
 #include <string>
 #include <vector>
 #include "api/http.hpp"
+#include "api/stremio/requests.hpp"
 #include "api/media/types.hpp"
 
 namespace stremio {
@@ -745,7 +746,7 @@ inline std::vector<SubtitleOption> parseSubtitles(const nlohmann::json& j) {
 /// GET + parse JSON. Stremio addons are unauthenticated, so no headers. Returns
 /// an empty object on an empty body (rather than throwing on parse).
 inline nlohmann::json getSync(const std::string& url, long timeout = HTTP::TIMEOUT) {
-    std::string resp = HTTP::get(url, HTTP::Timeout{timeout});
+    std::string resp = requests::get(url, timeout);
     if (resp.empty()) return nlohmann::json::object();
     return nlohmann::json::parse(resp);
 }
