@@ -347,7 +347,7 @@ elseif (PLATFORM_PSV)
     _psv_assert_livearea_png(${CMAKE_SOURCE_DIR}/app/platform/vita/sce_sys/startup.png TRUE)
     set(PSV_ASSETS_FILES
         FILE ${CMAKE_SOURCE_DIR}/app/platform/vita/sce_sys/icon0.png sce_sys/icon0.png
-        FILE ${CMAKE_SOURCE_DIR}/app/platform/vita/sce_sys/pic0.png sce_sys/icon0.png
+        FILE ${CMAKE_SOURCE_DIR}/app/platform/vita/sce_sys/pic0.png sce_sys/pic0.png
         FILE ${CMAKE_SOURCE_DIR}/app/platform/vita/sce_sys/bg.png sce_sys/livearea/contents/bg.png
         FILE ${CMAKE_SOURCE_DIR}/app/platform/vita/sce_sys/startup.png sce_sys/livearea/contents/startup.png
         FILE ${CMAKE_BINARY_DIR}/template.xml sce_sys/livearea/contents/template.xml
