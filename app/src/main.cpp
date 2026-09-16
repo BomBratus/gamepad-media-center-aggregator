@@ -85,6 +85,27 @@ static void proposeForwarderInstall() {
 }
 #endif
 
+#ifdef GMCA_STREMIO_ONLY
+/// The lean PS4 build must never auto-enter a legacy Plex/Jellyfin connection
+/// just because it is still marked active in an existing GMCA config. Keep that
+/// data intact (a normal build can still use it), but force this profile back to
+/// the connection screen until a Stremio profile is selected.
+static bool activeConnectionIsStremio() {
+    auto& conf = AppConfig::instance();
+    const std::string& activeUserId = conf.getUserId();
+    if (activeUserId.empty()) return false;
+
+    for (const auto& user : conf.getUsers()) {
+        if (user.id != activeUserId) continue;
+        for (const auto& server : conf.getServers()) {
+            if (server.id == user.server_id) return server.type == "stremio";
+        }
+        return false;
+    }
+    return false;
+}
+#endif
+
 int main(int argc, char* argv[]) {
 #ifdef __SWITCH__
     if (argc > 0 && argv[0]) AppVersion::nro_path = argv[0];
@@ -187,8 +208,13 @@ int main(int argc, char* argv[]) {
         brls::Application::pushActivity(new LoadingActivity(), brls::TransitionAnimation::NONE);
         brls::Application::blockInputs();
         brls::async([]() {
-            const bool logged = AppConfig::instance().checkLogin();
-            brls::sync([logged]() {
+#ifdef GMCA_STREMIO_ONLY
+            const bool supportedProfile = activeConnectionIsStremio();
+#else
+            const bool supportedProfile = true;
+#endif
+            const bool logged = supportedProfile && AppConfig::instance().checkLogin();
+            brls::sync([logged, supportedProfile]() {
                 brls::Application::unblockInputs();
                 brls::Application::clear();
                 if (logged) {
@@ -196,12 +222,14 @@ int main(int argc, char* argv[]) {
 #if defined(__SWITCH__) && defined(BUILTIN_NSP)
                     proposeForwarderInstall();
 #endif
-                } else if (!OfflineLibrary::instance().empty() ||
-                           !AppConfig::instance().getServers().empty()) {
-                    // a server is remembered (just unreachable) and/or downloads
-                    // exist: enter the offline shell (browse downloads + a Retry
-                    // to reconnect) instead of the server picker (SPEC §4.4).
-                    // A fresh install with no server still goes to ServerList.
+                } else if (supportedProfile &&
+                           (!OfflineLibrary::instance().empty() || !AppConfig::instance().getServers().empty())) {
+                    // a supported server is remembered (just unreachable) and/or
+                    // downloads exist: enter the offline shell (browse downloads +
+                    // Retry) instead of the server picker (SPEC §4.4). In the lean
+                    // Stremio profile, an unsupported legacy active connection is
+                    // deliberately sent to ServerList so it cannot reopen another
+                    // backend through stale config.
                     NetworkState::setOffline(true);
                     brls::Application::pushActivity(new MainActivity(), brls::TransitionAnimation::NONE);
                 } else {
