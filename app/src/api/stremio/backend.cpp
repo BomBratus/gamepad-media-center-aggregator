@@ -28,6 +28,7 @@
 #include <borealis/core/i18n.hpp>
 #include <algorithm>
 #include <cctype>
+#include <fstream>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -61,6 +62,74 @@ void emptyContainer(media::Then<media::Container<T>> then) {
 
 /// authKey of the connected account (empty when navigating without one).
 std::string accountKey() { return AppConfig::instance().getToken(); }
+
+/// Stremio's account library keeps playback state at the SERIES level. Its
+/// per-episode `state.watched` field is a compressed bitmap whose write format is
+/// not part of the addon protocol. Keep GMCA's episode history in a tiny local
+/// JSON file instead, scoped to the active Stremio server/account. This is only
+/// consulted for episode rows; movie watched state still comes from Stremio.
+std::string watchedHistoryPath() { return AppConfig::instance().configDir() + "/stremio-watched.json"; }
+
+std::string watchedHistoryScope() {
+    const auto& user = AppConfig::instance().getUser();
+    if (!user.server_id.empty()) return user.server_id;
+    return AppConfig::instance().getUserId();
+}
+
+nlohmann::json loadWatchedHistoryFile() {
+    std::ifstream in(watchedHistoryPath());
+    if (!in.is_open()) return nlohmann::json::object();
+    try {
+        nlohmann::json j;
+        in >> j;
+        return j.is_object() ? j : nlohmann::json::object();
+    } catch (const std::exception& ex) {
+        brls::Logger::warning("stremio watched history read: {}", ex.what());
+        return nlohmann::json::object();
+    }
+}
+
+std::set<std::string> loadWatchedEpisodes() {
+    std::set<std::string> out;
+    std::string scope = watchedHistoryScope();
+    if (scope.empty()) return out;
+    nlohmann::json root = loadWatchedHistoryFile();
+    auto it = root.find(scope);
+    if (it == root.end() || !it->is_array()) return out;
+    for (auto& v : *it)
+        if (v.is_string()) out.insert(v.get<std::string>());
+    return out;
+}
+
+void setEpisodeWatched(const std::string& ratingKey, bool watched) {
+    std::string scope = watchedHistoryScope();
+    if (scope.empty()) return;
+    nlohmann::json root = loadWatchedHistoryFile();
+    std::set<std::string> items;
+    auto current = root.find(scope);
+    if (current != root.end() && current->is_array())
+        for (auto& v : *current)
+            if (v.is_string()) items.insert(v.get<std::string>());
+    if (watched)
+        items.insert(ratingKey);
+    else
+        items.erase(ratingKey);
+    root[scope] = nlohmann::json::array();
+    for (auto& id : items) root[scope].push_back(id);
+    std::ofstream out(watchedHistoryPath(), std::ios::trunc);
+    if (!out.is_open()) {
+        brls::Logger::warning("stremio watched history: could not open {}", watchedHistoryPath());
+        return;
+    }
+    out << root.dump(2);
+}
+
+void applyEpisodeWatched(media::Item& item, const std::set<std::string>& watched) {
+    if (item.type == media::mediaTypeEpisode && watched.count(item.ratingKey) > 0) {
+        item.viewCount = 1;
+        item.viewOffset = 0;
+    }
+}
 
 /// A datastore libraryItem JSON -> media::Item (movie/show row). ratingKey is the
 /// opaque "{type}:{_id}"; resume offset/watched come from state.
@@ -612,6 +681,7 @@ void StremioBackend::getItemDetail(
                     out.key = ratingKey;
                     out.type = media::mediaTypeEpisode;
                 }
+                applyEpisodeWatched(out, loadWatchedEpisodes());
             } else {
                 out = parseMeta(metaObj);
             }
@@ -708,9 +778,13 @@ void StremioBackend::getChildren(
                 }
             } else {  // "season" -> episodes of that season
                 int64_t wantSeason = pid.season;
+                auto watched = loadWatchedEpisodes();
                 auto all = parseEpisodes(metaObj, show);
-                for (auto& e : all)
-                    if (e.parentIndex == wantSeason) c.Items.push_back(std::move(e));
+                for (auto& e : all) {
+                    if (e.parentIndex != wantSeason) continue;
+                    applyEpisodeWatched(e, watched);
+                    c.Items.push_back(std::move(e));
+                }
             }
             c.TotalRecordCount = (long)c.Items.size();
             brls::sync(std::bind(then, std::move(c)));
@@ -754,6 +828,8 @@ void StremioBackend::getAllEpisodes(const std::string& showId, bool,
             media::Item show = parseMeta(metaObj);
             media::Container<media::Item> c;
             c.Items = parseEpisodes(metaObj, show);  // already sorted (season, episode)
+            auto watched = loadWatchedEpisodes();
+            for (auto& e : c.Items) applyEpisodeWatched(e, watched);
             c.TotalRecordCount = (long)c.Items.size();
             brls::sync(std::bind(then, std::move(c)));
         } catch (const std::exception& ex) {
@@ -771,6 +847,7 @@ void StremioBackend::getNextUp(
         bool fromStart = false;
         try {
             engine.ensureLoaded();
+            auto watched = loadWatchedEpisodes();
             auto addons = engine.addonsFor("meta", "series", baseId);
             for (auto& a : addons) {
                 std::string url = engine.resourceUrl(a, "meta", "series", baseId);
@@ -786,9 +863,15 @@ void StremioBackend::getNextUp(
                 media::Item show = parseMeta(*meta);
                 auto eps = parseEpisodes(*meta, show);
                 if (!eps.empty()) {
-                    // No server progress in étape 1: always offer the first episode.
-                    item = eps.front();
-                    fromStart = true;
+                    auto next = std::find_if(eps.begin(), eps.end(), [&watched](const media::Item& e) {
+                        return watched.count(e.ratingKey) == 0;
+                    });
+                    if (next != eps.end()) {
+                        item = *next;
+                    } else {
+                        item = eps.front();
+                        fromStart = true;
+                    }
                 }
                 break;
             }
@@ -925,9 +1008,15 @@ void StremioBackend::markWatched(const std::string& id) {
     std::string rk = id;
     brls::async([this, rk]() {
         try {
-            upsertLibrary(engine, rk, [](nlohmann::json& st) {
-                st["flaggedWatched"] = 1;
+            ParsedId pid = parseId(rk);
+            bool episode = pid.stremioType == "series" && pid.episode >= 0;
+            if (episode) setEpisodeWatched(rk, true);
+            upsertLibrary(engine, rk, [episode, videoId = pid.stremioId](nlohmann::json& st) {
+                // An episode must not mark the whole series watched. The local
+                // episode history drives the checkmark/next-up state instead.
+                st["flaggedWatched"] = episode ? 0 : 1;
                 st["timeOffset"] = 0;  // watched -> clear resume position
+                if (episode) st["videoId"] = videoId;
             });
         } catch (const std::exception& ex) {
             brls::Logger::warning("stremio markWatched: {}", ex.what());
@@ -940,6 +1029,9 @@ void StremioBackend::markUnwatched(const std::string& id) {
     std::string rk = id;
     brls::async([this, rk]() {
         try {
+            ParsedId pid = parseId(rk);
+            bool episode = pid.stremioType == "series" && pid.episode >= 0;
+            if (episode) setEpisodeWatched(rk, false);
             upsertLibrary(engine, rk, [](nlohmann::json& st) { st["flaggedWatched"] = 0; });
         } catch (const std::exception& ex) {
             brls::Logger::warning("stremio markUnwatched: {}", ex.what());
