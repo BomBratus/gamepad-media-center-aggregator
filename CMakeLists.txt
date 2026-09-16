@@ -18,6 +18,11 @@ cmake_dependent_option(CMAKE_INSTALL "Install to system path" OFF "UNIX;NOT APPL
 cmake_dependent_option(BUILTIN_NSP "Built in NSP forwarder" OFF "PLATFORM_SWITCH" OFF)
 cmake_dependent_option(USE_LIBUSBHSFS "Use libusbhsfs for ums access" OFF "PLATFORM_SWITCH" OFF)
 
+# PS4
+# Personal/lean profile for installations that use GMCA only as a Stremio client.
+# Normal PS4 builds remain multi-backend unless this is explicitly enabled.
+cmake_dependent_option(GMCA_STREMIO_ONLY "Build PS4 with only Stremio connection setup" OFF "PLATFORM_PS4" OFF)
+
 # mpv related
 # If your system does not support OpenGL(ES), you can use software rendering, but it will affect performance.
 option(MPV_SW_RENDER "Using CPU to draw videos" OFF)
@@ -90,6 +95,15 @@ endif ()
 
 # setting src and include
 file(GLOB_RECURSE MAIN_SRC "${PROJECT_SOURCE_DIR}/app/src/*.cpp")
+if (GMCA_STREMIO_ONLY)
+    # The chooser no longer references these screens in this profile, so don't
+    # compile dead sign-in implementations into the PS4 executable. Shared media
+    # abstractions/backends stay untouched; this keeps the specialization small
+    # and avoids destabilizing playback or cross-platform code.
+    list(FILTER MAIN_SRC EXCLUDE REGEX "/app/src/tab/(plex_add|jellyfin_add)\\.cpp$")
+    list(APPEND APP_PLATFORM_OPTION -DGMCA_STREMIO_ONLY)
+    message(STATUS "GMCA PS4 Stremio-only connection profile enabled")
+endif ()
 if (PLATFORM_SWITCH)
     # System service initialization functions required for libnx
     list(APPEND MAIN_SRC ${BOREALIS_LIBRARY}/lib/platforms/switch/switch_wrapper.c)
@@ -333,7 +347,7 @@ elseif (PLATFORM_PSV)
     _psv_assert_livearea_png(${CMAKE_SOURCE_DIR}/app/platform/vita/sce_sys/startup.png TRUE)
     set(PSV_ASSETS_FILES
         FILE ${CMAKE_SOURCE_DIR}/app/platform/vita/sce_sys/icon0.png sce_sys/icon0.png
-        FILE ${CMAKE_SOURCE_DIR}/app/platform/vita/sce_sys/pic0.png sce_sys/pic0.png
+        FILE ${CMAKE_SOURCE_DIR}/app/platform/vita/sce_sys/pic0.png sce_sys/icon0.png
         FILE ${CMAKE_SOURCE_DIR}/app/platform/vita/sce_sys/bg.png sce_sys/livearea/contents/bg.png
         FILE ${CMAKE_SOURCE_DIR}/app/platform/vita/sce_sys/startup.png sce_sys/livearea/contents/startup.png
         FILE ${CMAKE_BINARY_DIR}/template.xml sce_sys/livearea/contents/template.xml
