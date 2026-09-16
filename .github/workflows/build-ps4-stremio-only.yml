@@ -1,0 +1,64 @@
+name: build PS4 Stremio-only
+
+on:
+  pull_request:
+    branches: [ dev ]
+    paths:
+      - CMakeLists.txt
+      - app/src/main.cpp
+      - app/src/view/connection_switcher.cpp
+      - app/src/tab/server_type_choose.cpp
+      - app/src/tab/stremio_add.cpp
+      - app/src/api/stremio/**
+      - app/include/api/stremio/**
+      - .github/workflows/build-ps4-stremio-only.yml
+  workflow_dispatch:
+
+jobs:
+  build-ps4-stremio-only:
+    runs-on: ubuntu-latest
+    container:
+      image: xfangfang/pacbrew:250221
+    env:
+      BASE_URL: https://github.com/dragonflylee/switchfin/releases/download/pacbrew
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Apply borealis patches
+        run: |
+          git config --global --add safe.directory '*'
+          git -C library/borealis apply --verbose ../../scripts/patches/borealis-fixes.patch
+
+      - name: Update dependencies
+        run: |
+          for pkg in musl-1.5-3 mbedtls-2.28.10-2 sdl2-2.0.18-19 libcurl-7.80.0-5 dav1d-1.5.3-1 ffmpeg-7.1.5-3 libmpv-0.36.0-2; do
+            pacman --noconfirm -U $BASE_URL/ps4-openorbis-${pkg}-any.pkg.tar.gz
+          done
+          git config --system --add safe.directory $GITHUB_WORKSPACE
+
+      - name: Build Stremio-only PS4 package
+        env:
+          OPENORBIS: /opt/pacbrew/ps4/openorbis
+        run: |
+          cmake -B build \
+            -DPLATFORM_PS4=ON \
+            -DGMCA_STREMIO_ONLY=ON \
+            -DVERSION_BUILD=${{ github.run_number }}
+          make -C build -j$(nproc)
+
+      - name: Verify package
+        run: |
+          set -eu
+          pkg="$(find build -maxdepth 1 -name '*.pkg' -print -quit)"
+          test -n "$pkg"
+          test -s "$pkg"
+          stat -c '%n %s bytes' "$pkg"
+
+      - name: Upload package
+        uses: actions/upload-artifact@v6
+        with:
+          name: GMCA-PS4-Stremio-only-${{ github.run_number }}
+          path: build/*.pkg
+          if-no-files-found: error
