@@ -80,11 +80,11 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
      }
  
 +    if (origin.grid) origin.grid->setDefaultCellFocus(origin.index);
++    // Dialog::addButton() makes the first button its last/default focus. Override
++    // that with the first playable source before open(), so the Activity starts
++    // on a source row instead of Cancel without any post-open focus race.
++    if (firstRow) dialog->setLastFocusedView(firstRow);
      dialog->open();
-+    // The rows already exist before open(), so override the dialog's default
-+    // Cancel focus immediately. Do not retain a row pointer across a deferred
-+    // callback: the user can dismiss the modal as soon as input resumes.
-+    if (firstRow) brls::Application::giveFocus(firstRow);
 +    // The underlying CENTERED grid can still recompute during the dialog's
 +    // layout transition; restore its exact position on the next UI tick.
 +    brls::sync([origin]() {
