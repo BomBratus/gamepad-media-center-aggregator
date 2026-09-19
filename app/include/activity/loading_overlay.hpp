@@ -12,12 +12,13 @@
 #pragma once
 
 #include <borealis.hpp>
+#include <string>
 
 class LoadingOverlay : public brls::Activity {
 public:
     CONTENT_FROM_XML_RES("activity/loading_overlay.xml");
 
-    LoadingOverlay();
+    explicit LoadingOverlay(std::string message = "", std::string slowHint = "");
 
     ~LoadingOverlay() override;
 
@@ -29,9 +30,13 @@ public:
     void onContentAvailable() override;
 
 private:
+    std::string messageText;
+    std::string slowHintText;
+
     // One-shot timer: reveal the "taking longer than usual" hint if we are
     // still here after this delay (the happy path resolves in well under a sec).
     brls::Timer slowTimer;
 
+    BRLS_BIND(brls::Label, message, "loading/message");
     BRLS_BIND(brls::Label, hint, "loading/hint");
 };

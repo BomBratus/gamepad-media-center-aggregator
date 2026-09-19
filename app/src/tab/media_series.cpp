@@ -3,6 +3,7 @@
 */
 
 #include "activity/player_view.hpp"
+#include "activity/loading_overlay.hpp"
 #include "api/plex.hpp"
 #include "api/plex/watchlist.hpp"
 #include "api/backend.hpp"
