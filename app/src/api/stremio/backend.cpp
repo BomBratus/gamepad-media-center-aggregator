@@ -30,6 +30,7 @@
 #include <cctype>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <set>
 #include <stdexcept>
 
@@ -137,20 +138,46 @@ struct EpisodeProgress {
     int64_t duration = 0;
 };
 
-EpisodeProgress loadEpisodeProgress(const std::string& showId) {
-    EpisodeProgress progress;
-    std::string key = accountKey();
-    if (key.empty()) return progress;
-    for (auto& item : stremio::datastoreGet(key)) {
-        if (jstr(item, "_id") != showId) continue;
+std::mutex episodeProgressMutex;
+std::string episodeProgressAccount;
+std::map<std::string, EpisodeProgress> episodeProgressCache;
+
+void cacheEpisodeProgresses(const std::string& account, const nlohmann::json& items) {
+    std::lock_guard<std::mutex> lock(episodeProgressMutex);
+    if (episodeProgressAccount != account) {
+        episodeProgressAccount = account;
+    }
+    episodeProgressCache.clear();  // datastoreGet returns the complete account library
+    for (auto& item : items) {
+        if (jstr(item, "type") != "series") continue;
         auto state = item.find("state");
-        if (state == item.end() || !state->is_object()) break;
+        if (state == item.end() || !state->is_object()) continue;
+        EpisodeProgress progress;
         progress.videoId = jstr(*state, "videoId");
         progress.timeOffset = jint(*state, "timeOffset");
         progress.duration = jint(*state, "duration");
-        break;
+        episodeProgressCache[jstr(item, "_id")] = std::move(progress);
     }
-    return progress;
+}
+
+void setEpisodeProgress(const std::string& showId, EpisodeProgress progress) {
+    std::string account = accountKey();
+    if (account.empty()) return;
+    std::lock_guard<std::mutex> lock(episodeProgressMutex);
+    if (episodeProgressAccount != account) {
+        episodeProgressAccount = account;
+        episodeProgressCache.clear();
+    }
+    episodeProgressCache[showId] = std::move(progress);
+}
+
+EpisodeProgress loadEpisodeProgress(const std::string& showId) {
+    std::string account = accountKey();
+    if (account.empty()) return {};
+    std::lock_guard<std::mutex> lock(episodeProgressMutex);
+    if (episodeProgressAccount != account) return {};
+    auto it = episodeProgressCache.find(showId);
+    return it == episodeProgressCache.end() ? EpisodeProgress{} : it->second;
 }
 
 void applyEpisodeProgress(media::Item& item, const EpisodeProgress& progress, const std::set<std::string>& watched) {
@@ -569,6 +596,7 @@ void StremioBackend::getContinueWatching(
     brls::async([key, cnt, title, then, error]() {
         try {
             nlohmann::json items = stremio::datastoreGet(key);
+            cacheEpisodeProgresses(key, items);
             // in-progress = a resume offset and not yet flagged watched; most
             // recently watched first (ISO-8601 timestamps sort lexicographically).
             std::vector<std::pair<std::string, const nlohmann::json*>> prog;
@@ -1080,6 +1108,7 @@ void StremioBackend::markWatched(const std::string& id) {
                 st["timeOffset"] = 0;  // watched -> clear resume position
                 if (episode) st["videoId"] = videoId;
             });
+            if (episode) setEpisodeProgress(pid.baseId, {videoId, 0, 0});
         } catch (const std::exception& ex) {
             brls::Logger::warning("stremio markWatched: {}", ex.what());
         }
@@ -1175,6 +1204,7 @@ void StremioBackend::reportProgress(
                 if (dur > 0) st["duration"] = dur;
                 if (!videoId.empty()) st["videoId"] = videoId;
             });
+            if (!videoId.empty()) setEpisodeProgress(pid.baseId, {videoId, pos, dur});
         } catch (const std::exception& ex) {
             brls::Logger::warning("stremio reportProgress: {}", ex.what());
         }
