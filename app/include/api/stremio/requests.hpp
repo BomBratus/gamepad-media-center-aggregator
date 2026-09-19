@@ -168,7 +168,8 @@ inline void startBatch(const std::shared_ptr<Batch>& batch) {
 /// Register exact URLs that will shortly be consumed one-by-one. Registration
 /// itself performs no I/O. Requests are split into small groups so a large addon
 /// collection cannot monopolize the global worker pool or memory on consoles.
-inline void registerBatch(const std::vector<std::string>& urls, long timeout = HTTP::TIMEOUT) {
+inline void registerBatch(
+    const std::vector<std::string>& urls, long timeout = HTTP::TIMEOUT, bool queueAll = false) {
     size_t width = detail::batchWidth();
     if (width < 2 || urls.size() < 2) return;
 
@@ -186,8 +187,13 @@ inline void registerBatch(const std::vector<std::string>& urls, long timeout = H
     std::lock_guard<std::mutex> lock(r.mutex);
     detail::cleanupLocked(r, now);
 
-    for (size_t first = 0; first < unique.size(); first += width) {
-        size_t last = std::min(unique.size(), first + width);
+    // Normal navigation stays chunked so a large catalog/addon set cannot fill
+    // the whole worker queue. Stream resolution can opt into queueAll: the pool
+    // still caps actual concurrency, but later addons begin as soon as ANY worker
+    // becomes free instead of waiting for every request in the previous chunk.
+    size_t chunk = queueAll ? unique.size() : width;
+    for (size_t first = 0; first < unique.size(); first += chunk) {
+        size_t last = std::min(unique.size(), first + chunk);
         std::vector<std::pair<std::string, std::string>> candidates;
         candidates.reserve(last - first);
         for (size_t i = first; i < last; ++i) {

@@ -177,7 +177,8 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
  }
  
 -void resolveAndShowEpisodeSourcePicker(const plex::Item& item) {
-+void resolveAndShowEpisodeSourcePicker(const plex::Item& item, brls::Box* recycler, size_t index) {
++void resolveAndShowEpisodeSourcePicker(
++    const plex::Item& item, brls::Box* recycler = nullptr, size_t index = 0) {
      const std::string id = item.ratingKey;
      const int64_t seekMs = item.viewOffset;
 +    EpisodePickerOrigin origin;

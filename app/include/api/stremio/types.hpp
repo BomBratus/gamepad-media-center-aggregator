@@ -743,15 +743,43 @@ inline std::vector<SubtitleOption> parseSubtitles(const nlohmann::json& j) {
 
 /// ---- Transport helper ------------------------------------------------------
 
+inline long streamRequestTimeout() {
+#if defined(GMCA_PS4_SAFE_SOURCES)
+    // PS4 picker latency matters more than waiting a full desktop-style timeout
+    // for a dead provider. Healthy debrid/torrent addons normally answer well
+    // inside this window; failures remain best-effort and other addons continue.
+    return 8000L;
+#else
+    return 15000L;
+#endif
+}
+
+inline long subtitleRequestTimeout() { return 15000L; }
+
 /// GET + parse JSON. Stremio addons are unauthenticated, so no headers. Returns
 /// an empty object on an empty body (rather than throwing on parse).
 inline nlohmann::json getSync(const std::string& url, long timeout = HTTP::TIMEOUT) {
-    // Series pages reuse the same /meta response for detail, seasons, next-up,
-    // and episode selection. A short cache removes that redundant round-trip;
-    // stream/subtitle/catalog resources keep their existing live semantics.
-    std::string resp = url.find("/meta/") != std::string::npos
-                           ? requests::getCached(url, timeout)
-                           : requests::get(url, timeout);
+    // Series metadata is reused for detail, seasons, episodes and next-up. Keep
+    // it for a few minutes; addon changes call requests::clear(), so the cache is
+    // invalidated immediately when the configured transports change.
+    if (url.find("/meta/") != std::string::npos) {
+        std::string resp = requests::getCached(url, timeout, 300000);
+        if (resp.empty()) return nlohmann::json::object();
+        return nlohmann::json::parse(resp);
+    }
+
+#if defined(GMCA_PS4_SAFE_SOURCES)
+    // Reopening the same episode/source picker should not repeat an identical
+    // network fan-out. Keep stream JSON only briefly because debrid URLs may be
+    // ephemeral; this is a UI retry cache, not a persistent playback cache.
+    if (url.find("/stream/") != std::string::npos) {
+        std::string resp = requests::getCached(url, timeout, 30000);
+        if (resp.empty()) return nlohmann::json::object();
+        return nlohmann::json::parse(resp);
+    }
+#endif
+
+    std::string resp = requests::get(url, timeout);
     if (resp.empty()) return nlohmann::json::object();
     return nlohmann::json::parse(resp);
 }
