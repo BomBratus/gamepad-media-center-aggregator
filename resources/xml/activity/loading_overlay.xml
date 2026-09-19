@@ -29,6 +29,7 @@
             marginBottom="20" />
 
         <brls:Label
+            id="loading/message"
             fontSize="17"
             horizontalAlign="center"
             text="@i18n/main/plex/connecting" />
