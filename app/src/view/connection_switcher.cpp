@@ -5,15 +5,19 @@
 #include "view/connection_switcher.hpp"
 #include "activity/main_activity.hpp"
 #include "activity/loading_activity.hpp"
+#ifdef GMCA_STREMIO_ONLY
+#include "tab/stremio_add.hpp"
+#else
 #include "tab/server_type_choose.hpp"
+#include "api/plex/auth.hpp"
+#include <optional>
+#endif
 #include "tab/media_collection.hpp"
 #include "utils/config.hpp"
 #include "utils/image.hpp"
 #include "utils/dialog.hpp"
 #include "utils/theme_palette.hpp"
 #include "view/svg_image.hpp"
-#include "api/plex/auth.hpp"
-#include <optional>
 #include <vector>
 #include <algorithm>
 #include <cctype>
@@ -108,6 +112,13 @@ static void connectWithUser(const AppUser& u) {
             }
             if (!found) throw std::runtime_error(unreachable);
 
+#ifdef GMCA_STREMIO_ONLY
+            // The lean PS4 profile has exactly one connection model: Stremio.
+            // Never reinterpret a legacy Plex/Jellyfin entry as Stremio; old
+            // config is preserved on disk and simply ignored by this profile.
+            if (target.type != "stremio") throw std::runtime_error(unreachable);
+            std::string base = target.urls.empty() ? std::string() : target.urls.front();
+#else
             // Plex only: refresh this profile's server token from plex.tv.
             std::optional<plex::ServerResource> fresh;
             if (target.type == "plex") {
@@ -129,6 +140,7 @@ static void connectWithUser(const AppUser& u) {
                                    ? (target.urls.empty() ? std::string() : target.urls.front())
                                    : plex::raceConnections(target.urls, target.access_token);
             if (base.empty() && fresh) base = plex::findBestConnection(*fresh);
+#endif
             if (base.empty()) throw std::runtime_error(unreachable);
 
             brls::sync([u, target, base]() {
@@ -261,7 +273,8 @@ private:
     BRLS_BIND(brls::Label, detail, "tile/detail");
 };
 
-/// The trailing "+" tile: starts the add-connection flow (server type chooser).
+/// The trailing "+" tile: starts the add-connection flow. In the lean PS4
+/// profile it opens Stremio directly; normal builds keep the backend chooser.
 /// Neutral (pleNx accent, not a backend brand) and dashed-quiet at rest; on focus
 /// it lights up exactly like a connection tile (bright border, fill, lift) so the
 /// focus state is unmistakable everywhere on the grid. The "+" is an SVG glyph so
@@ -307,7 +320,11 @@ public:
         this->applyVisual(false);
 
         this->registerClickAction([](brls::View* view) {
+#ifdef GMCA_STREMIO_ONLY
+            view->present(new StremioAdd());
+#else
             view->present(new ServerTypeChoose());
+#endif
             return true;
         });
         this->addGestureRecognizer(new brls::TapGestureRecognizer(this));
@@ -384,6 +401,9 @@ void ConnectionSwitcher::rebuild() {
     for (auto& u : AppConfig::instance().getUsers()) {
         const AppServer* srv = serverFor(u.server_id);
         if (!srv) continue;  // orphan profile (server removed) — skip
+#ifdef GMCA_STREMIO_ONLY
+        if (srv->type != "stremio") continue;  // preserve legacy config, hide unsupported backends
+#endif
         auto* tile = new ConnectionTile(u, *srv, this);
         tiles.push_back(tile);
         if (u.id == AppConfig::instance().getUserId()) this->firstFocus = tile;
