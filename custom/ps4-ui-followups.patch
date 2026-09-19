@@ -19,10 +19,10 @@ diff --git a/app/src/api/stremio/backend.cpp b/app/src/api/stremio/backend.cpp
 diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 --- a/app/src/tab/media_series.cpp
 +++ b/app/src/tab/media_series.cpp
-@@ -4,2 +4,3 @@
+@@ -5,1 +5,2 @@
  #include "activity/player_view.hpp"
 +#include "activity/loading_overlay.hpp"
-@@ -15,2 +16,3 @@
+@@ -18,2 +19,3 @@
  #include "view/video_source.hpp"
 +#include "view/recycling_grid.hpp"
  #include "view/recyling_video.hpp"
