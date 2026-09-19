@@ -7,7 +7,10 @@ using namespace brls::literals;
 // freeze (thcolin/pleNx#1).
 static const brls::Time SLOW_HINT_DELAY = 5000;
 
-LoadingOverlay::LoadingOverlay() { brls::Logger::debug("LoadingOverlay: create"); }
+LoadingOverlay::LoadingOverlay(std::string message, std::string slowHint)
+    : messageText(std::move(message)), slowHintText(std::move(slowHint)) {
+    brls::Logger::debug("LoadingOverlay: create");
+}
 
 LoadingOverlay::~LoadingOverlay() {
     // Stop before our views tear down so the end callback can't touch them.
@@ -16,6 +19,13 @@ LoadingOverlay::~LoadingOverlay() {
 }
 
 void LoadingOverlay::onContentAvailable() {
+    if (!this->messageText.empty()) this->message->setText(this->messageText);
+    if (!this->slowHintText.empty()) this->hint->setText(this->slowHintText);
+
+    // A custom message without a custom slow hint should not reveal the
+    // Plex-specific "taking longer" copy from the XML.
+    if (!this->messageText.empty() && this->slowHintText.empty()) return;
+
     this->slowTimer.setEndCallback([this](bool finished) {
         // finished == false means the timer was stopped (overlay dismissed or
         // destroyed): the work completed in time, leave the hint hidden.
