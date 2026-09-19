@@ -160,7 +160,12 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 @@ -174,3 +188,8 @@
      }
  
-+    if (origin.grid) origin.grid->setDefaultCellFocus(origin.index);
++    if (origin.grid) {
++        // Returning focus to the CENTERED season grid can start a new scroll
++        // animation. Freeze the saved pixel offset before the dialog takes focus.
++        origin.grid->setContentOffsetY(origin.offset, false);
++        origin.grid->setDefaultCellFocus(origin.index);
++    }
 +    // Dialog::addButton() makes the first button its last/default focus. Override
 +    // that with the first playable source before open(), so the Activity starts
 +    // on a source row instead of Cancel without any post-open focus race.
@@ -186,11 +191,19 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 +        origin.grid = grid;
 +        origin.index = index;
 +        origin.offset = grid->getContentOffsetY();
++        // A CENTERED RecyclingGrid may still be finishing the focus-centering
++        // animation when A is pressed. Stop it at the exact visible offset
++        // before pushing the loading Activity; otherwise the dimmed list keeps
++        // moving underneath and can recycle/rebind a cell several rows away.
++        grid->setContentOffsetY(origin.offset, false);
 +        grid->setDefaultCellFocus(index);
 +    }
 +    brls::Application::blockInputs();
 +    brls::Application::pushActivity(
 +        new LoadingOverlay("Fetching sources..."), brls::TransitionAnimation::NONE);
++    // pushActivity temporarily removes focus from the episode cell. Reassert
++    // the frozen offset synchronously so no frame can expose a recentered list.
++    if (origin.grid) origin.grid->setContentOffsetY(origin.offset, false);
      AppConfig::instance().backend().getItemDetail(
          id, true,
 -        [seekMs](const media::Item& resolved) { showEpisodeSourcePicker(resolved, seekMs); },
