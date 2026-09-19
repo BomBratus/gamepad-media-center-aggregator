@@ -1,6 +1,8 @@
 name: build PS4 Stremio-only
 
 on:
+  push:
+    branches: [ release/ps4-00.32-stremio-only ]
   pull_request:
     branches: [ dev ]
     paths:
@@ -40,8 +42,8 @@ jobs:
           git apply --verbose --recount custom/ps4-ui-followups.patch
           awk -f custom/apply-ps4-search-ui.awk app/src/tab/search_tab.cpp > /tmp/search_tab.cpp
           mv /tmp/search_tab.cpp app/src/tab/search_tab.cpp
-          sed -i 's/set(PS4_VERSION "00.27")/set(PS4_VERSION "00.31")/' CMakeLists.txt
-          grep -q 'set(PS4_VERSION "00.31")' CMakeLists.txt
+          sed -i 's/set(PS4_VERSION "00.27")/set(PS4_VERSION "00.32")/' CMakeLists.txt
+          grep -q 'set(PS4_VERSION "00.32")' CMakeLists.txt
           git checkout -- custom/ps4-safe-sources.patch custom/ps4-ui-followups.patch
           git diff --check
 
@@ -69,7 +71,7 @@ jobs:
       - name: Verify package
         run: |
           set -eux
-          pkg="build/IV0001-GMCA00000_00-GMCA000000003100.pkg"
+          pkg="build/IV0001-GMCA00000_00-GMCA000000003200.pkg"
           test -f "$pkg"
           test -s "$pkg"
           stat -c '%n %s bytes' "$pkg"
@@ -78,8 +80,8 @@ jobs:
       - name: Upload package
         uses: actions/upload-artifact@v6
         with:
-          name: GMCA-PS4-Stremio-only-${{ github.run_number }}
+          name: GMCA-PS4-Stremio-only-00.32-${{ github.run_number }}
           path: |
-            build/IV0001-GMCA00000_00-GMCA000000003100.pkg
+            build/IV0001-GMCA00000_00-GMCA000000003200.pkg
             build/SHA256SUMS
           if-no-files-found: error
