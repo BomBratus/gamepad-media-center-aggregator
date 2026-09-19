@@ -67,9 +67,16 @@ struct SearchFamily {
     std::chrono::steady_clock::time_point expires;
 };
 
+struct CachedResponse {
+    std::string body;
+    std::chrono::steady_clock::time_point expires;
+};
+
 struct Registry {
     std::mutex mutex;
     std::unordered_map<std::string, ExactRegistration> exact;
+    std::unordered_map<std::string, std::shared_ptr<Result>> inflight;
+    std::unordered_map<std::string, CachedResponse> cache;
     std::vector<SearchFamily> searchFamilies;
 };
 
@@ -103,6 +110,12 @@ inline void cleanupLocked(Registry& r, std::chrono::steady_clock::time_point now
         std::remove_if(r.searchFamilies.begin(), r.searchFamilies.end(),
             [now](const SearchFamily& family) { return family.expires <= now; }),
         r.searchFamilies.end());
+    for (auto it = r.cache.begin(); it != r.cache.end();) {
+        if (it->second.expires <= now)
+            it = r.cache.erase(it);
+        else
+            ++it;
+    }
 }
 
 inline std::pair<std::shared_ptr<Batch>, std::shared_ptr<Result>> findExact(
@@ -280,7 +293,60 @@ inline std::string get(const std::string& url, long timeout = HTTP::TIMEOUT) {
         }
     }
 
-    if (!exact.first || !exact.second) return HTTP::get(url, HTTP::Timeout{timeout});
+    if (!exact.first || !exact.second) {
+        // Even a one-addon resource can be requested concurrently by several
+        // page sections (series detail, seasons, next-up). Coalesce identical
+        // in-flight URLs so those callers share one HTTP request instead of
+        // occupying multiple workers with the same round-trip.
+        std::shared_ptr<detail::Result> single;
+        bool owner = false;
+        {
+            detail::Registry& r = detail::registry();
+            std::lock_guard<std::mutex> lock(r.mutex);
+            detail::cleanupLocked(r, now);
+            auto it = r.inflight.find(key);
+            if (it != r.inflight.end()) {
+                single = it->second;
+            } else {
+                single = std::make_shared<detail::Result>();
+                r.inflight[key] = single;
+                owner = true;
+            }
+        }
+
+        if (owner) {
+            std::string body;
+            std::exception_ptr requestError;
+            try {
+                body = HTTP::get(url, HTTP::Timeout{timeout});
+            } catch (...) {
+                requestError = std::current_exception();
+            }
+            {
+                std::lock_guard<std::mutex> lock(single->mutex);
+                single->body = std::move(body);
+                single->error = requestError;
+                single->done = true;
+            }
+            single->cv.notify_all();
+
+            detail::Registry& r = detail::registry();
+            std::lock_guard<std::mutex> lock(r.mutex);
+            auto it = r.inflight.find(key);
+            if (it != r.inflight.end() && it->second == single) r.inflight.erase(it);
+        }
+
+        std::string body;
+        std::exception_ptr requestError;
+        {
+            std::unique_lock<std::mutex> lock(single->mutex);
+            single->cv.wait(lock, [&single]() { return single->done; });
+            body = single->body;
+            requestError = single->error;
+        }
+        if (requestError) std::rethrow_exception(requestError);
+        return body;
+    }
 
     detail::startBatch(exact.first);
     std::string body;
@@ -306,6 +372,35 @@ inline std::string get(const std::string& url, long timeout = HTTP::TIMEOUT) {
     return body;
 }
 
+/// Fetch with a short successful-response cache. Metadata is effectively static
+/// during a browsing session, and season navigation commonly asks for the same
+/// series meta again when an episode is selected. Keep the cache tiny and
+/// time-bounded so addon reconfiguration is observed quickly.
+inline std::string getCached(
+    const std::string& url, long timeout = HTTP::TIMEOUT, long ttlMs = 60000) {
+    std::string key = detail::requestKey(url, timeout);
+    auto now = std::chrono::steady_clock::now();
+    {
+        detail::Registry& r = detail::registry();
+        std::lock_guard<std::mutex> lock(r.mutex);
+        detail::cleanupLocked(r, now);
+        auto it = r.cache.find(key);
+        if (it != r.cache.end()) return it->second.body;
+    }
+
+    std::string body = get(url, timeout);
+    if (body.empty() || ttlMs <= 0) return body;
+
+    detail::Registry& r = detail::registry();
+    std::lock_guard<std::mutex> lock(r.mutex);
+    detail::cleanupLocked(r, std::chrono::steady_clock::now());
+    // Console-friendly bound: enough for a few recently browsed shows/movies,
+    // without turning this into a long-lived catalog cache.
+    if (r.cache.size() >= 32) r.cache.erase(r.cache.begin());
+    r.cache[key] = {body, std::chrono::steady_clock::now() + std::chrono::milliseconds(ttlMs)};
+    return body;
+}
+
 /// Forget unconsumed registrations after the configured addon set changes.
 /// In-flight callers keep shared ownership of their Batch/Result and are not
 /// cancelled or invalidated.
@@ -313,6 +408,8 @@ inline void clear() {
     detail::Registry& r = detail::registry();
     std::lock_guard<std::mutex> lock(r.mutex);
     r.exact.clear();
+    r.inflight.clear();
+    r.cache.clear();
     r.searchFamilies.clear();
 }
 
