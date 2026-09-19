@@ -1108,7 +1108,7 @@ void StremioBackend::markWatched(const std::string& id) {
                 st["timeOffset"] = 0;  // watched -> clear resume position
                 if (episode) st["videoId"] = videoId;
             });
-            if (episode) setEpisodeProgress(pid.baseId, {videoId, 0, 0});
+            if (episode) setEpisodeProgress(pid.baseId, {pid.stremioId, 0, 0});
         } catch (const std::exception& ex) {
             brls::Logger::warning("stremio markWatched: {}", ex.what());
         }
