@@ -12,6 +12,7 @@
 #pragma once
 
 #include <borealis.hpp>
+#include <string>
 
 class LoadingOverlay : public brls::Activity {
 public:
