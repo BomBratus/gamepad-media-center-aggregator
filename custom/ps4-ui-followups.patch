@@ -84,15 +84,17 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
  
 +    if (origin.grid) origin.grid->setDefaultCellFocus(origin.index);
      dialog->open();
-+    // Dialog focus/layout settles on the next UI tick. Restore the season grid
-+    // only after that transition, then explicitly focus the first source row so
-+    // controller users land on a playable release instead of the Cancel button.
-+    brls::sync([origin, firstRow]() {
++    // The rows already exist before open(), so override the dialog's default
++    // Cancel focus immediately. Do not retain a row pointer across a deferred
++    // callback: the user can dismiss the modal as soon as input resumes.
++    if (firstRow) brls::Application::giveFocus(firstRow);
++    // The underlying CENTERED grid can still recompute during the dialog's
++    // layout transition; restore its exact position on the next UI tick.
++    brls::sync([origin]() {
 +        if (origin.grid) {
 +            origin.grid->setContentOffsetY(origin.offset, false);
 +            origin.grid->setDefaultCellFocus(origin.index);
 +        }
-+        if (firstRow) brls::Application::giveFocus(firstRow);
 +    });
  }
  
