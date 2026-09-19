@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/ps4-video-recovery-diagnostics
+      - fix/episode-source-picker-ux
   workflow_dispatch:
 
 jobs:
