@@ -131,6 +131,36 @@ void applyEpisodeWatched(media::Item& item, const std::set<std::string>& watched
     }
 }
 
+struct EpisodeProgress {
+    std::string videoId;
+    int64_t timeOffset = 0;
+    int64_t duration = 0;
+};
+
+EpisodeProgress loadEpisodeProgress(const std::string& showId) {
+    EpisodeProgress progress;
+    std::string key = accountKey();
+    if (key.empty()) return progress;
+    for (auto& item : stremio::datastoreGet(key)) {
+        if (jstr(item, "_id") != showId) continue;
+        auto state = item.find("state");
+        if (state == item.end() || !state->is_object()) break;
+        progress.videoId = jstr(*state, "videoId");
+        progress.timeOffset = jint(*state, "timeOffset");
+        progress.duration = jint(*state, "duration");
+        break;
+    }
+    return progress;
+}
+
+void applyEpisodeProgress(media::Item& item, const EpisodeProgress& progress, const std::set<std::string>& watched) {
+    if (item.guid != progress.videoId || progress.timeOffset <= 0 ||
+        (progress.duration > 0 && progress.timeOffset >= progress.duration) || watched.count(item.ratingKey) > 0)
+        return;
+    item.viewOffset = progress.timeOffset;
+    if (progress.duration > 0) item.duration = progress.duration;
+}
+
 /// A datastore libraryItem JSON -> media::Item (movie/show row). ratingKey is the
 /// opaque "{type}:{_id}"; resume offset/watched come from state.
 media::Item itemFromLibrary(const nlohmann::json& j) {
@@ -553,7 +583,23 @@ void StremioBackend::getContinueWatching(
             media::Hub h;
             h.title = title;
             h.hubIdentifier = "home.continue";
-            for (size_t i = 0; i < prog.size() && (int)i < cnt; i++) h.items.push_back(itemFromLibrary(*prog[i].second));
+            auto watched = loadWatchedEpisodes();
+            for (size_t i = 0; i < prog.size() && (int)i < cnt; i++) {
+                const auto& libraryItem = *prog[i].second;
+                media::Item item = itemFromLibrary(libraryItem);
+                auto state = libraryItem.find("state");
+                std::string videoId = state == libraryItem.end() ? "" : jstr(*state, "videoId");
+                ParsedId episode = parseId(episodeId(videoId));
+                const bool validEpisode = item.type == media::mediaTypeShow && episode.episode >= 0 &&
+                                          episode.baseId == item.guid && watched.count(episodeId(videoId)) == 0 &&
+                                          (item.duration <= 0 || item.viewOffset < item.duration);
+                if (validEpisode) {
+                    // Keep the show card, but carry the actual episode key for the
+                    // resume action. This avoids a meta request while loading Home.
+                    item.key = episodeId(videoId);
+                }
+                h.items.push_back(std::move(item));
+            }
             if (!h.items.empty()) out.Items.push_back(std::move(h));
             out.TotalRecordCount = (long)out.Items.size();
             brls::sync(std::bind(then, std::move(out)));
@@ -779,10 +825,12 @@ void StremioBackend::getChildren(
             } else {  // "season" -> episodes of that season
                 int64_t wantSeason = pid.season;
                 auto watched = loadWatchedEpisodes();
+                auto progress = loadEpisodeProgress(showId);
                 auto all = parseEpisodes(metaObj, show);
                 for (auto& e : all) {
                     if (e.parentIndex != wantSeason) continue;
                     applyEpisodeWatched(e, watched);
+                    applyEpisodeProgress(e, progress, watched);
                     c.Items.push_back(std::move(e));
                 }
             }
@@ -829,7 +877,11 @@ void StremioBackend::getAllEpisodes(const std::string& showId, bool,
             media::Container<media::Item> c;
             c.Items = parseEpisodes(metaObj, show);  // already sorted (season, episode)
             auto watched = loadWatchedEpisodes();
-            for (auto& e : c.Items) applyEpisodeWatched(e, watched);
+            auto progress = loadEpisodeProgress(baseId);
+            for (auto& e : c.Items) {
+                applyEpisodeWatched(e, watched);
+                applyEpisodeProgress(e, progress, watched);
+            }
             c.TotalRecordCount = (long)c.Items.size();
             brls::sync(std::bind(then, std::move(c)));
         } catch (const std::exception& ex) {
@@ -848,6 +900,7 @@ void StremioBackend::getNextUp(
         try {
             engine.ensureLoaded();
             auto watched = loadWatchedEpisodes();
+            auto progress = loadEpisodeProgress(baseId);
             auto addons = engine.addonsFor("meta", "series", baseId);
             for (auto& a : addons) {
                 std::string url = engine.resourceUrl(a, "meta", "series", baseId);
@@ -863,10 +916,19 @@ void StremioBackend::getNextUp(
                 media::Item show = parseMeta(*meta);
                 auto eps = parseEpisodes(*meta, show);
                 if (!eps.empty()) {
+                    for (auto& e : eps) {
+                        applyEpisodeWatched(e, watched);
+                        applyEpisodeProgress(e, progress, watched);
+                    }
+                    auto resumed = std::find_if(eps.begin(), eps.end(), [&progress, &watched](const media::Item& e) {
+                        return e.guid == progress.videoId && e.viewOffset > 0 && watched.count(e.ratingKey) == 0;
+                    });
                     auto next = std::find_if(eps.begin(), eps.end(), [&watched](const media::Item& e) {
                         return watched.count(e.ratingKey) == 0;
                     });
-                    if (next != eps.end()) {
+                    if (resumed != eps.end()) {
+                        item = *resumed;
+                    } else if (next != eps.end()) {
                         item = *next;
                     } else {
                         item = eps.front();
@@ -1107,6 +1169,7 @@ void StremioBackend::reportProgress(
         try {
             ParsedId pid = parseId(rk);
             std::string videoId = (pid.stremioType == "series" && pid.episode >= 0) ? pid.stremioId : "";
+            if (!videoId.empty() && loadWatchedEpisodes().count(rk) > 0) return;
             upsertLibrary(engine, rk, [pos, dur, videoId](nlohmann::json& st) {
                 st["timeOffset"] = pos;
                 if (dur > 0) st["duration"] = dur;

@@ -37,7 +37,7 @@ public:
 
     BRLS_BIND(brls::Label, labelName, "episode/card/name");
     BRLS_BIND(brls::Label, labelOverview, "episode/card/overview");
-    BRLS_BIND(SVGImage, badgeTopRight, "video/card/badge/top");
+    BRLS_BIND(brls::Box, watchedStatus, "episode/card/watched");
     BRLS_BIND(brls::Rectangle, rectProgress, "video/card/progress");
     BRLS_BIND(brls::Box, badgeDownload, "video/card/badge/download");
 };
@@ -154,16 +154,14 @@ public:
         }
         cell->labelOverview->setText(item.summary);
 
-        if (item.played()) {
-            cell->badgeTopRight->setImageFromSVGRes("icon/ico-checkmark.svg");
-            cell->badgeTopRight->setVisibility(brls::Visibility::VISIBLE);
+        const bool watched = item.played();
+        cell->watchedStatus->setVisibility(watched ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+        if (watched) {
             cell->rectProgress->getParent()->setVisibility(brls::Visibility::GONE);
         } else if (item.viewOffset > 0 && item.duration > 0) {
             cell->rectProgress->setWidthPercentage(float(item.viewOffset) / float(item.duration) * 100.f);
             cell->rectProgress->getParent()->setVisibility(brls::Visibility::VISIBLE);
-            cell->badgeTopRight->setVisibility(brls::Visibility::GONE);
         } else {
-            cell->badgeTopRight->setVisibility(brls::Visibility::GONE);
             cell->rectProgress->getParent()->setVisibility(brls::Visibility::GONE);
         }
 

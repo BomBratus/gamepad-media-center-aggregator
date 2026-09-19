@@ -45,14 +45,7 @@
                 height="180"
                 cornerRadius="8" />
 
-            <SVGImage
-                id="video/card/badge/top"
-                positionType="absolute"
-                positionTop="8"
-                positionRight="8"
-                height="24" />
-
-            <!-- "downloaded" badge (top-left, opposite the watched checkmark) -->
+            <!-- "downloaded" badge (top-left) -->
             <brls:Box
                 id="video/card/badge/download"
                 positionType="absolute"
@@ -90,12 +83,38 @@
 
     <brls:Box
         axis="column"
+        grow="1"
         marginLeft="20">
-        <brls:Label
-            id="episode/card/name"
-            margin="10"
-            singleLine="true"
-            fontSize="18" />
+        <brls:Box
+            axis="row"
+            alignItems="center"
+            margin="10">
+            <brls:Label
+                id="episode/card/name"
+                grow="1"
+                shrink="1"
+                minWidth="0"
+                singleLine="true"
+                fontSize="18" />
+            <brls:Box
+                id="episode/card/watched"
+                axis="row"
+                alignItems="center"
+                marginLeft="14"
+                visibility="gone">
+                <brls:Label
+                    text="✓"
+                    marginRight="5"
+                    singleLine="true"
+                    fontSize="18"
+                    textColor="@theme/color/app" />
+                <brls:Label
+                    text="WATCHED"
+                    singleLine="true"
+                    fontSize="14"
+                    textColor="@theme/color/app" />
+            </brls:Box>
+        </brls:Box>
 
         <TextBox
             id="episode/card/overview"

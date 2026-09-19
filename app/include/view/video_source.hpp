@@ -33,10 +33,13 @@ public:
     /// local catalog and a selected episode/movie plays its local file.
     void setLocalContext(bool v) { this->localContext = v; }
 
+    void setStremioContinueWatching(bool v) { this->stremioContinueWatching = v; }
+
 protected:
     MediaList list;
     std::string parentId;
     std::string moreTitle;
     std::string moreKey;
     bool localContext = false;
+    bool stremioContinueWatching = false;
 };

@@ -76,6 +76,7 @@ void HomeTab::doRequest() {
     resume->setFrameHeight(brls::getStyle()["app/card/poster/row"]);
     resume->setItemWidth(brls::getStyle()["app/card/poster/width"]);
     resume->setSidePadding(brls::getStyle()["main/content_padding_sides"]);
+    resume->setStremioContinueWatching(AppConfig::instance().backend().type() == media::BackendType::Stremio);
     resume->setVisibility(brls::Visibility::GONE);
     this->boxHome->addView(resume);
 
