@@ -37,11 +37,14 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 +    }
      return label;
  }
-@@ -54,2 +60,3 @@
+@@ -52,5 +58,6 @@
+ public:
+     EpisodeSourceRow() {
          this->setAxis(brls::Axis::COLUMN);
 +        this->setWidthPercentage(100);
 -        this->setHeight(78);
 +        this->setHeight(96);
+         this->setCornerRadius(8);
 @@ -78,2 +85,8 @@
  };
  
