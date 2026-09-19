@@ -2,6 +2,7 @@
 #include "activity/gallery_activity.hpp"
 #include "api/plex.hpp"
 #include "api/backend.hpp"
+#include "api/stremio/types.hpp"
 #include "tab/media_collection.hpp"
 #include "tab/media_series.hpp"
 #include "tab/media_movie.hpp"
@@ -14,6 +15,7 @@
 #include "utils/download.hpp"
 #include "utils/media_source.hpp"
 #include "utils/offline_library.hpp"
+#include "utils/dialog.hpp"
 #include "view/svg_image.hpp"
 #include "view/video_card.hpp"
 #include "view/video_source.hpp"
@@ -21,6 +23,52 @@
 #include "view/auto_tab_frame.hpp"
 
 using namespace brls::literals;  // for _i18n
+
+namespace {
+
+void showStremioResumeSourcePicker(const media::Item& card) {
+    const std::string episodeId = card.key;
+    const int64_t seekMs = card.viewOffset;
+    AppConfig::instance().backend().getItemDetail(
+        episodeId, true,
+        [seekMs](const media::Item& detail) {
+            std::vector<std::string> choices;
+            std::vector<int> playable;
+            for (size_t i = 0; i < detail.media.size(); ++i) {
+                const auto& source = detail.media[i];
+                if (!source.playable()) continue;
+                choices.push_back(source.detail.empty() ? source.label : source.label + " - " + source.detail);
+                playable.push_back((int)i);
+            }
+            if (playable.empty()) {
+                Dialog::show("main/stremio/source/none"_i18n);
+                return;
+            }
+            auto* picker = new brls::Dropdown("Choose source", choices,
+                [detail, playable, seekMs](int selected) {
+                    if (selected < 0 || selected >= (int)playable.size()) return;
+                    media::Item episode = detail;
+                    episode.viewOffset = seekMs;
+                    auto* view = new PlayerView(episode, seekMs, playable[(size_t)selected]);
+                    view->setTitie(episode.grandparentTitle.empty()
+                                       ? fmt::format("S{}E{} - {}", episode.parentIndex, episode.index, episode.title)
+                                       : fmt::format("{} - S{}E{} - {}", episode.grandparentTitle,
+                                             episode.parentIndex, episode.index, episode.title));
+                    if (!episode.grandparentRatingKey.empty()) view->setSeries(episode.grandparentRatingKey);
+                });
+            brls::Application::pushActivity(new brls::Activity(picker));
+        },
+        [](const std::string& error) { Dialog::show(error); });
+}
+
+void showStremioResumeDialog(brls::Box* recycler, const media::Item& card) {
+    auto* dialog = new brls::Dialog(card.title);
+    dialog->addButton("Resume episode", [card]() { showStremioResumeSourcePicker(card); });
+    dialog->addButton("Go to series", [recycler, card]() { ui::presentDetail(recycler, new MediaSeries(card)); });
+    dialog->open();
+}
+
+}  // namespace
 
 VideoDataSource::VideoDataSource(const MediaList& r) : list(std::move(r)) {}
 VideoDataSource::VideoDataSource(const MediaList& r, const std::string& parentId)
@@ -173,6 +221,13 @@ void VideoDataSource::onItemSelected(brls::Box* recycler, size_t index) {
     auto& item = this->list.at(index);
 
     if (item.type == plex::mediaTypeShow) {
+        if (this->stremioContinueWatching && AppConfig::instance().backend().type() == media::BackendType::Stremio) {
+            stremio::ParsedId episode = stremio::parseId(item.key);
+            if (episode.stremioType == "series" && episode.episode >= 0 && item.viewOffset > 0) {
+                showStremioResumeDialog(recycler, item);
+                return;
+            }
+        }
         ui::presentDetail(recycler, new MediaSeries(item, this->localContext));
     } else if (item.type == plex::mediaTypeMovie) {
         ui::presentDetail(recycler, new MediaMovie(item, this->localContext));

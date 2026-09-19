@@ -26,6 +26,8 @@ public:
     /// the cards scroll up to the edges (full-bleed scroll area)
     void setSidePadding(float padding);
     void setPageSize( size_t pageSize);
+    /// Continue Watching is the only row whose Stremio show cards offer episode resume.
+    void setStremioContinueWatching(bool enabled) { this->stremioContinueWatching = enabled; }
     void onQuery(const Callback& callback = nullptr);
     void doRequest(bool refresh = false);
     void doLatest(bool refresh = false);
@@ -42,4 +44,5 @@ private:
     Callback queryCallback = nullptr;
     size_t start = 0;
     size_t pageSize = 10;
+    bool stremioContinueWatching = false;
 };

@@ -82,6 +82,7 @@ void RecylingVideo::setItems(
     } else {
         this->setVisibility(brls::Visibility::VISIBLE);
         auto* source = new VideoDataSource(items);
+        source->setStremioContinueWatching(this->stremioContinueWatching);
         if (!moreKey.empty()) source->setMore(moreTitle, moreKey);
         this->recycler->setDataSource(source);
     }
