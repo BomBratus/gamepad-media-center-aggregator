@@ -866,9 +866,17 @@ void MediaSeries::doNextup() {
 
             auto& be = AppConfig::instance().backend();
             if (be.type() == media::BackendType::Stremio) {
-                // Honest Play: resolve the next episode's sources, then enable
-                // (playable) or mute + relabel (no playable source). Never hide
-                // it — hiding a focused button strands the focus highlight.
+#if defined(GMCA_PS4_SAFE_SOURCES)
+                // PS4: do not resolve /stream just to decide whether Play should
+                // be enabled. That hidden prefetch competes with the series/meta
+                // requests and can make opening a show feel as slow as the source
+                // picker. Resolve lazily only when the user actually presses Play.
+                this->nextPlayable = true;
+                this->btnPlay->setMuted(false);
+#else
+                // Other platforms keep the existing eager availability check.
+                // It lets the generic Play path surface an unavailable source
+                // before opening the player.
                 bool fs = fromStart;
                 this->nextPlayable = false;
                 this->btnPlay->setMuted(true);
@@ -893,6 +901,7 @@ void MediaSeries::doNextup() {
                                 : "main/stremio/source/unavailable"_i18n);
                     },
                     nullptr);
+#endif
             } else {
                 this->nextPlayable = true;
                 this->btnPlay->setMuted(false);
