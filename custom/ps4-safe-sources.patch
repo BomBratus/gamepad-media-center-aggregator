@@ -346,9 +346,9 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
      plex::Item item = this->onDeck;
      if (this->replay) item.viewOffset = 0;
 +    if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
-+        // doOnDeck already resolved this episode with getItemDetail(), so the
-+        // picker can reuse the exact source list without another network round-trip.
-+        showEpisodeSourcePicker(item, item.viewOffset);
++        // PS4 resolves sources only on explicit Play. Avoid the old hidden
++        // next-up prefetch while preserving the same picker/loading feedback.
++        resolveAndShowEpisodeSourcePicker(item);
 +        return;
 +    }
      PlayerView* view = new PlayerView(item);
