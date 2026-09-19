@@ -19,7 +19,10 @@ diff --git a/app/src/api/stremio/backend.cpp b/app/src/api/stremio/backend.cpp
 diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 --- a/app/src/tab/media_series.cpp
 +++ b/app/src/tab/media_series.cpp
-@@ -15,2 +15,3 @@
+@@ -4,2 +4,3 @@
+ #include "activity/player_view.hpp"
++#include "activity/loading_overlay.hpp"
+@@ -15,2 +16,3 @@
  #include "view/video_source.hpp"
 +#include "view/recycling_grid.hpp"
  #include "view/recyling_video.hpp"
@@ -63,7 +66,15 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 -    content->setWidth(940);
 +    content->setWidthPercentage(100);
      content->setHeight(610);
-@@ -136,2 +149,3 @@
+@@ -130,2 +143,3 @@
+     dialog->setCancelable(true);
++    EpisodeSourceRow* firstRow = nullptr;
+ 
+@@ -134,2 +148,3 @@
+         auto* row = new EpisodeSourceRow();
++        if (!firstRow) firstRow = row;
+ 
+@@ -136,2 +151,3 @@
          top->setAlignItems(brls::AlignItems::CENTER);
          top->setHeight(28);
 +        top->setWidthPercentage(100);
@@ -73,12 +84,16 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
  
 +    if (origin.grid) origin.grid->setDefaultCellFocus(origin.index);
      dialog->open();
-+    // Pushing a modal Activity can make CENTERED scrolling recompute from row 0.
-+    // Restore the exact pre-dialog offset without stealing focus back from the dialog.
-+    if (origin.grid) {
-+        origin.grid->setContentOffsetY(origin.offset, false);
-+        origin.grid->setDefaultCellFocus(origin.index);
-+    }
++    // Dialog focus/layout settles on the next UI tick. Restore the season grid
++    // only after that transition, then explicitly focus the first source row so
++    // controller users land on a playable release instead of the Cancel button.
++    brls::sync([origin, firstRow]() {
++        if (origin.grid) {
++            origin.grid->setContentOffsetY(origin.offset, false);
++            origin.grid->setDefaultCellFocus(origin.index);
++        }
++        if (firstRow) brls::Application::giveFocus(firstRow);
++    });
  }
  
 -void resolveAndShowEpisodeSourcePicker(const plex::Item& item) {
@@ -92,11 +107,23 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 +        origin.offset = grid->getContentOffsetY();
 +        grid->setDefaultCellFocus(index);
 +    }
++    brls::Application::blockInputs();
++    brls::Application::pushActivity(
++        new LoadingOverlay("Fetching sources..."), brls::TransitionAnimation::NONE);
      AppConfig::instance().backend().getItemDetail(
          id, true,
 -        [seekMs](const media::Item& resolved) { showEpisodeSourcePicker(resolved, seekMs); },
-+        [seekMs, origin](const media::Item& resolved) { showEpisodeSourcePicker(resolved, seekMs, origin); },
-         [](const std::string& error) { Dialog::show(error); });
++        [seekMs, origin](const media::Item& resolved) {
++            brls::Application::unblockInputs();
++            brls::Application::popActivity(brls::TransitionAnimation::NONE);
++            showEpisodeSourcePicker(resolved, seekMs, origin);
++        },
+-        [](const std::string& error) { Dialog::show(error); });
++        [](const std::string& error) {
++            brls::Application::unblockInputs();
++            brls::Application::popActivity(brls::TransitionAnimation::NONE);
++            Dialog::show(error);
++        });
  }
 @@ -367,3 +393,3 @@
          if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
