@@ -88,8 +88,17 @@ std::vector<Addon> AddonEngine::addonsFor(
         std::vector<std::string> urls;
         urls.reserve(out.size());
         for (const auto& a : out) urls.push_back(resourceUrl(a, resource, type, id));
-        long timeout = (resource == "stream" || resource == "subtitles") ? 15000L : HTTP::TIMEOUT;
-        requests::registerBatch(urls, timeout);
+        long timeout = resource == "stream"
+                           ? streamRequestTimeout()
+                           : (resource == "subtitles" ? subtitleRequestTimeout() : HTTP::TIMEOUT);
+        bool queueAll = false;
+#if defined(GMCA_PS4_SAFE_SOURCES)
+        // The PS4 source picker is interactive. Queue all stream-addon work at
+        // once and let ThreadPool's worker count enforce the actual concurrency,
+        // so later addons can start as soon as any earlier request completes.
+        queueAll = resource == "stream";
+#endif
+        requests::registerBatch(urls, timeout, queueAll);
     }
     return out;
 }
