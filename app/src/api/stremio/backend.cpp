@@ -286,7 +286,7 @@ std::vector<media::Media> resolveAllStreams(
         std::string url = engine.resourceUrl(a, "stream", stremioType, stremioId);
         std::vector<StreamOption> streams;
         try {
-            streams = parseStreams(getSync(url, 15000));
+            streams = parseStreams(getSync(url, streamRequestTimeout()));
         } catch (const std::exception& ex) {
             brls::Logger::warning("stremio stream {}: {}", url, ex.what());
             continue;
@@ -347,7 +347,7 @@ std::vector<media::Stream> resolveAllSubtitles(
         std::string url = engine.resourceUrl(a, "subtitles", stremioType, stremioId);
         std::vector<SubtitleOption> subs;
         try {
-            subs = parseSubtitles(getSync(url, 15000));
+            subs = parseSubtitles(getSync(url, subtitleRequestTimeout()));
         } catch (const std::exception& ex) {
             brls::Logger::warning("stremio subtitles {}: {}", url, ex.what());
             continue;
