@@ -179,15 +179,17 @@ public:
     virtual PlaybackSource resolvePlayback(const Item& item, const Media& version, const PlaybackOptions& opts) = 0;
     /// mpv sub-add URL for an external (sidecar) subtitle stream.
     virtual std::string subtitleSidecarUrl(const std::string& streamKey) const { return ""; }
-    /// Resolve external (sidecar) subtitle tracks for `item`, asynchronously, at
-    /// PLAY time. Plex/Jellyfin embed their sidecars in the Media streams at
-    /// detail time and keep this default no-op; Stremio has no per-file streams,
-    /// so it fans out the addons' `subtitles` resource here (only when actually
-    /// playing — cheaper than on every detail open, and the set is per-video, not
-    /// per-source). Each returned Stream is a subtitle (streamType 3) whose `key`
-    /// feeds subtitleSidecarUrl(); `languageTag` is a 2-letter code for matching
-    /// the preferred-language setting, `displayTitle` the menu label.
-    virtual void getSubtitles(const Item& item, Then<std::vector<Stream>> then, OnError error) {
+    /// Resolve external (sidecar) subtitle tracks for `item` and the exact
+    /// `version` selected for playback, asynchronously at PLAY time.
+    /// Plex/Jellyfin embed their sidecars in Media streams and keep this default
+    /// no-op; Stremio uses the selected Part's optional physical-file identity
+    /// (video hash/size/filename) when the addon supplied it, so subtitle providers
+    /// can match the concrete release without any extra range reads.
+    /// Each returned Stream is a subtitle (streamType 3) whose `key` feeds
+    /// subtitleSidecarUrl(); `languageTag` is a 2-letter code for preferred-
+    /// language matching, `displayTitle` the menu label.
+    virtual void getSubtitles(
+        const Item& item, const Media& version, Then<std::vector<Stream>> then, OnError error) {
         if (then) then({});
     }
     /// Optional guidance for the player's subtitle menu when NO subtitle track is
