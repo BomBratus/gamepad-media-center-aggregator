@@ -617,14 +617,15 @@ void StremioBackend::getContinueWatching(
                 media::Item item = itemFromLibrary(libraryItem);
                 auto state = libraryItem.find("state");
                 std::string videoId = state == libraryItem.end() ? "" : jstr(*state, "videoId");
-                ParsedId episode = parseId(episodeId(videoId));
+                std::string episodeKey = episodeId(item.guid, videoId);
+                ParsedId episode = parseId(episodeKey);
                 const bool validEpisode = item.type == media::mediaTypeShow && episode.episode >= 0 &&
-                                          episode.baseId == item.guid && watched.count(episodeId(videoId)) == 0 &&
+                                          episode.baseId == item.guid && watched.count(episodeKey) == 0 &&
                                           (item.duration <= 0 || item.viewOffset < item.duration);
                 if (validEpisode) {
                     // Keep the show card, but carry the actual episode key for the
                     // resume action. This avoids a meta request while loading Home.
-                    item.key = episodeId(videoId);
+                    item.key = episodeKey;
                 }
                 h.items.push_back(std::move(item));
             }

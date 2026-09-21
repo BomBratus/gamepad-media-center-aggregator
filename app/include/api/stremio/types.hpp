@@ -19,15 +19,13 @@
     the type alongside the id to route requests, so we fold it into ratingKey:
       movie    "movie:tt0111161"
       series   "series:tt0903747"
-      episode  "series:tt0903747:1:1"      (stremioId is the video id)
-      season   "season:tt0903747:1"        (synthetic, {showId}:{n})
-    Item::guid = raw stremioId (the IMDB `tt…` id; cross-source identity).
-    Item::key  = ratingKey.
-    parseId() splits on the FIRST ':' -> {stremioType, stremioId}.
-
-    LIMITATION (documented, not handled): kitsu ids (`kitsu:ID`, episodes
-    `kitsu:ID:ep`) already contain a ':' in their prefix, which collides with the
-    "{type}:{id}" ratingKey scheme. Only IMDB (`tt`) ids are supported for now.
+      season   "season:tt0903747:1"        (synthetic, parsed from the right)
+      episode  legacy Cinemeta: "series:tt0903747:1:1"
+               opaque ids:       "episode:<parentLen>:<parentId><videoId>"
+    The length-prefixed episode form preserves both the parent id and the raw
+    Stremio video id even when either contains ':' (Kitsu/MAL/AniList/etc.).
+    Existing un-namespaced Cinemeta episode keys keep their old form so persisted
+    watched history remains valid. Item::guid is always the raw Stremio id.
 */
 
 #pragma once
@@ -155,16 +153,16 @@ inline std::string stremioType(const media::Item& item) {
 
 struct ParsedId {
     std::string stremioType;  // movie | series | season | channel | tv | …
-    std::string stremioId;    // raw Stremio id (tt…, tt…:S:E, {showId}:{n})
-    // episode breakdown (only when the id has the "{base}:{season}:{episode}" shape)
-    std::string baseId;
+    std::string stremioId;    // raw Stremio id; for episodes this is the raw video id
+    std::string baseId;       // movie/show id used for /meta + account library state
     int64_t season = -1;
-    int64_t episode = -1;
+    int64_t episode = -1;     // >= 0 marks an episode; opaque ids use 0 as a sentinel
 };
 
-/// Split ratingKey on the FIRST ':' -> {stremioType, stremioId}. For an episode
-/// (type "series" with a "{base}:{s}:{e}" id) or a season ("season" with a
-/// "{showId}:{n}" id), the trailing numeric components are filled in too.
+/// Split ratingKey on the FIRST ':' -> {kind, payload}. Whole-item ids remain
+/// "{type}:{rawId}". Seasons are synthetic and split from the right. New episode
+/// keys carry a length-prefixed parent id so the raw parent/video ids may contain
+/// arbitrary ':' characters without changing their meaning.
 inline ParsedId parseId(const std::string& ratingKey) {
     ParsedId p;
     auto colon = ratingKey.find(':');
@@ -175,12 +173,34 @@ inline ParsedId parseId(const std::string& ratingKey) {
         p.baseId = ratingKey;
         return p;
     }
-    p.stremioType = ratingKey.substr(0, colon);
-    p.stremioId = ratingKey.substr(colon + 1);
+
+    std::string kind = ratingKey.substr(0, colon);
+    std::string payload = ratingKey.substr(colon + 1);
+
+    if (kind == "episode") {
+        auto lengthEnd = payload.find(':');
+        if (lengthEnd == std::string::npos) return p;
+        try {
+            size_t parentLen = (size_t)std::stoull(payload.substr(0, lengthEnd));
+            size_t parentStart = lengthEnd + 1;
+            if (parentLen > payload.size() - parentStart) return p;
+            p.stremioType = "series";
+            p.baseId = payload.substr(parentStart, parentLen);
+            p.stremioId = payload.substr(parentStart + parentLen);
+            if (p.baseId.empty() || p.stremioId.empty()) return ParsedId{};
+            p.episode = 0;
+            return p;
+        } catch (...) {
+            return ParsedId{};
+        }
+    }
+
+    p.stremioType = kind;
+    p.stremioId = payload;
     p.baseId = p.stremioId;
 
     if (p.stremioType == "season") {
-        // "season:{showId}:{n}" -> stremioId == "{showId}:{n}"
+        // "season:{showId}:{n}" -> split only the synthetic trailing season.
         auto last = p.stremioId.rfind(':');
         if (last != std::string::npos) {
             p.baseId = p.stremioId.substr(0, last);
@@ -190,9 +210,10 @@ inline ParsedId parseId(const std::string& ratingKey) {
             }
         }
     } else if (p.stremioType == "series") {
-        // An episode id is "{base}:{season}:{episode}"; a bare show id has no extra ':'.
-        // (IMDB base ids carry no ':', so re-splitting on ':' is unambiguous here;
-        //  kitsu ids would break this — see LIMITATION at the top of the file.)
+        // Backward compatibility for the original Cinemeta key:
+        // "series:{base}:{season}:{episode}". It is intentionally recognized only
+        // when there are exactly three components; namespaced ids use the opaque
+        // "episode:" codec above and are never split on their internal ':'.
         std::vector<std::string> parts;
         size_t pos = 0, next;
         while ((next = p.stremioId.find(':', pos)) != std::string::npos) {
@@ -201,10 +222,12 @@ inline ParsedId parseId(const std::string& ratingKey) {
         }
         parts.push_back(p.stremioId.substr(pos));
         if (parts.size() == 3) {
-            p.baseId = parts[0];
             try {
-                p.season = std::stoll(parts[1]);
-                p.episode = std::stoll(parts[2]);
+                int64_t season = std::stoll(parts[1]);
+                int64_t episode = std::stoll(parts[2]);
+                p.baseId = parts[0];
+                p.season = season;
+                p.episode = episode;
             } catch (...) {
             }
         }
@@ -217,8 +240,32 @@ inline std::string seasonId(const std::string& showId, int64_t n) {
     return "season:" + showId + ":" + std::to_string(n);
 }
 
-/// Build the ratingKey for an episode from its Stremio video id ("{base}:{s}:{e}").
-inline std::string episodeId(const std::string& videoId) { return "series:" + videoId; }
+inline bool isDecimalIdPart(const std::string& value) {
+    return !value.empty() &&
+           std::all_of(value.begin(), value.end(), [](unsigned char c) { return std::isdigit(c); });
+}
+
+/// Preserve the historical Cinemeta episode key when it is unambiguous. This
+/// keeps existing IMDB watched-history entries stable while all namespaced or
+/// otherwise opaque ids use the collision-free codec below.
+inline bool canUseLegacyEpisodeId(const std::string& showId, const std::string& videoId) {
+    if (showId.empty() || showId.find(':') != std::string::npos) return false;
+    std::string prefix = showId + ":";
+    if (videoId.rfind(prefix, 0) != 0) return false;
+    std::string suffix = videoId.substr(prefix.size());
+    auto sep = suffix.find(':');
+    if (sep == std::string::npos || suffix.find(':', sep + 1) != std::string::npos) return false;
+    return isDecimalIdPart(suffix.substr(0, sep)) && isDecimalIdPart(suffix.substr(sep + 1));
+}
+
+/// Build a ratingKey that round-trips BOTH the parent series id and raw video id.
+/// Kitsu-style ids ("kitsu:419" / "kitsu:419:1") therefore remain untouched when
+/// routed to /meta, /stream and /subtitles.
+inline std::string episodeId(const std::string& showId, const std::string& videoId) {
+    if (showId.empty() || videoId.empty()) return "";
+    if (canUseLegacyEpisodeId(showId, videoId)) return "series:" + videoId;
+    return "episode:" + std::to_string(showId.size()) + ":" + showId + videoId;
+}
 
 /// ---- Manifest / catalog descriptors ----------------------------------------
 
@@ -421,9 +468,10 @@ inline media::Item parseMeta(const nlohmann::json& j) {
 }
 
 /// Series `meta.videos[]` -> episode Items, sorted by (season, episode).
-/// Each video: { id:"tt…:1:1", name|title, season, episode, released, overview, thumbnail }.
-/// ratingKey = "series:{video.id}", type = episode, index = episode,
-/// parentIndex = season, grandparent* = the show.
+/// The video id is addon-defined and opaque (e.g. "tt…:1:1" or "kitsu:419:1").
+/// ratingKey keeps the parent show id separately when the legacy Cinemeta shape
+/// is not safe, so later detail/progress calls never have to infer parentage from
+/// the video's ':' separators.
 inline std::vector<media::Item> parseEpisodes(const nlohmann::json& metaJson, const media::Item& show) {
     std::vector<media::Item> out;
     auto vids = metaJson.find("videos");
@@ -431,7 +479,7 @@ inline std::vector<media::Item> parseEpisodes(const nlohmann::json& metaJson, co
     for (auto& v : *vids) {
         media::Item e;
         std::string vid = jstr(v, "id");
-        e.ratingKey = episodeId(vid);
+        e.ratingKey = episodeId(show.guid, vid);
         e.key = e.ratingKey;
         e.guid = vid;
         e.type = media::mediaTypeEpisode;
