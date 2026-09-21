@@ -133,7 +133,17 @@ void MPVCore::init() {
     // misc
     mpv_set_option_string(mpv, "config", "yes");
     mpv_set_option_string(mpv, "config-dir", confDir.c_str());
+#if defined(__PS4__)
+    // OpenOrbis libass has no native/system font provider. Point mpv/libass at
+    // the font that is actually shipped inside the PKG instead of /data/GMCA,
+    // which is normally empty. With provider=none, libass needs an explicit
+    // packaged fallback or subtitle tracks can load/select but render no glyphs.
+    mpv_set_option_string(mpv, "sub-font-provider", "none");
+    mpv_set_option_string(mpv, "sub-fonts-dir", BRLS_ASSET("font"));
+    mpv_set_option_string(mpv, "sub-font", "Source Han Sans CN");
+#else
     mpv_set_option_string(mpv, "sub-fonts-dir", confDir.c_str());
+#endif
     mpv_set_option_string(mpv, "watch-later-dir", fmt::format("{}/watch-later", confDir).c_str());
     mpv_set_option_string(mpv, "gpu-shader-cache-dir", fmt::format("{}/cache", confDir).c_str());
     mpv_set_option_string(mpv, "ytdl", "no");
