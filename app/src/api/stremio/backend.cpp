@@ -328,6 +328,17 @@ std::string buildCatalogUrl(const std::string& base, const std::string& type, co
     return url;
 }
 
+media::Stream subtitleOptionToStream(const SubtitleOption& sub) {
+    media::Stream st;
+    st.streamType = media::streamTypeSubtitle;
+    st.key = sub.url;
+    st.language = sub.lang;
+    st.languageTag = media::subtitleLangCode(sub.lang);
+    st.displayTitle = media::subtitleLangDisplay(sub.lang);
+    if (st.displayTitle.empty()) st.displayTitle = "Subtitle";
+    return st;
+}
+
 /// Fan out /stream across the addons serving (type,id) and return EVERY source
 /// as a neutral media::Media row (parsed quality/codec/size/kind/cache), ordered
 /// playable-first by quality (cached debrid before uncached), then the non-
@@ -348,7 +359,19 @@ std::vector<media::Media> resolveAllStreams(
             brls::Logger::warning("stremio stream {}: {}", url, ex.what());
             continue;
         }
-        for (auto& s : streams) all.push_back(streamToMedia(s, a.manifest.name));
+        for (auto& s : streams) {
+            media::Media media = streamToMedia(s, a.manifest.name);
+            // Stremio streams may carry release-specific subtitle sidecars.
+            // Keep them on the chosen Part so PlayerView's existing MPV_LOADED
+            // path can sub-add them without another network round-trip.
+            if (!media.parts.empty()) {
+                for (const auto& sub : s.subtitles) {
+                    if (sub.url.empty()) continue;
+                    media.parts.front().streams.push_back(subtitleOptionToStream(sub));
+                }
+            }
+            all.push_back(std::move(media));
+        }
     }
 #if defined(__PSV__)
     // PS Vita: >1080p exceeds the hardware H.264 decoder (level 4.x) and
@@ -414,12 +437,8 @@ std::vector<media::Stream> resolveAllSubtitles(
             // dedup key: canonical code when known, else the raw lang verbatim
             std::string key = code.empty() ? s.lang : code;
             if (key.empty() || !seenLangs.insert(key).second) continue;
-            media::Stream st;
-            st.streamType = media::streamTypeSubtitle;
-            st.key = s.url;  // absolute url; subtitleSidecarUrl() passes it through
-            st.language = s.lang;
-            st.languageTag = code;  // 2-letter code (empty if unrecognized)
-            st.displayTitle = media::subtitleLangDisplay(s.lang);
+            media::Stream st = subtitleOptionToStream(s);
+            st.languageTag = code;  // already normalized above; keep dedupe/matching aligned
             out.push_back(std::move(st));
         }
     }
