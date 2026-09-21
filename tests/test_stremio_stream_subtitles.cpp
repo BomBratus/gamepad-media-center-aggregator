@@ -66,6 +66,15 @@ int main() {
           streams[0].subtitles[0].lang == "ita");
     CHECK(streams.size() == 1 && streams[0].subtitles.size() == 2 &&
           streams[0].subtitles[1].lang == "eng");
+    CHECK(streams.size() == 1 && streams[0].videoHash == "0123456789abcdef");
+    CHECK(streams.size() == 1 && streams[0].videoSize == 734003200);
+    CHECK(streams.size() == 1 && streams[0].filename == "Example.S01E01.1080p.mkv");
+
+    auto media = stremio::streamToMedia(streams[0], "Example addon");
+    CHECK(media.parts.size() == 1);
+    CHECK(media.parts.size() == 1 && media.parts[0].videoHash == "0123456789abcdef");
+    CHECK(media.parts.size() == 1 && media.parts[0].size == 734003200);
+    CHECK(media.parts.size() == 1 && media.parts[0].filename == "Example.S01E01.1080p.mkv");
 
     if (failures == 0) {
         std::printf("test_stremio_stream_subtitles: OK\n");
