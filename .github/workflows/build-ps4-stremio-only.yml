@@ -68,6 +68,15 @@ jobs:
           done
           git config --system --add safe.directory $GITHUB_WORKSPACE
 
+      - name: Test Stremio subtitle hint parsing
+        run: |
+          c++ -std=gnu++17 \
+            -Iapp/include \
+            -Ilibrary/borealis/library/include/borealis/extern \
+            tests/test_stremio_stream_subtitles.cpp \
+            -o /tmp/test_stremio_stream_subtitles
+          /tmp/test_stremio_stream_subtitles
+
       - name: Build Stremio-only PS4 package
         env:
           OPENORBIS: /opt/pacbrew/ps4/openorbis
