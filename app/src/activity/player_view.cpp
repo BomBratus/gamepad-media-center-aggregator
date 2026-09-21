@@ -356,16 +356,18 @@ void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
 }
 
 void PlayerView::resolveExternalSubtitles() {
-    // Per-video set, same across every source/quality — skip when already resolved
-    // for the current item (startPlayback re-enters on quality/track switches).
-    const std::string& key = this->item.ratingKey;
+    // Subtitle providers may use physical-file hints from the selected source.
+    // Cache per item+source, not only per video, so changing Stremio release can
+    // legitimately re-resolve a different subtitle set.
+    std::string key = this->item.ratingKey;
+    if (!this->stream.parts.empty()) key += "\n" + this->stream.parts.front().key;
     if (key.empty() || key == this->externalSubsItem) return;
     this->externalSubsItem = key;
-    this->externalSubs.clear();  // drop the previous item's subs before the switch lands
+    this->externalSubs.clear();  // drop the previous source's subs before the switch lands
 
     ASYNC_RETAIN
     AppConfig::instance().backend().getSubtitles(
-        this->item,
+        this->item, this->stream,
         [ASYNC_TOKEN, key](std::vector<media::Stream> subs) {
             ASYNC_RELEASE
             // a newer switch superseded this fetch -> its result is stale

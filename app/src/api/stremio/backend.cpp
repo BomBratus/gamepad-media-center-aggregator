@@ -412,19 +412,30 @@ std::vector<media::Media> resolveAllStreams(
     return all;
 }
 
+struct SubtitleRequestHints {
+    std::string videoHash;
+    int64_t videoSize = 0;
+    std::string filename;
+};
+
 /// Fan out /subtitles across the addons serving (type,id) and return the tracks
-/// as neutral subtitle Streams (streamType 3, key = absolute SRT/VTT url). The
-/// set is per-video (same for every source), so this is resolved once at play
-/// time, not per source. Deduped to ONE track per language (first wins, addons
-/// in collection order) to keep the player's subtitle menu readable — a single
-/// addon (OpenSubtitles) can return dozens of entries per language. `languageTag`
-/// carries the canonical 2-letter code for preferred-language matching.
-std::vector<media::Stream> resolveAllSubtitles(
-    AddonEngine& engine, const std::string& stremioType, const std::string& stremioId) {
+/// as neutral subtitle Streams (streamType 3, key = absolute SRT/VTT url).
+/// Stremio's player forwards behaviorHints.videoHash/videoSize/filename from the
+/// exact selected stream; do the same when the addon supplied them. We never
+/// manufacture missing hashes with remote range reads. Deduped to ONE track per
+/// language (first wins, addons in collection order) to keep the player's menu
+/// readable.
+std::vector<media::Stream> resolveAllSubtitles(AddonEngine& engine, const std::string& stremioType,
+    const std::string& stremioId, const SubtitleRequestHints& hints) {
     std::vector<media::Stream> out;
     std::set<std::string> seenLangs;
+    std::vector<std::pair<std::string, std::string>> extra;
+    if (!hints.videoHash.empty()) extra.emplace_back("videoHash", hints.videoHash);
+    if (hints.videoSize > 0) extra.emplace_back("videoSize", std::to_string(hints.videoSize));
+    if (!hints.filename.empty()) extra.emplace_back("filename", hints.filename);
+
     for (auto& a : engine.addonsFor("subtitles", stremioType, stremioId)) {
-        std::string url = engine.resourceUrl(a, "subtitles", stremioType, stremioId);
+        std::string url = engine.resourceUrl(a, "subtitles", stremioType, stremioId, extra);
         std::vector<SubtitleOption> subs;
         try {
             subs = parseSubtitles(getSync(url, subtitleRequestTimeout()));
@@ -1171,8 +1182,8 @@ std::string StremioBackend::subtitleSidecarUrl(const std::string& streamKey) con
     return streamKey;
 }
 
-void StremioBackend::getSubtitles(
-    const media::Item& item, media::Then<std::vector<media::Stream>> then, media::OnError error) {
+void StremioBackend::getSubtitles(const media::Item& item, const media::Media& version,
+    media::Then<std::vector<media::Stream>> then, media::OnError error) {
     ParsedId pid = parseId(item.ratingKey);
     // Subtitles are addressable only on a playable video (a whole movie, or an
     // episode — its id carries the season:episode suffix). Shows/seasons play via
@@ -1182,12 +1193,21 @@ void StremioBackend::getSubtitles(
         if (then) then({});
         return;
     }
+
+    SubtitleRequestHints hints;
+    if (!version.parts.empty()) {
+        const auto& part = version.parts.front();
+        hints.videoHash = part.videoHash;
+        hints.videoSize = part.size;
+        hints.filename = part.filename;
+    }
+
     std::string type = (pid.stremioType == "movie") ? "movie" : "series";
     std::string id = pid.stremioId;  // movie tt-id, or episode "tt…:S:E"
-    brls::async([this, type, id, then, error]() {
+    brls::async([this, type, id, hints, then, error]() {
         try {
             engine.ensureLoaded();
-            std::vector<media::Stream> subs = resolveAllSubtitles(engine, type, id);
+            std::vector<media::Stream> subs = resolveAllSubtitles(engine, type, id, hints);
             brls::sync(std::bind(then, std::move(subs)));
         } catch (const std::exception& ex) {
             brls::Logger::warning("stremio getSubtitles: {}", ex.what());

@@ -539,6 +539,12 @@ struct StreamOption {
     int fileIdx = -1;         // torrent file index
     bool notWebReady = false;
     std::string bingeGroup;
+    // Stremio stream.behaviorHints used by subtitle providers to identify the
+    // exact selected release. These are supplied by the addon; GMCA never hashes
+    // or range-reads the remote video just to manufacture them.
+    std::string videoHash;
+    int64_t videoSize = 0;
+    std::string filename;
     std::vector<SubtitleOption> subtitles;  // source-specific sidecars
 };
 
@@ -569,6 +575,9 @@ inline std::vector<StreamOption> parseStreams(const nlohmann::json& j) {
         if (bh != s.end() && bh->is_object()) {
             so.notWebReady = jbool(*bh, "notWebReady");
             so.bingeGroup = jstr(*bh, "bingeGroup");
+            so.videoHash = jstr(*bh, "videoHash");
+            so.videoSize = jint(*bh, "videoSize");
+            so.filename = jstr(*bh, "filename");
         }
         out.push_back(std::move(so));
     }
@@ -757,6 +766,9 @@ inline media::Media streamToMedia(const StreamOption& s, const std::string& addo
         m.cached = cached;
         media::Part p;
         p.key = s.url;
+        p.size = s.videoSize;
+        p.videoHash = s.videoHash;
+        p.filename = s.filename;
         p.accessible = true;
         p.exists = true;
         m.parts.push_back(std::move(p));
@@ -783,11 +795,12 @@ inline media::Media streamToMedia(const StreamOption& s, const std::string& addo
 //
 // `{base}/subtitles/{type}/{encId}.json` returns { subtitles: [{ id, url, lang }] }
 // (SDK: docs/api/responses/subtitles.md). `url` is an ABSOLUTE http(s) link to a
-// SRT/VTT file, `lang` an ISO 639-2 code (or free text when no valid code). We
-// query WITHOUT the optional videoHash/videoSize extras (OpenSubtitles-style hash
-// matching): that would need range reads of the remote/debrid file per playback —
-// too costly on console. Id-based matching (imdbId / episode id) is enough; any
-// residual desync is handled by the player's existing sub-delay (subsync) control.
+// SRT/VTT file, `lang` an ISO 639-2 code (or free text when no valid code).
+//
+// When the selected stream already supplies behaviorHints.videoHash/videoSize/
+// filename, the backend forwards those values as Stremio subtitle request extras.
+// GMCA does NOT compute missing hashes with remote range reads: absent hints simply
+// fall back to the id-only request so console playback stays cheap and responsive.
 
 inline std::vector<SubtitleOption> parseSubtitles(const nlohmann::json& j) {
     std::vector<SubtitleOption> out;

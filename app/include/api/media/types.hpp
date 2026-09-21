@@ -160,6 +160,11 @@ struct Part {
     std::string container;
     int64_t size = 0;
     int64_t duration = 0;  // ms
+    // Optional physical-file identity. Most backends leave these empty; Stremio
+    // fills them from stream.behaviorHints so subtitle providers can match the
+    // exact selected release without GMCA hashing/range-reading the video.
+    std::string videoHash;
+    std::string filename;
     bool accessible = true;
     bool exists = true;
     std::vector<Stream> streams;

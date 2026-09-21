@@ -75,8 +75,8 @@ public:
     media::PlaybackSource resolvePlayback(
         const media::Item& item, const media::Media& version, const media::PlaybackOptions& opts) override;
     std::string subtitleSidecarUrl(const std::string& streamKey) const override;
-    void getSubtitles(
-        const media::Item& item, media::Then<std::vector<media::Stream>> then, media::OnError error) override;
+    void getSubtitles(const media::Item& item, const media::Media& version,
+        media::Then<std::vector<media::Stream>> then, media::OnError error) override;
     std::string subtitleMenuHint() const override;
     void reportProgress(const std::string& id, media::PlayState state, int64_t posMs, int64_t durMs,
         const std::string& sessionId) override;
