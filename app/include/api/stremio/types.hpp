@@ -520,6 +520,15 @@ inline CatalogResult parseCatalog(const nlohmann::json& j) {
 
 /// ---- Streams (parsed now, consumed in étape 2) -----------------------------
 
+/// Stremio subtitle descriptor. The same shape is used both by the standalone
+/// `subtitles` resource and by `stream.subtitles[]`, where the tracks are tied
+/// directly to a particular playable source/release.
+struct SubtitleOption {
+    std::string id;
+    std::string url;   // absolute http(s) URL to the subtitle file (SRT/VTT)
+    std::string lang;  // ISO 639-2 code, or free text (SDK fallback)
+};
+
 struct StreamOption {
     std::string name;
     std::string title;
@@ -530,6 +539,7 @@ struct StreamOption {
     int fileIdx = -1;         // torrent file index
     bool notWebReady = false;
     std::string bingeGroup;
+    std::vector<SubtitleOption> subtitles;  // source-specific sidecars
 };
 
 inline std::vector<StreamOption> parseStreams(const nlohmann::json& j) {
@@ -545,6 +555,16 @@ inline std::vector<StreamOption> parseStreams(const nlohmann::json& j) {
         so.externalUrl = jstr(s, "externalUrl");
         so.infoHash = jstr(s, "infoHash");
         so.fileIdx = (int)jint(s, "fileIdx", -1);
+        auto embeddedSubs = s.find("subtitles");
+        if (embeddedSubs != s.end() && embeddedSubs->is_array()) {
+            for (auto& sub : *embeddedSubs) {
+                SubtitleOption opt;
+                opt.id = jstr(sub, "id");
+                opt.url = jstr(sub, "url");
+                opt.lang = jstr(sub, "lang");
+                if (!opt.url.empty()) so.subtitles.push_back(std::move(opt));
+            }
+        }
         auto bh = s.find("behaviorHints");
         if (bh != s.end() && bh->is_object()) {
             so.notWebReady = jbool(*bh, "notWebReady");
@@ -768,12 +788,6 @@ inline media::Media streamToMedia(const StreamOption& s, const std::string& addo
 // matching): that would need range reads of the remote/debrid file per playback —
 // too costly on console. Id-based matching (imdbId / episode id) is enough; any
 // residual desync is handled by the player's existing sub-delay (subsync) control.
-
-struct SubtitleOption {
-    std::string id;
-    std::string url;   // absolute http(s) URL to the subtitle file (SRT/VTT)
-    std::string lang;  // ISO 639-2 code, or free text (SDK fallback)
-};
 
 inline std::vector<SubtitleOption> parseSubtitles(const nlohmann::json& j) {
     std::vector<SubtitleOption> out;
