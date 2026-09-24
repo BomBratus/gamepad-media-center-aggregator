@@ -6,6 +6,10 @@
 #include "utils/config.hpp"
 #include "utils/misc.hpp"
 #include <fmt/ranges.h>
+#if defined(__PS4__)
+#include <cstdio>
+#include <sys/stat.h>
+#endif
 
 static inline void check_error(int status) {
     if (status < 0) brls::Logger::error("MPV ERROR => {}", mpv_error_string(status));
@@ -76,6 +80,78 @@ static void deleteSurfaceObj() {
 }
 #endif
 
+#if defined(__PS4__)
+static int64_t ps4FileSize(const std::string &path) {
+    struct stat st {};
+    return stat(path.c_str(), &st) == 0 ? static_cast<int64_t>(st.st_size) : -1;
+}
+
+static bool ensurePs4SubtitleFont(const std::string &confDir) {
+    const std::string source = BRLS_ASSET("font/switch_font.ttf");
+    const std::string target = fmt::format("{}/subfont.ttf", confDir);
+    const std::string temp = target + ".tmp";
+
+    const int64_t sourceSize = ps4FileSize(source);
+    if (sourceSize <= 0) {
+        brls::Logger::error("PS4 subtitles: packaged fallback font missing: {}", source);
+        return false;
+    }
+
+    if (ps4FileSize(target) == sourceSize) {
+        brls::Logger::info("PS4 subtitles: fallback font ready: {} ({} bytes)", target, sourceSize);
+        return true;
+    }
+
+    FILE *input = std::fopen(source.c_str(), "rb");
+    if (!input) {
+        brls::Logger::error("PS4 subtitles: cannot open packaged fallback font: {}", source);
+        return false;
+    }
+
+    std::remove(temp.c_str());
+    FILE *output = std::fopen(temp.c_str(), "wb");
+    if (!output) {
+        std::fclose(input);
+        brls::Logger::error("PS4 subtitles: cannot create fallback font: {}", temp);
+        return false;
+    }
+
+    char buffer[64 * 1024];
+    bool ok = true;
+    while (true) {
+        const size_t read = std::fread(buffer, 1, sizeof(buffer), input);
+        if (read > 0 && std::fwrite(buffer, 1, read, output) != read) {
+            ok = false;
+            break;
+        }
+        if (read < sizeof(buffer)) {
+            if (std::ferror(input)) ok = false;
+            break;
+        }
+    }
+
+    if (std::fflush(output) != 0) ok = false;
+    std::fclose(output);
+    std::fclose(input);
+
+    if (!ok || ps4FileSize(temp) != sourceSize) {
+        std::remove(temp.c_str());
+        brls::Logger::error("PS4 subtitles: failed to copy packaged fallback font");
+        return false;
+    }
+
+    std::remove(target.c_str());
+    if (std::rename(temp.c_str(), target.c_str()) != 0 || ps4FileSize(target) != sourceSize) {
+        std::remove(temp.c_str());
+        brls::Logger::error("PS4 subtitles: failed to promote fallback font to {}", target);
+        return false;
+    }
+
+    brls::Logger::info("PS4 subtitles: installed fallback font: {} ({} bytes)", target, sourceSize);
+    return true;
+}
+#endif
+
 void MPVCore::on_update(void *self) {
     MPVCore *mpv = reinterpret_cast<MPVCore *>(self);
     brls::sync([mpv]() {
@@ -134,13 +210,15 @@ void MPVCore::init() {
     mpv_set_option_string(mpv, "config", "yes");
     mpv_set_option_string(mpv, "config-dir", confDir.c_str());
 #if defined(__PS4__)
-    // OpenOrbis libass has no native/system font provider. Point mpv/libass at
-    // the font that is actually shipped inside the PKG instead of /data/GMCA,
-    // which is normally empty. With provider=none, libass needs an explicit
-    // packaged fallback or subtitle tracks can load/select but render no glyphs.
+    // OpenOrbis has no native/system font provider. mpv 0.36/libass treats
+    // provider=none strictly, so a family-name-only fallback can leave a
+    // selected subtitle track with no glyphs. Install the packaged TTF as
+    // config-dir/subfont.ttf: mpv passes that file directly to libass as its
+    // default font, independent of system font discovery/family matching.
+    ensurePs4SubtitleFont(confDir);
     mpv_set_option_string(mpv, "sub-font-provider", "none");
     mpv_set_option_string(mpv, "sub-fonts-dir", BRLS_ASSET("font"));
-    mpv_set_option_string(mpv, "sub-font", "Source Han Sans CN");
+    mpv_set_option_string(mpv, "sub-visibility", "yes");
 #else
     mpv_set_option_string(mpv, "sub-fonts-dir", confDir.c_str());
 #endif
@@ -240,6 +318,14 @@ void MPVCore::init() {
     check_error(mpv_observe_property(mpv, 5, "cache-speed", MPV_FORMAT_INT64));
     check_error(mpv_observe_property(mpv, 9, "speed", MPV_FORMAT_DOUBLE));
     check_error(mpv_observe_property(mpv, 10, "volume", MPV_FORMAT_INT64));
+#if defined(__PS4__)
+    // Runtime diagnostics for the real OpenOrbis subtitle pipeline. These log
+    // selection/visibility and only whether decoded text is present, never the
+    // subtitle contents themselves.
+    check_error(mpv_observe_property(mpv, 30, "sid", MPV_FORMAT_STRING));
+    check_error(mpv_observe_property(mpv, 31, "sub-visibility", MPV_FORMAT_FLAG));
+    check_error(mpv_observe_property(mpv, 32, "sub-text", MPV_FORMAT_STRING));
+#endif
 
 // init renderer params
 #ifdef ANDROID
@@ -725,6 +811,21 @@ void MPVCore::eventMainLoop() {
                 }
                 this->volume = *(int64_t *)prop->data;
                 break;
+#if defined(__PS4__)
+            case 30: {  // sid
+                char *value = *(char **)prop->data;
+                brls::Logger::info("PS4 subtitles: sid={}", value ? value : "<none>");
+                break;
+            }
+            case 31:  // sub-visibility
+                brls::Logger::info("PS4 subtitles: visibility={}", *(int *)prop->data ? "yes" : "no");
+                break;
+            case 32: {  // sub-text
+                char *value = *(char **)prop->data;
+                brls::Logger::info("PS4 subtitles: decoded text {}", value && value[0] ? "present" : "empty");
+                break;
+            }
+#endif
             default:
                 brls::Logger::debug("MPVCore => PROPERTY_CHANGE `{}` type {}", prop->name, int(prop->format));
             }
