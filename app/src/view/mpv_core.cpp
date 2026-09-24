@@ -5,6 +5,7 @@
 #include "view/mpv_core.hpp"
 #include "utils/config.hpp"
 #include "utils/misc.hpp"
+#include "utils/ps4_diagnostics.hpp"
 #include <fmt/ranges.h>
 #if defined(__PS4__)
 #include <cstdio>
@@ -77,6 +78,75 @@ static int64_t getNativeSurface() {
 static void deleteSurfaceObj() {
     auto env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
     env->DeleteGlobalRef(surface);
+}
+#endif
+
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+static int sPs4GlProbeFrames = 0;
+static bool sPs4GlProbeHadError = false;
+static unsigned sPs4GlSampleCounter = 0;
+
+static std::string ps4MpvString(mpv_handle* mpv, const char* name) {
+    char* value = nullptr;
+    if (mpv_get_property(mpv, name, MPV_FORMAT_STRING, &value) < 0 || !value) return "-";
+    std::string out(value);
+    mpv_free(value);
+    return out;
+}
+
+static int64_t ps4MpvInt(mpv_handle* mpv, const char* name) {
+    int64_t value = -1;
+    if (mpv_get_property(mpv, name, MPV_FORMAT_INT64, &value) < 0) return -1;
+    return value;
+}
+
+static void ps4LogVideoState(mpv_handle* mpv, const char* reason) {
+    ps4diag::write(fmt::format(
+        "video-state reason={} codec={} format={} pixfmt={} hw-pixfmt={} size={}x{} "
+        "matrix={} levels={} primaries={} gamma={} hwdec={}",
+        reason,
+        ps4MpvString(mpv, "video-codec"),
+        ps4MpvString(mpv, "video-format"),
+        ps4MpvString(mpv, "video-params/pixelformat"),
+        ps4MpvString(mpv, "video-params/hw-pixelformat"),
+        ps4MpvInt(mpv, "video-params/w"),
+        ps4MpvInt(mpv, "video-params/h"),
+        ps4MpvString(mpv, "video-params/colormatrix"),
+        ps4MpvString(mpv, "video-params/colorlevels"),
+        ps4MpvString(mpv, "video-params/primaries"),
+        ps4MpvString(mpv, "video-params/gamma"),
+        ps4MpvString(mpv, "hwdec-current")));
+}
+
+static void ps4ArmGlProbe(const char* reason) {
+    sPs4GlProbeFrames = 180;  // ~3 seconds at 60 fps
+    sPs4GlProbeHadError = false;
+    ps4diag::write(fmt::format("gl-probe start reason={} frames={}", reason, sPs4GlProbeFrames));
+}
+
+static void ps4CheckGlAfterRender() {
+    const bool activeProbe = sPs4GlProbeFrames > 0;
+    ++sPs4GlSampleCounter;
+    // Outside an armed probe, sample only once every ~2 seconds. GL errors
+    // remain latched until read, so this keeps overhead negligible.
+    if (!activeProbe && (sPs4GlSampleCounter % 120) != 0) return;
+
+    bool sawError = false;
+    for (int i = 0; i < 8; ++i) {
+        GLenum error = glGetError();
+        if (error == GL_NO_ERROR) break;
+        sawError = true;
+        sPs4GlProbeHadError = true;
+        ps4diag::write(fmt::format("gl-error 0x{:04x}", static_cast<unsigned>(error)));
+    }
+
+    if (activeProbe) {
+        --sPs4GlProbeFrames;
+        if (sPs4GlProbeFrames == 0)
+            ps4diag::write(fmt::format("gl-probe complete status={}", sPs4GlProbeHadError ? "error" : "no-error"));
+    } else if (sawError) {
+        ps4diag::write("gl-sample detected-error");
+    }
 }
 #endif
 
@@ -204,7 +274,11 @@ void MPVCore::init() {
     }
 
     auto &conf = AppConfig::instance();
-    std::string confDir = conf.configDir(); 
+    std::string confDir = conf.configDir();
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+    ps4diag::init(confDir, AppVersion::getUpdateVersion(), AppVersion::getCommit());
+    ps4diag::write("mpv-init");
+#endif
 
     // misc
     mpv_set_option_string(mpv, "config", "yes");
@@ -440,6 +514,9 @@ void MPVCore::init() {
         mpv_terminate_destroy(mpv);
         brls::fatal("failed to initialize mpv context");
     }
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+    ps4diag::write("render-context created");
+#endif
 #endif
 #ifdef BOREALIS_USE_D3D11
     misc::initCrashDump();
@@ -486,6 +563,16 @@ void MPVCore::init() {
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &default_framebuffer);
     glBindFramebuffer(GL_FRAMEBUFFER, default_framebuffer);
     mpv_fbo.fbo = default_framebuffer;
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+    const GLubyte* glVendor = glGetString(GL_VENDOR);
+    const GLubyte* glRenderer = glGetString(GL_RENDERER);
+    const GLubyte* glVersion = glGetString(GL_VERSION);
+    ps4diag::write(fmt::format("gl-info vendor={} renderer={} version={} default-fbo={}",
+        glVendor ? reinterpret_cast<const char*>(glVendor) : "-",
+        glRenderer ? reinterpret_cast<const char*>(glRenderer) : "-",
+        glVersion ? reinterpret_cast<const char*>(glVersion) : "-",
+        default_framebuffer));
+#endif
 #endif
 }
 
@@ -649,6 +736,9 @@ void MPVCore::draw(brls::Rect area, float alpha) {
 #endif
         // 绘制视频
         mpv_render_context_render(this->mpv_context, mpv_params);
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+        ps4CheckGlAfterRender();
+#endif
 #ifdef BOREALIS_USE_D3D11
         D3D11_CONTEXT->beginFrame();
 #elif defined(BOREALIS_USE_DEKO3D)
@@ -700,21 +790,35 @@ void MPVCore::eventMainLoop() {
         }
         case MPV_EVENT_SHUTDOWN:
             brls::Logger::debug("MPVCore => EVENT_SHUTDOWN");
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+            ps4diag::write("event shutdown");
+#endif
             return;
         case MPV_EVENT_FILE_LOADED:
             brls::Logger::info("MPVCore => EVENT_FILE_LOADED");
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+            ps4diag::write("event file-loaded");
+            ps4LogVideoState(this->mpv, "file-loaded");
+            ps4ArmGlProbe("file-loaded");
+#endif
             // event 8: 文件预加载结束，准备解码
             mpvCoreEvent.fire(MpvEventEnum::MPV_LOADED);
             break;
         case MPV_EVENT_START_FILE:
             // event 6: 开始加载文件
             brls::Logger::info("MPVCore => EVENT_START_FILE");
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+            ps4diag::write("event start-file");
+#endif
             mpvCoreEvent.fire(MpvEventEnum::START_FILE);
             mpvCoreEvent.fire(MpvEventEnum::LOADING_START);
             break;
         case MPV_EVENT_PLAYBACK_RESTART:
             // event 21: 开始播放文件（一般是播放或调整进度结束之后触发）
             brls::Logger::info("MPVCore => EVENT_PLAYBACK_RESTART");
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+            ps4diag::write("event playback-restart");
+#endif
             this->video_stopped = false;
             if (this->isPaused())
                 mpvCoreEvent.fire(MpvEventEnum::MPV_PAUSE);
@@ -725,6 +829,10 @@ void MPVCore::eventMainLoop() {
             // event 7: 文件播放结束
             this->video_stopped = true;
             auto node = (mpv_event_end_file *)event->data;
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+            ps4diag::write(fmt::format("event end-file reason={} error={}",
+                static_cast<int>(node->reason), node->error));
+#endif
             if (node->reason == MPV_END_FILE_REASON_ERROR) {
                 this->last_error = node->error;
                 brls::Logger::error("MPVCore => FILE ERROR: {}", mpv_error_string(node->error));
@@ -739,6 +847,20 @@ void MPVCore::eventMainLoop() {
             }
             break;
         }
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+        case MPV_EVENT_VIDEO_RECONFIG:
+            ps4diag::write("event video-reconfig");
+            ps4LogVideoState(this->mpv, "video-reconfig");
+            ps4ArmGlProbe("video-reconfig");
+            break;
+        case MPV_EVENT_SEEK:
+            ps4diag::write("event seek");
+            ps4ArmGlProbe("seek");
+            break;
+        case MPV_EVENT_QUEUE_OVERFLOW:
+            ps4diag::write("event queue-overflow");
+            break;
+#endif
         case MPV_EVENT_COMMAND_REPLY: {
             mpv_event_command *cmd = (mpv_event_command *)event->data;
             if (event->error) {
@@ -815,14 +937,24 @@ void MPVCore::eventMainLoop() {
             case 30: {  // sid
                 char *value = *(char **)prop->data;
                 brls::Logger::info("PS4 subtitles: sid={}", value ? value : "<none>");
+#if defined(GMCA_PS4_SAFE_SOURCES)
+                ps4diag::write(fmt::format("subtitle sid={}", value ? value : "<none>"));
+                ps4ArmGlProbe("subtitle-sid");
+#endif
                 break;
             }
             case 31:  // sub-visibility
                 brls::Logger::info("PS4 subtitles: visibility={}", *(int *)prop->data ? "yes" : "no");
+#if defined(GMCA_PS4_SAFE_SOURCES)
+                ps4diag::write(fmt::format("subtitle visibility={}", *(int *)prop->data ? "yes" : "no"));
+#endif
                 break;
             case 32: {  // sub-text
                 char *value = *(char **)prop->data;
                 brls::Logger::info("PS4 subtitles: decoded text {}", value && value[0] ? "present" : "empty");
+#if defined(GMCA_PS4_SAFE_SOURCES)
+                ps4diag::write(fmt::format("subtitle decoded-text={}", value && value[0] ? "present" : "empty"));
+#endif
                 break;
             }
 #endif
