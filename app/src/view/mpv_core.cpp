@@ -10,6 +10,13 @@
 #if defined(__PS4__)
 #include <cstdio>
 #include <sys/stat.h>
+
+// nanovg_gl.h only exposes the backend-specific declaration when included by
+// its implementation unit. Borealis exports this GLES2 helper, so declare the
+// one function GMCA needs without pulling another NanoVG implementation in.
+extern "C" int nvglCreateImageFromHandleGLES2(
+    NVGcontext* ctx, GLuint textureId, int w, int h, int imageFlags);
+static constexpr int GMCA_NVG_IMAGE_NODELETE = 1 << 16;
 #endif
 
 static inline void check_error(int status) {
@@ -147,6 +154,136 @@ static void ps4CheckGlAfterRender() {
     } else if (sawError) {
         ps4diag::write("gl-sample detected-error");
     }
+}
+#endif
+
+#if defined(__PS4__) && defined(BOREALIS_USE_OPENGL) && !defined(MPV_SW_RENDER)
+bool MPVCore::createPs4VideoTarget(int width, int height) {
+    if (width <= 0 || height <= 0) return false;
+    if (ps4_video_target_ready && ps4_video_width == width && ps4_video_height == height) {
+        mpv_fbo.fbo = static_cast<int>(ps4_video_fbo);
+        mpv_fbo.w = width;
+        mpv_fbo.h = height;
+        mpv_fbo.internal_format = GL_RGBA;
+        return true;
+    }
+
+    destroyPs4VideoTarget();
+
+    GLint previousFbo = 0;
+    GLint previousTexture = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFbo);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+
+    glGenTextures(1, &ps4_video_texture);
+    if (!ps4_video_texture) goto fail;
+
+    glBindTexture(GL_TEXTURE_2D, ps4_video_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    glGenFramebuffers(1, &ps4_video_fbo);
+    if (!ps4_video_fbo) goto fail;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, ps4_video_fbo);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ps4_video_texture, 0);
+    {
+        const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+#if defined(GMCA_PS4_SAFE_SOURCES)
+            ps4diag::write(fmt::format(
+                "offscreen-target failed status=0x{:04x} texture={} fbo={} size={}x{}",
+                static_cast<unsigned>(status), ps4_video_texture, ps4_video_fbo, width, height));
+#endif
+            goto fail;
+        }
+    }
+
+    // Initialize the texture deterministically before mpv has produced its
+    // first frame, otherwise an uninitialized Piglet surface can briefly leak.
+    glViewport(0, 0, width, height);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glFinish();
+
+    ps4_video_nvg_image = nvglCreateImageFromHandleGLES2(
+        brls::Application::getNVGContext(),
+        ps4_video_texture,
+        width,
+        height,
+        NVG_IMAGE_FLIPY | GMCA_NVG_IMAGE_NODELETE);
+    if (ps4_video_nvg_image <= 0) goto fail;
+
+    ps4_video_width = width;
+    ps4_video_height = height;
+    ps4_video_target_ready = true;
+    mpv_fbo.fbo = static_cast<int>(ps4_video_fbo);
+    mpv_fbo.w = width;
+    mpv_fbo.h = height;
+    mpv_fbo.internal_format = GL_RGBA;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, previousFbo);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+    glViewport(0, 0, brls::Application::windowWidth, brls::Application::windowHeight);
+#if defined(GMCA_PS4_SAFE_SOURCES)
+    ps4diag::write(fmt::format(
+        "offscreen-target ready fbo={} texture={} nvg-image={} size={}x{} format=0x{:04x}",
+        ps4_video_fbo, ps4_video_texture, ps4_video_nvg_image, width, height,
+        static_cast<unsigned>(GL_RGBA)));
+#endif
+    return true;
+
+fail:
+    glBindFramebuffer(GL_FRAMEBUFFER, previousFbo);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+
+    if (ps4_video_nvg_image > 0) {
+        nvgDeleteImage(brls::Application::getNVGContext(), ps4_video_nvg_image);
+        ps4_video_nvg_image = 0;
+    }
+    if (ps4_video_fbo) {
+        glDeleteFramebuffers(1, &ps4_video_fbo);
+        ps4_video_fbo = 0;
+    }
+    if (ps4_video_texture) {
+        glDeleteTextures(1, &ps4_video_texture);
+        ps4_video_texture = 0;
+    }
+    ps4_video_width = 0;
+    ps4_video_height = 0;
+    ps4_video_target_ready = false;
+    mpv_fbo.fbo = default_framebuffer;
+    mpv_fbo.w = brls::Application::windowWidth;
+    mpv_fbo.h = brls::Application::windowHeight;
+    mpv_fbo.internal_format = 0;
+    glViewport(0, 0, brls::Application::windowWidth, brls::Application::windowHeight);
+#if defined(GMCA_PS4_SAFE_SOURCES)
+    ps4diag::write("offscreen-target unavailable; using default framebuffer fallback");
+#endif
+    return false;
+}
+
+void MPVCore::destroyPs4VideoTarget() {
+    if (ps4_video_nvg_image > 0) {
+        if (NVGcontext* vg = brls::Application::getNVGContext())
+            nvgDeleteImage(vg, ps4_video_nvg_image);
+        ps4_video_nvg_image = 0;
+    }
+    if (ps4_video_fbo) {
+        glDeleteFramebuffers(1, &ps4_video_fbo);
+        ps4_video_fbo = 0;
+    }
+    if (ps4_video_texture) {
+        glDeleteTextures(1, &ps4_video_texture);
+        ps4_video_texture = 0;
+    }
+    ps4_video_width = 0;
+    ps4_video_height = 0;
+    ps4_video_target_ready = false;
 }
 #endif
 
@@ -569,6 +706,9 @@ void MPVCore::init() {
     // API explicitly allows 0 here to mean "unknown"; this is deterministic and
     // avoids passing stack/object garbage as a GL internal format.
     mpv_fbo.internal_format = 0;
+#if defined(__PS4__)
+    createPs4VideoTarget(brls::Application::windowWidth, brls::Application::windowHeight);
+#endif
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
     const GLubyte* glVendor = glGetString(GL_VENDOR);
     const GLubyte* glRenderer = glGetString(GL_RENDERER);
@@ -595,6 +735,9 @@ void MPVCore::clean() {
         mpv_render_context_free(this->mpv_context);
         this->mpv_context = nullptr;
     }
+#if defined(__PS4__) && defined(BOREALIS_USE_OPENGL) && !defined(MPV_SW_RENDER)
+    destroyPs4VideoTarget();
+#endif
 
     brls::Logger::info("trying terminate mpv");
     if (this->mpv) {
@@ -685,7 +828,16 @@ void MPVCore::setFrameSize(brls::Rect area) {
         mpv_render_context_report_swap(this->mpv_context);
     });
 #elif !defined(BOREALIS_USE_D3D11)
+#if defined(__PS4__)
+    // PS4 normally has a fixed drawable size, but keep the owned target in
+    // sync if Piglet/SDL ever reports a different framebuffer (e.g. Neo mode).
+    if (!createPs4VideoTarget(brls::Application::windowWidth, brls::Application::windowHeight)) {
+        this->mpv_fbo.fbo = default_framebuffer;
+        this->mpv_fbo.internal_format = 0;
+    }
+#else
     // Using default framebuffer
+#endif
     this->mpv_fbo.w = brls::Application::windowWidth;
     this->mpv_fbo.h = brls::Application::windowHeight;
 #endif
@@ -744,6 +896,20 @@ void MPVCore::draw(brls::Rect area, float alpha) {
         videoContext->queueFlush();
 #endif
         // 绘制视频
+#if defined(__PS4__) && defined(BOREALIS_USE_OPENGL)
+        const bool ps4Offscreen = ps4_video_target_ready && ps4_video_fbo != 0 && ps4_video_nvg_image > 0;
+        if (ps4Offscreen) {
+            mpv_fbo.fbo = static_cast<int>(ps4_video_fbo);
+            mpv_fbo.w = ps4_video_width;
+            mpv_fbo.h = ps4_video_height;
+            mpv_fbo.internal_format = GL_RGBA;
+        } else {
+            mpv_fbo.fbo = default_framebuffer;
+            mpv_fbo.w = brls::Application::windowWidth;
+            mpv_fbo.h = brls::Application::windowHeight;
+            mpv_fbo.internal_format = 0;
+        }
+#endif
         mpv_render_context_render(this->mpv_context, mpv_params);
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
         ps4CheckGlAfterRender();
@@ -757,6 +923,20 @@ void MPVCore::draw(brls::Rect area, float alpha) {
         glViewport(0, 0, brls::Application::windowWidth, brls::Application::windowHeight);
 #endif
         mpv_render_context_report_swap(this->mpv_context);
+#if defined(__PS4__) && defined(BOREALIS_USE_OPENGL)
+        if (ps4Offscreen) {
+            // Composite the completed video texture through NanoVG instead of
+            // leaving mpv and Borealis to render into the same framebuffer.
+            NVGcontext* vg = brls::Application::getNVGContext();
+            NVGpaint image = nvgImagePattern(
+                vg, area.getMinX(), area.getMinY(), area.getWidth(), area.getHeight(),
+                0.0f, ps4_video_nvg_image, alpha);
+            nvgBeginPath(vg);
+            nvgRect(vg, area.getMinX(), area.getMinY(), area.getWidth(), area.getHeight());
+            nvgFillPaint(vg, image);
+            nvgFill(vg);
+        }
+#endif
     }
 #endif
 }
