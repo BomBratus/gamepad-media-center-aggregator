@@ -50,6 +50,23 @@ constexpr const char* kPackageUrl =
     "https://github.com/BomBratus/gamepad-media-center-aggregator/releases/download/"
     "ps4-stremio-latest/GMCA-PS4-Stremio-only.pkg";
 constexpr size_t kBgftHeapSize = 1024 * 1024;
+constexpr const char* kUpdaterTitleId = "GMCA00002";
+constexpr const char* kBundledUpdaterPkg = "/app0/updater.pkg";
+constexpr const char* kUpdaterPkgPath = "/data/GMCA/updater.pkg";
+constexpr int kBgftOptInvisible = 0x2;
+
+extern "C" {
+int sceAppInstUtilAppExists(const char* titleId, int* exists);
+
+struct GmcaLaunchAppParam {
+    unsigned int size;
+    int userId;
+    int appAttr;
+    int enableCrashReport;
+    unsigned long checkFlag;
+};
+int sceSystemServiceLaunchApp(const char* titleId, const char** argv, GmcaLaunchAppParam* param);
+}
 
 struct Manifest {
     std::string version;
@@ -68,6 +85,7 @@ struct InstallResult {
 
 static OrbisBgftInitParams sBgftInitParams{};
 static bool sBgftInitialized = false;
+static bool sInstallerModulesReady = false;
 
 inline uint32_t rotr(uint32_t v, uint32_t n) {
     return (v >> n) | (v << (32 - n));
@@ -259,12 +277,25 @@ Manifest fetchManifest() {
     return m;
 }
 
+bool ensureInstallerModules(int32_t& error) {
+    if (sInstallerModulesReady) return true;
+
+    // These calls must precede every AppInstUtil/BGFT API use on PS4. Calling
+    // a linked stub before the corresponding system PRX is resident can fault
+    // the process instead of returning an error.
+    sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_APP_INST_UTIL);
+    sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_BGFT);
+
+    error = sceAppInstUtilInitialize();
+    // Re-initialization may return an "already initialized" code. The module
+    // load is the important part; subsequent API calls remain authoritative.
+    sInstallerModulesReady = true;
+    return true;
+}
+
 bool initBgft(int32_t& error) {
     if (sBgftInitialized) return true;
-
-    // The sysmodule may already be resident because Borealis links SceBgft.
-    // Do not fail solely on the load result; the service init below is authoritative.
-    sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_BGFT);
+    if (!ensureInstallerModules(error)) return false;
 
     sBgftInitParams.heapSize = kBgftHeapSize;
     sBgftInitParams.heap = std::malloc(sBgftInitParams.heapSize);
@@ -284,95 +315,136 @@ bool initBgft(int32_t& error) {
     return true;
 }
 
-InstallResult queueInstall(const std::string& localPath) {
-    InstallResult result;
-
-    int32_t rc = sceAppInstUtilInitialize();
-    if (rc != 0) {
-        result.code = rc;
-        result.stage = "AppInstUtil init";
-        return result;
+bool copyBundledUpdater(std::string& error) {
+    FILE* input = std::fopen(kBundledUpdaterPkg, "rb");
+    if (!input) {
+        error = "bundled updater package is missing";
+        return false;
     }
 
-    // AppInstUtil/BGFT operate outside the application sandbox. GoldHEN exposes
-    // /data to homebrew, while the system service commonly sees the same file as
-    // /user/data. Try the system path first and fall back to the app-visible path.
-    std::vector<std::string> candidates;
-    if (localPath.rfind("/data/", 0) == 0) candidates.push_back("/user" + localPath);
-    candidates.push_back(localPath);
+    FILE* output = std::fopen(kUpdaterPkgPath, "wb");
+    if (!output) {
+        std::fclose(input);
+        error = "cannot write updater package";
+        return false;
+    }
 
-    std::string installPath;
-    char titleId[16] = {};
-    int32_t isApp = 0;
-    for (const auto& candidate : candidates) {
-        std::memset(titleId, 0, sizeof(titleId));
-        rc = sceAppInstUtilGetTitleIdFromPkg(candidate.c_str(), titleId, &isApp);
-        if (rc == 0) {
-            installPath = candidate;
+    std::array<unsigned char, 64 * 1024> buffer{};
+    bool ok = true;
+    while (true) {
+        size_t got = std::fread(buffer.data(), 1, buffer.size(), input);
+        if (got > 0 && std::fwrite(buffer.data(), 1, got, output) != got) {
+            ok = false;
+            break;
+        }
+        if (got < buffer.size()) {
+            if (std::ferror(input)) ok = false;
             break;
         }
     }
+    if (std::fflush(output) != 0) ok = false;
+    std::fclose(output);
+    std::fclose(input);
 
-    if (installPath.empty()) {
-        sceAppInstUtilTerminate();
-        result.code = rc;
-        result.stage = "PKG validation";
+    if (!ok || fileSize(kUpdaterPkgPath) <= 0) {
+        std::remove(kUpdaterPkgPath);
+        error = "failed to copy updater package";
+        return false;
+    }
+    return true;
+}
+
+bool isUpdaterInstalled() {
+    int32_t initError = 0;
+    if (!ensureInstallerModules(initError)) return false;
+    int exists = 0;
+    int32_t rc = sceAppInstUtilAppExists(kUpdaterTitleId, &exists);
+    return rc == 0 && exists != 0;
+}
+
+InstallResult queueUpdaterInstall() {
+    InstallResult result;
+    int32_t initError = 0;
+    if (!ensureInstallerModules(initError)) {
+        result.code = initError;
+        result.stage = "installer module init";
         return result;
     }
-    if (std::string(titleId) != kTitleId || !isApp) {
-        sceAppInstUtilTerminate();
-        result.code = -2;
-        result.stage = "unexpected Title ID";
+
+    std::string copyError;
+    if (!copyBundledUpdater(copyError)) {
+        result.code = -1;
+        result.stage = copyError;
         return result;
     }
 
-    int32_t slot = 0;
-    rc = sceAppInstUtilGetPrimaryAppSlot(kTitleId, &slot);
-    if (rc == 0) {
-        int32_t prep = sceAppInstUtilAppPrepareOverwritePkg(installPath.c_str());
-        if (prep != 0) {
-            sceAppInstUtilTerminate();
-            result.code = prep;
-            result.stage = "prepare overwrite";
-            return result;
+    std::vector<std::string> candidates;
+    candidates.push_back("/user" + std::string(kUpdaterPkgPath));
+    candidates.push_back(kUpdaterPkgPath);
+
+    std::string appInstPath;
+    char titleId[16] = {};
+    int32_t isApp = 0;
+    int32_t rc = -1;
+    for (const auto& candidate : candidates) {
+        std::memset(titleId, 0, sizeof(titleId));
+        isApp = 0;
+        rc = sceAppInstUtilGetTitleIdFromPkg(candidate.c_str(), titleId, &isApp);
+        if (rc == 0) {
+            appInstPath = candidate;
+            break;
         }
-    } else {
-        // GMCA is already running, so normally the title has a primary slot.
-        // Keep slot zero as a conservative fallback and let BGFT decide.
-        slot = 0;
+    }
+    if (appInstPath.empty() || std::string(titleId) != kUpdaterTitleId || !isApp) {
+        result.code = rc == 0 ? -2 : rc;
+        result.stage = "updater PKG validation";
+        return result;
     }
 
     int32_t bgftError = 0;
     if (!initBgft(bgftError)) {
-        sceAppInstUtilTerminate();
         result.code = bgftError;
         result.stage = "BGFT init";
         return result;
     }
 
+    // BGFT runs outside the app sandbox and sees /data as /user/data.
+    const std::string systemPath = "/user" + std::string(kUpdaterPkgPath);
     OrbisBgftDownloadParamEx params{};
     params.params.entitlementType = 5;
     params.params.id = "";
-    params.params.contentUrl = installPath.c_str();
-    params.params.contentName = "GMCA update";
+    params.params.contentUrl = systemPath.c_str();
+    params.params.contentName = "GMCA Updater";
     params.params.iconPath = "";
     params.params.playgoScenarioId = "0";
-    params.params.option = ORBIS_BGFT_TASK_OPT_DISABLE_CDN_QUERY_PARAM;
-    params.slot = static_cast<uint32_t>(slot);
+    params.params.option = static_cast<OrbisBgftTaskOpt>(kBgftOptInvisible);
+    params.slot = 0;
 
     OrbisBgftTaskId taskId = -1;
     rc = sceBgftServiceIntDownloadRegisterTaskByStorageEx(&params, &taskId);
     if (rc == 0) rc = sceBgftServiceDownloadStartTask(taskId);
-
-    sceAppInstUtilTerminate();
     if (rc != 0) {
         result.code = rc;
-        result.stage = "BGFT queue";
+        result.stage = "updater BGFT queue";
         return result;
     }
 
     result.queued = true;
     return result;
+}
+
+int32_t launchUpdater() {
+    const char* argv[] = {nullptr};
+    GmcaLaunchAppParam param{};
+    param.size = sizeof(param);
+    param.userId = -1;
+    return sceSystemServiceLaunchApp(kUpdaterTitleId, argv, &param);
+}
+
+[[noreturn]] void exitForUpdaterHandoff() {
+    // The helper waits before touching GMCA00000. End this process immediately
+    // so background HTTP/mpv threads cannot keep the title locked.
+    std::_Exit(0);
 }
 
 brls::Dialog* makeUpdateDialog(const std::string& title, const std::string& body) {
@@ -463,28 +535,46 @@ void startUpdate(const Manifest& manifest) {
                 if (!dismissed->load()) label->setText("main/setting/others/installing"_i18n);
             });
 
-            InstallResult install = queueInstall(path);
-            if (install.stage == "unexpected Title ID") {
-                throw std::runtime_error("downloaded PKG has an unexpected Title ID");
+            // Never ask the running GMCA title to overwrite itself. Prepare a
+            // separate helper title, launch it, then terminate this process
+            // immediately so GMCA00000 is unlocked before AppInstUtil touches it.
+            bool helperReady = isUpdaterInstalled();
+            InstallResult helperInstall;
+            if (!helperReady) {
+                helperInstall = queueUpdaterInstall();
+                if (helperInstall.queued) {
+                    for (int i = 0; i < 60 && !helperReady; ++i) {
+                        std::this_thread::sleep_for(std::chrono::seconds(2));
+                        helperReady = isUpdaterInstalled();
+                    }
+                    if (helperReady) std::this_thread::sleep_for(std::chrono::seconds(3));
+                }
             }
+
+            int32_t launchResult = helperReady ? launchUpdater() : -1;
             AppVersion::updating->store(true);
 
-            if (install.queued) {
-                finish([manifest]() {
-                    Dialog::quitApp(false,
-                        fmt::format("GMCA PS4 {} verified. Installation is queued; close GMCA to let the PS4 finish the update.",
-                            manifest.version));
-                });
-            } else {
-                const std::string code = fmt::format("0x{:08X}", static_cast<uint32_t>(install.code));
-                finish([manifest, path, code, stage = install.stage]() {
-                    Dialog::show(fmt::format(
-                        "GMCA PS4 {} was downloaded and SHA-256 verified. Automatic installation could not start "
-                        "({}: {}). The PKG is already in {}. Open GoldHEN Package Installer with HDD /data/pkg as "
-                        "the source to install it; no FTP transfer is needed.",
-                        manifest.version, stage, code, path));
-                });
+            if (helperReady && launchResult >= 0) {
+                finish([]() { exitForUpdaterHandoff(); });
+                return;
             }
+
+            std::string stage;
+            std::string code;
+            if (!helperReady) {
+                stage = helperInstall.stage.empty() ? "updater install timeout" : helperInstall.stage;
+                code = fmt::format("0x{:08X}", static_cast<uint32_t>(helperInstall.code));
+            } else {
+                stage = "updater launch";
+                code = fmt::format("0x{:08X}", static_cast<uint32_t>(launchResult));
+            }
+            finish([manifest, path, stage, code]() {
+                Dialog::show(fmt::format(
+                    "GMCA PS4 {} was downloaded and SHA-256 verified, but the automatic updater could not take over "
+                    "({}: {}). The verified PKG is still in {}. Close GMCA and install it with GoldHEN Package "
+                    "Installer from HDD /data/pkg; no FTP transfer is needed.",
+                    manifest.version, stage, code, path));
+            });
         } catch (const std::exception& ex) {
             const bool canceled = dismissed->load() && AppVersion::updating->load();
             AppVersion::updating->store(true);
