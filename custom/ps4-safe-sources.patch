@@ -7,7 +7,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  set(VITA_VERSION "00.26")
 +# Custom PS4 package revision. Keep the upstream Title ID so this installs as an
 +# update over v1.1.0, but use a higher app version for an easy rollback path.
-+set(PS4_VERSION "00.43")
++set(PS4_VERSION "00.44")
  set(PROJECT_ICON ${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/icon.jpg)
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
