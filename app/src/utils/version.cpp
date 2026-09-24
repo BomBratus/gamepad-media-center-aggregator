@@ -26,6 +26,9 @@
 #include "utils/misc.hpp"
 #include "utils/vita_install.hpp"
 #include "api/http.hpp"
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+#include "utils/ps4_update.hpp"
+#endif
 
 using namespace brls::literals;
 
@@ -33,6 +36,14 @@ using namespace brls::literals;
 #define STR(x) STR_IMPL(x)
 
 std::string AppVersion::getVersion() { return STR(APP_VERSION); }
+
+std::string AppVersion::getUpdateVersion() {
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+    return ps4update::currentVersion();
+#else
+    return getVersion();
+#endif
+}
 
 std::string AppVersion::getPackageName() { return STR(BUILD_PACKAGE_NAME); }
 
@@ -335,6 +346,11 @@ static brls::Dialog* makeUpdateDialog(const std::string& title, const std::strin
 }
 
 void AppVersion::checkUpdate(int delay, bool showUpToDateDialog) {
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+    ps4update::checkUpdate(delay, showUpToDateDialog);
+    return;
+#endif
+
     if (!AppVersion::updating->load()) {
         Dialog::cancelable("main/setting/others/updating"_i18n, [] { AppVersion::updating->store(true); });
         return;
