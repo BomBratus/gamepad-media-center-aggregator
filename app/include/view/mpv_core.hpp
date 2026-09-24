@@ -231,7 +231,9 @@ private:
     };
 #else
     GLint default_framebuffer = 0;
-    mpv_opengl_fbo mpv_fbo;
+    // Zero-initialize every field. Leaving w/h/internal_format indeterminate can
+    // make libmpv choose an invalid render target description on GLES/Piglet.
+    mpv_opengl_fbo mpv_fbo{};
     int flip_y{1};
     mpv_render_param mpv_params[3] = {
         {MPV_RENDER_PARAM_OPENGL_FBO, &mpv_fbo},
