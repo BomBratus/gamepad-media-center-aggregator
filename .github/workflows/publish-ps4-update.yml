@@ -132,7 +132,10 @@ jobs:
           test "$manifest_size" = "$actual_size"
           test "$manifest_commit" = "${{ steps.source.outputs.head_sha }}"
 
-          versioned_pkg="$(awk '{print $2}' SHA256SUMS)"
+          # SHA256SUMS also contains the bundled updater helper. Select the
+          # versioned GMCA00000 payload explicitly instead of assuming one row.
+          versioned_pkg="$(awk '$2 ~ /^IV0001-GMCA00000_00-/ {print $2; exit}' SHA256SUMS)"
+          test -n "$versioned_pkg"
           test -s "$versioned_pkg"
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
