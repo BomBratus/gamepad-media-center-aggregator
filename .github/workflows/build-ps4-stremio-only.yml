@@ -46,6 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           submodules: recursive
 
       - name: Resolve PS4 package version
@@ -111,6 +112,7 @@ jobs:
           version="${{ steps.ps4ver.outputs.version }}"
           pkg="build/${{ steps.ps4ver.outputs.pkg }}"
           stable_pkg="build/GMCA-PS4-Stremio-only.pkg"
+          source_commit="$(git rev-parse HEAD)"
 
           test -f "$pkg"
           test -s "$pkg"
@@ -140,8 +142,8 @@ jobs:
           printf '  "pkg_name": "GMCA-PS4-Stremio-only.pkg",\n' >> build/ps4-update.json
           printf '  "size": %s,\n' "$size" >> build/ps4-update.json
           printf '  "sha256": "%s",\n' "$sha" >> build/ps4-update.json
-          printf '  "commit": "%s",\n' "$GITHUB_SHA" >> build/ps4-update.json
-          printf '  "notes": "GMCA PS4 Stremio-only %s - commit %s"\n' "$version" "$GITHUB_SHA" >> build/ps4-update.json
+          printf '  "commit": "%s",\n' "$source_commit" >> build/ps4-update.json
+          printf '  "notes": "GMCA PS4 Stremio-only %s - commit %s"\n' "$version" "$source_commit" >> build/ps4-update.json
           printf '}\n' >> build/ps4-update.json
 
           grep -q "\"version\": \"$version\"" build/ps4-update.json
@@ -150,6 +152,7 @@ jobs:
 
           echo "size=$size" >> "$GITHUB_OUTPUT"
           echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "commit=$source_commit" >> "$GITHUB_OUTPUT"
 
       - name: Upload package
         uses: actions/upload-artifact@v6
