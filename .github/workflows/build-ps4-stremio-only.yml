@@ -78,7 +78,7 @@ jobs:
           awk -f custom/apply-ps4-search-ui.awk app/src/tab/search_tab.cpp > /tmp/search_tab.cpp
           mv /tmp/search_tab.cpp app/src/tab/search_tab.cpp
           grep -q "set(PS4_VERSION \"${{ steps.ps4ver.outputs.version }}\")" CMakeLists.txt
-          grep -q 'GMCA_PS4_VERSION=${PS4_VERSION}' CMakeLists.txt
+          grep -Fq 'GMCA_PS4_VERSION=${PS4_VERSION}' CMakeLists.txt
           git checkout -- custom/ps4-safe-sources.patch custom/ps4-ui-followups.patch
           git diff --check
 
