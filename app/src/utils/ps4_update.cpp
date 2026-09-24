@@ -16,8 +16,10 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -418,7 +420,6 @@ void startUpdate(const Manifest& manifest) {
     dialog->open();
 
     ThreadPool::instance().submit([manifest, label, dialog, dismissed](HTTP&) {
-        ensurePackageDir();
         const std::string path = "/data/pkg/" + manifest.pkgName;
 
         auto finish = [dialog, dismissed](std::function<void()> then) {
@@ -443,6 +444,7 @@ void startUpdate(const Manifest& manifest) {
         };
 
         try {
+            ensurePackageDir();
             std::remove(path.c_str());
             HTTP::download(kPackageUrl, path, HTTP::Timeout{-1, 10000}, AppVersion::updating, progress);
 
@@ -464,11 +466,10 @@ void startUpdate(const Manifest& manifest) {
             });
 
             InstallResult install = queueInstall(path);
-            AppVersion::updating->store(true);
             if (install.stage == "unexpected Title ID") {
-                std::remove(path.c_str());
                 throw std::runtime_error("downloaded PKG has an unexpected Title ID");
             }
+            AppVersion::updating->store(true);
 
             if (install.queued) {
                 finish([manifest]() {
@@ -487,9 +488,12 @@ void startUpdate(const Manifest& manifest) {
                 });
             }
         } catch (const std::exception& ex) {
-            bool canceled = AppVersion::updating->load();
+            const bool canceled = dismissed->load() && AppVersion::updating->load();
             AppVersion::updating->store(true);
-            if (canceled) return;
+            if (canceled) {
+                std::remove(path.c_str());
+                return;
+            }
             std::remove(path.c_str());
             std::string msg = ex.what();
             finish([msg]() { Dialog::show(msg); });
