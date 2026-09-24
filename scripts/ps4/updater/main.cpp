@@ -2,6 +2,7 @@
 
 #include <SDL2/SDL.h>
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
