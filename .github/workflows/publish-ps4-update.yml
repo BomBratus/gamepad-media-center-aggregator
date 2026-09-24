@@ -1,0 +1,206 @@
+name: publish PS4 Stremio update
+
+on:
+  push:
+    branches: [ dev ]
+    paths:
+      - CMakeLists.txt
+      - app/src/main.cpp
+      - app/src/utils/version.cpp
+      - app/src/utils/ps4_update.cpp
+      - app/include/utils/config.hpp
+      - app/include/utils/ps4_update.hpp
+      - app/src/tab/setting_tab.cpp
+      - app/src/api/stremio/**
+      - app/include/api/stremio/**
+      - app/include/api/media/types.hpp
+      - app/src/view/video_source.cpp
+      - app/src/view/mpv_core.cpp
+      - app/src/activity/player_view.cpp
+      - app/include/view/video_source.hpp
+      - app/src/view/recyling_video.cpp
+      - app/include/view/recyling_video.hpp
+      - app/src/tab/home_tab.cpp
+      - app/src/tab/media_series.cpp
+      - resources/xml/view/episode_card.xml
+      - custom/ps4-safe-sources.patch
+      - custom/ps4-ui-followups.patch
+      - custom/apply-ps4-search-ui.awk
+      - .github/workflows/build-ps4-stremio-only.yml
+      - .github/workflows/publish-ps4-update.yml
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: publish-ps4-stremio-update
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ROLLING_TAG: ps4-stremio-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - name: Find validated PR artifact
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          head_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '.[0].head.sha // empty')"
+          if [ -z "$head_sha" ]; then
+            echo "No merged pull request is associated with $GITHUB_SHA; nothing to publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          run_id="$(
+            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build-ps4-stremio-only.yml/runs?event=pull_request&head_sha=$head_sha&per_page=20" \
+              --jq '[.workflow_runs[] | select(.conclusion == "success")][0].id // empty'
+          )"
+          if [ -z "$run_id" ]; then
+            echo "No successful PS4 Stremio-only PR workflow found for $head_sha."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          artifact_name="$(
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" \
+              --jq '[.artifacts[] | select(.expired == false and (.name | startswith("GMCA-PS4-Stremio-only-")))][0].name // empty'
+          )"
+          if [ -z "$artifact_name" ]; then
+            echo "Successful run $run_id has no PS4 updater artifact."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+          echo "Using validated run $run_id artifact $artifact_name"
+
+      - name: Download validated artifact
+        if: steps.source.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifact
+          gh run download "${{ steps.source.outputs.run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "${{ steps.source.outputs.artifact_name }}" \
+            --dir release-artifact
+
+      - name: Verify update payload
+        if: steps.source.outputs.publish == 'true'
+        id: payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-artifact
+
+          test -s ps4-update.json
+          test -s GMCA-PS4-Stremio-only.pkg
+          test -s SHA256SUMS
+          test -s PS4-UPDATE-SHA256SUMS
+
+          sha256sum -c SHA256SUMS
+          sha256sum -c PS4-UPDATE-SHA256SUMS
+
+          test "$(jq -r '.schema' ps4-update.json)" = "1"
+          test "$(jq -r '.channel' ps4-update.json)" = "ps4-stremio-only"
+          test "$(jq -r '.title_id' ps4-update.json)" = "GMCA00000"
+
+          version="$(jq -r '.version' ps4-update.json)"
+          [[ "$version" =~ ^[0-9]{2}\.[0-9]{2}$ ]]
+
+          manifest_sha="$(jq -r '.sha256' ps4-update.json)"
+          manifest_size="$(jq -r '.size' ps4-update.json)"
+          manifest_commit="$(jq -r '.commit' ps4-update.json)"
+          actual_sha="$(sha256sum GMCA-PS4-Stremio-only.pkg | awk '{print $1}')"
+          actual_size="$(stat -c '%s' GMCA-PS4-Stremio-only.pkg)"
+
+          test "$manifest_sha" = "$actual_sha"
+          test "$manifest_size" = "$actual_size"
+          test "$manifest_commit" = "${{ steps.source.outputs.head_sha }}"
+
+          versioned_pkg="$(awk '{print $2}' SHA256SUMS)"
+          test -s "$versioned_pkg"
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha256=$actual_sha" >> "$GITHUB_OUTPUT"
+          echo "size=$actual_size" >> "$GITHUB_OUTPUT"
+          echo "versioned_pkg=$versioned_pkg" >> "$GITHUB_OUTPUT"
+
+      - name: Compare rolling version
+        if: steps.source.outputs.publish == 'true'
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          new_version="${{ steps.payload.outputs.version }}"
+          new_digits="${new_version/.}"
+          new_number=$((10#$new_digits))
+
+          mkdir -p current-release
+          current_version=""
+          if gh release view "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release download "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern ps4-update.json --dir current-release --clobber || true
+            if [ -s current-release/ps4-update.json ]; then
+              current_version="$(jq -r '.version // empty' current-release/ps4-update.json)"
+            fi
+          fi
+
+          if [[ "$current_version" =~ ^[0-9]{2}\.[0-9]{2}$ ]]; then
+            current_digits="${current_version/.}"
+            current_number=$((10#$current_digits))
+            if (( new_number <= current_number )); then
+              echo "Rolling feed is already $current_version; candidate $new_version is not newer."
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "current_version=$current_version" >> "$GITHUB_OUTPUT"
+
+      - name: Publish rolling release
+        if: steps.source.outputs.publish == 'true' && steps.gate.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.payload.outputs.version }}"
+          notes="Validated GMCA PS4 Stremio-only rolling update $version. Source PR artifact run: ${{ steps.source.outputs.run_id }}."
+
+          if gh release view "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$ROLLING_TAG" \
+              release-artifact/GMCA-PS4-Stremio-only.pkg \
+              release-artifact/ps4-update.json \
+              release-artifact/PS4-UPDATE-SHA256SUMS \
+              --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "GMCA PS4 Stremio-only $version" \
+              --notes "$notes" --prerelease
+          else
+            gh release create "$ROLLING_TAG" \
+              release-artifact/GMCA-PS4-Stremio-only.pkg \
+              release-artifact/ps4-update.json \
+              release-artifact/PS4-UPDATE-SHA256SUMS \
+              --repo "$GITHUB_REPOSITORY" \
+              --target dev --prerelease \
+              --title "GMCA PS4 Stremio-only $version" \
+              --notes "$notes"
+          fi
+
+          echo "Published PS4 rolling update $version"
+          echo "PKG size: ${{ steps.payload.outputs.size }}"
+          echo "PKG SHA-256: ${{ steps.payload.outputs.sha256 }}"
