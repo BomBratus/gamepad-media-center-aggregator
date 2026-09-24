@@ -182,10 +182,13 @@ jobs:
           notes="Validated GMCA PS4 Stremio-only rolling update $version. Source PR artifact run: ${{ steps.source.outputs.run_id }}."
 
           if gh release view "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Replace the payload first and the manifest last: a console can only
+            # observe a new manifest after the matching PKG is already available.
             gh release upload "$ROLLING_TAG" \
               release-artifact/GMCA-PS4-Stremio-only.pkg \
-              release-artifact/ps4-update.json \
               release-artifact/PS4-UPDATE-SHA256SUMS \
+              --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$ROLLING_TAG" release-artifact/ps4-update.json \
               --repo "$GITHUB_REPOSITORY" --clobber
             gh release edit "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" \
               --title "GMCA PS4 Stremio-only $version" \
