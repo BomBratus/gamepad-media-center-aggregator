@@ -50,6 +50,23 @@ constexpr const char* kPackageUrl =
     "https://github.com/BomBratus/gamepad-media-center-aggregator/releases/download/"
     "ps4-stremio-latest/GMCA-PS4-Stremio-only.pkg";
 constexpr size_t kBgftHeapSize = 1024 * 1024;
+constexpr const char* kUpdaterTitleId = "GMCA00002";
+constexpr const char* kBundledUpdaterPkg = "/app0/updater.pkg";
+constexpr const char* kUpdaterPkgPath = "/data/GMCA/updater.pkg";
+constexpr int kBgftOptInvisible = 0x2;
+
+extern "C" {
+int sceAppInstUtilAppExists(const char* titleId, int* exists);
+
+struct GmcaLaunchAppParam {
+    unsigned int size;
+    int userId;
+    int appAttr;
+    int enableCrashReport;
+    unsigned long checkFlag;
+};
+int sceSystemServiceLaunchApp(const char* titleId, const char** argv, GmcaLaunchAppParam* param);
+}
 
 struct Manifest {
     std::string version;
@@ -68,6 +85,7 @@ struct InstallResult {
 
 static OrbisBgftInitParams sBgftInitParams{};
 static bool sBgftInitialized = false;
+static bool sInstallerModulesReady = false;
 
 inline uint32_t rotr(uint32_t v, uint32_t n) {
     return (v >> n) | (v << (32 - n));
