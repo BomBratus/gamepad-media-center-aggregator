@@ -234,6 +234,21 @@ private:
     // Zero-initialize every field. Leaving w/h/internal_format indeterminate can
     // make libmpv choose an invalid render target description on GLES/Piglet.
     mpv_opengl_fbo mpv_fbo{};
+#if defined(__PS4__)
+    // Keep libmpv off Borealis' default framebuffer on PS4. Piglet can report
+    // a completely healthy decode/render/swap loop while the shared target is
+    // visually corrupted; an owned RGBA target isolates video GL state and is
+    // then composed by NanoVG in normal UI draw order.
+    GLuint ps4_video_fbo = 0;
+    GLuint ps4_video_texture = 0;
+    int ps4_video_nvg_image = 0;
+    int ps4_video_width = 0;
+    int ps4_video_height = 0;
+    bool ps4_video_target_ready = false;
+
+    bool createPs4VideoTarget(int width, int height);
+    void destroyPs4VideoTarget();
+#endif
     int flip_y{1};
     mpv_render_param mpv_params[3] = {
         {MPV_RENDER_PARAM_OPENGL_FBO, &mpv_fbo},
