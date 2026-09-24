@@ -12,6 +12,8 @@ on:
       - app/src/utils/version.cpp
       - app/src/utils/ps4_update.cpp
       - app/src/utils/ps4_diagnostics.cpp
+      - scripts/ps4/updater/**
+      - cmake/bundle_ps4_updater_pkg.cmake
       - app/include/utils/config.hpp
       - app/include/utils/ps4_diagnostics.hpp
       - app/include/utils/ps4_update.hpp
@@ -119,12 +121,19 @@ jobs:
           test -f "$pkg"
           test -s "$pkg"
           test -s build/ps4/resources/font/switch_font.ttf
+          test -s build/ps4/updater.pkg
+          helper_pkg="$(find build -type f -name '*GMCA00002*.pkg' -print -quit)"
+          test -n "$helper_pkg"
+          test -s "$helper_pkg"
+          cp "$helper_pkg" build/GMCA-PS4-Updater.pkg
+          stat -c '%n %s bytes' build/ps4/updater.pkg
+          stat -c '%n %s bytes' build/GMCA-PS4-Updater.pkg
           stat -c '%n %s bytes' build/ps4/resources/font/switch_font.ttf
           stat -c '%n %s bytes' "$pkg"
 
           (
             cd build
-            sha256sum "${{ steps.ps4ver.outputs.pkg }}" | tee SHA256SUMS
+            sha256sum "${{ steps.ps4ver.outputs.pkg }}" GMCA-PS4-Updater.pkg | tee SHA256SUMS
             sha256sum -c SHA256SUMS
           )
           cp "$pkg" "$stable_pkg"
@@ -163,6 +172,7 @@ jobs:
           path: |
             build/${{ steps.ps4ver.outputs.pkg }}
             build/GMCA-PS4-Stremio-only.pkg
+            build/GMCA-PS4-Updater.pkg
             build/SHA256SUMS
             build/PS4-UPDATE-SHA256SUMS
             build/ps4-update.json
