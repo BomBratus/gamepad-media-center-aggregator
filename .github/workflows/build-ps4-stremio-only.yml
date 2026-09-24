@@ -11,7 +11,9 @@ on:
       - app/src/main.cpp
       - app/src/utils/version.cpp
       - app/src/utils/ps4_update.cpp
+      - app/src/utils/ps4_diagnostics.cpp
       - app/include/utils/config.hpp
+      - app/include/utils/ps4_diagnostics.hpp
       - app/include/utils/ps4_update.hpp
       - app/src/view/connection_switcher.cpp
       - app/src/tab/server_type_choose.cpp
