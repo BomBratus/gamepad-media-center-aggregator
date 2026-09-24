@@ -22,6 +22,9 @@ struct ThemePalette;
 class AppVersion {
 public:
     static std::string getVersion();
+    /// Version used by the platform update UI. PS4 Stremio-only uses the
+    /// package revision (00.xx); other platforms keep the semantic app version.
+    static std::string getUpdateVersion();
     static std::string getPlatform();
     static std::string getDeviceName();
     static std::string getPackageName();
