@@ -154,7 +154,7 @@ jobs:
           current_version=""
           if gh release view "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release download "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" \
-              --pattern ps4-update.json --dir current-release --clobber || true
+              --pattern ps4-update.json --dir current-release || true
             if [ -s current-release/ps4-update.json ]; then
               current_version="$(jq -r '.version // empty' current-release/ps4-update.json)"
             fi
