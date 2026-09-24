@@ -26,7 +26,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -357,6 +363,6 @@
+@@ -357,6 +365,6 @@
              ${CMAKE_BINARY_DIR}/ps4
              ${PSN_TITLE_ID}
              ${PROJECT_NAME}
