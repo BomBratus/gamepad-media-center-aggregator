@@ -535,28 +535,46 @@ void startUpdate(const Manifest& manifest) {
                 if (!dismissed->load()) label->setText("main/setting/others/installing"_i18n);
             });
 
-            InstallResult install = queueInstall(path);
-            if (install.stage == "unexpected Title ID") {
-                throw std::runtime_error("downloaded PKG has an unexpected Title ID");
+            // Never ask the running GMCA title to overwrite itself. Prepare a
+            // separate helper title, launch it, then terminate this process
+            // immediately so GMCA00000 is unlocked before AppInstUtil touches it.
+            bool helperReady = isUpdaterInstalled();
+            InstallResult helperInstall;
+            if (!helperReady) {
+                helperInstall = queueUpdaterInstall();
+                if (helperInstall.queued) {
+                    for (int i = 0; i < 60 && !helperReady; ++i) {
+                        std::this_thread::sleep_for(std::chrono::seconds(2));
+                        helperReady = isUpdaterInstalled();
+                    }
+                    if (helperReady) std::this_thread::sleep_for(std::chrono::seconds(3));
+                }
             }
+
+            int32_t launchResult = helperReady ? launchUpdater() : -1;
             AppVersion::updating->store(true);
 
-            if (install.queued) {
-                finish([manifest]() {
-                    Dialog::quitApp(false,
-                        fmt::format("GMCA PS4 {} verified. Installation is queued; close GMCA to let the PS4 finish the update.",
-                            manifest.version));
-                });
-            } else {
-                const std::string code = fmt::format("0x{:08X}", static_cast<uint32_t>(install.code));
-                finish([manifest, path, code, stage = install.stage]() {
-                    Dialog::show(fmt::format(
-                        "GMCA PS4 {} was downloaded and SHA-256 verified. Automatic installation could not start "
-                        "({}: {}). The PKG is already in {}. Open GoldHEN Package Installer with HDD /data/pkg as "
-                        "the source to install it; no FTP transfer is needed.",
-                        manifest.version, stage, code, path));
-                });
+            if (helperReady && launchResult >= 0) {
+                finish([]() { exitForUpdaterHandoff(); });
+                return;
             }
+
+            std::string stage;
+            std::string code;
+            if (!helperReady) {
+                stage = helperInstall.stage.empty() ? "updater install timeout" : helperInstall.stage;
+                code = fmt::format("0x{:08X}", static_cast<uint32_t>(helperInstall.code));
+            } else {
+                stage = "updater launch";
+                code = fmt::format("0x{:08X}", static_cast<uint32_t>(launchResult));
+            }
+            finish([manifest, path, stage, code]() {
+                Dialog::show(fmt::format(
+                    "GMCA PS4 {} was downloaded and SHA-256 verified, but the automatic updater could not take over "
+                    "({}: {}). The verified PKG is still in {}. Close GMCA and install it with GoldHEN Package "
+                    "Installer from HDD /data/pkg; no FTP transfer is needed.",
+                    manifest.version, stage, code, path));
+            });
         } catch (const std::exception& ex) {
             const bool canceled = dismissed->load() && AppVersion::updating->load();
             AppVersion::updating->store(true);
