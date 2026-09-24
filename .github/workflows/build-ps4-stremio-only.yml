@@ -2,15 +2,21 @@ name: build PS4 Stremio-only
 
 on:
   push:
-    branches: [ release/ps4-00.40-stremio-only ]
+    branches:
+      - 'release/ps4-*-stremio-only'
   pull_request:
     branches: [ dev ]
     paths:
       - CMakeLists.txt
       - app/src/main.cpp
+      - app/src/utils/version.cpp
+      - app/src/utils/ps4_update.cpp
+      - app/include/utils/config.hpp
+      - app/include/utils/ps4_update.hpp
       - app/src/view/connection_switcher.cpp
       - app/src/tab/server_type_choose.cpp
       - app/src/tab/stremio_add.cpp
+      - app/src/tab/setting_tab.cpp
       - app/src/api/stremio/**
       - app/include/api/stremio/**
       - app/include/api/media/types.hpp
@@ -27,6 +33,7 @@ on:
       - custom/ps4-ui-followups.patch
       - custom/apply-ps4-search-ui.awk
       - .github/workflows/build-ps4-stremio-only.yml
+      - .github/workflows/publish-ps4-update.yml
   workflow_dispatch:
 
 jobs:
@@ -41,8 +48,26 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Apply PS4 recovery and safe-source UI
+      - name: Resolve PS4 package version
+        id: ps4ver
+        shell: bash
         run: |
+          set -euo pipefail
+          version="$(sed -n 's/^+set(PS4_VERSION "\([0-9][0-9]\.[0-9][0-9]\)")$/\1/p' custom/ps4-safe-sources.patch | head -n1)"
+          test -n "$version"
+          [[ "$version" =~ ^[0-9]{2}\.[0-9]{2}$ ]]
+          digits="${version/.}"
+          suffix="${digits}00"
+          pkg="IV0001-GMCA00000_00-GMCA000000${suffix}.pkg"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "pkg=$pkg" >> "$GITHUB_OUTPUT"
+          echo "PS4 package version: $version"
+          echo "Expected PKG: $pkg"
+
+      - name: Apply PS4 recovery and safe-source UI
+        shell: bash
+        run: |
+          set -euxo pipefail
           git config --global --add safe.directory '*'
           printf '\n' >> custom/ps4-safe-sources.patch
           printf '\n' >> custom/ps4-ui-followups.patch
@@ -52,8 +77,8 @@ jobs:
           git apply --verbose --recount custom/ps4-ui-followups.patch
           awk -f custom/apply-ps4-search-ui.awk app/src/tab/search_tab.cpp > /tmp/search_tab.cpp
           mv /tmp/search_tab.cpp app/src/tab/search_tab.cpp
-          sed -i 's/set(PS4_VERSION "00.27")/set(PS4_VERSION "00.40")/' CMakeLists.txt
-          grep -q 'set(PS4_VERSION "00.40")' CMakeLists.txt
+          grep -q "set(PS4_VERSION \"${{ steps.ps4ver.outputs.version }}\")" CMakeLists.txt
+          grep -q 'GMCA_PS4_VERSION=${PS4_VERSION}' CMakeLists.txt
           git checkout -- custom/ps4-safe-sources.patch custom/ps4-ui-followups.patch
           git diff --check
 
@@ -78,24 +103,56 @@ jobs:
             -DVERSION_BUILD=${{ github.run_number }}
           make -C build -j$(nproc)
 
-      - name: Verify package
+      - name: Verify package and prepare update feed
+        id: verify
+        shell: bash
         run: |
-          set -eux
-          pkg="build/IV0001-GMCA00000_00-GMCA000000004000.pkg"
+          set -euo pipefail
+          version="${{ steps.ps4ver.outputs.version }}"
+          pkg="build/${{ steps.ps4ver.outputs.pkg }}"
+          stable_pkg="build/GMCA-PS4-Stremio-only.pkg"
+
           test -f "$pkg"
           test -s "$pkg"
-          # PS4 libass has no system font provider: the packaged fallback used
-          # by mpv_core.cpp must physically exist in the final staging tree.
           test -s build/ps4/resources/font/switch_font.ttf
           stat -c '%n %s bytes' build/ps4/resources/font/switch_font.ttf
           stat -c '%n %s bytes' "$pkg"
+
           sha256sum "$pkg" | tee build/SHA256SUMS
+          sha256sum -c build/SHA256SUMS
+          cp "$pkg" "$stable_pkg"
+
+          size="$(stat -c '%s' "$pkg")"
+          sha="$(sha256sum "$pkg" | awk '{print $1}')"
+          stable_sha="$(sha256sum "$stable_pkg" | awk '{print $1}')"
+          test "$sha" = "$stable_sha"
+
+          printf '{\n' > build/ps4-update.json
+          printf '  "schema": 1,\n' >> build/ps4-update.json
+          printf '  "channel": "ps4-stremio-only",\n' >> build/ps4-update.json
+          printf '  "title_id": "GMCA00000",\n' >> build/ps4-update.json
+          printf '  "version": "%s",\n' "$version" >> build/ps4-update.json
+          printf '  "pkg_name": "GMCA-PS4-Stremio-only.pkg",\n' >> build/ps4-update.json
+          printf '  "size": %s,\n' "$size" >> build/ps4-update.json
+          printf '  "sha256": "%s",\n' "$sha" >> build/ps4-update.json
+          printf '  "commit": "%s",\n' "$GITHUB_SHA" >> build/ps4-update.json
+          printf '  "notes": "GMCA PS4 Stremio-only %s - commit %s"\n' "$version" "$GITHUB_SHA" >> build/ps4-update.json
+          printf '}\n' >> build/ps4-update.json
+
+          grep -q "\"version\": \"$version\"" build/ps4-update.json
+          grep -q "\"sha256\": \"$sha\"" build/ps4-update.json
+          cat build/ps4-update.json
+
+          echo "size=$size" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Upload package
         uses: actions/upload-artifact@v6
         with:
-          name: GMCA-PS4-Stremio-only-00.40-${{ github.run_number }}
+          name: GMCA-PS4-Stremio-only-${{ steps.ps4ver.outputs.version }}-${{ github.run_number }}
           path: |
-            build/IV0001-GMCA00000_00-GMCA000000004000.pkg
+            build/${{ steps.ps4ver.outputs.pkg }}
+            build/GMCA-PS4-Stremio-only.pkg
             build/SHA256SUMS
+            build/ps4-update.json
           if-no-files-found: error
