@@ -423,7 +423,7 @@ void SettingTab::onCreate() {
     });
 
     btnReleaseChecker->title->setText(
-        fmt::format("{} ({}: {})", "main/setting/others/release"_i18n, "hints/current"_i18n, AppVersion::getVersion()));
+        fmt::format("{} ({}: {})", "main/setting/others/release"_i18n, "hints/current"_i18n, AppVersion::getUpdateVersion()));
     btnReleaseChecker->registerClickAction([](...) -> bool {
         AppVersion::checkUpdate(0, true);
         return true;
