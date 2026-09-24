@@ -129,6 +129,8 @@ jobs:
           sha="$(sha256sum "$pkg" | awk '{print $1}')"
           stable_sha="$(sha256sum "$stable_pkg" | awk '{print $1}')"
           test "$sha" = "$stable_sha"
+          printf '%s  GMCA-PS4-Stremio-only.pkg\n' "$sha" > build/PS4-UPDATE-SHA256SUMS
+          (cd build && sha256sum -c PS4-UPDATE-SHA256SUMS)
 
           printf '{\n' > build/ps4-update.json
           printf '  "schema": 1,\n' >> build/ps4-update.json
@@ -157,5 +159,6 @@ jobs:
             build/${{ steps.ps4ver.outputs.pkg }}
             build/GMCA-PS4-Stremio-only.pkg
             build/SHA256SUMS
+            build/PS4-UPDATE-SHA256SUMS
             build/ps4-update.json
           if-no-files-found: error
