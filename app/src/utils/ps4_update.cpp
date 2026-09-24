@@ -277,12 +277,25 @@ Manifest fetchManifest() {
     return m;
 }
 
+bool ensureInstallerModules(int32_t& error) {
+    if (sInstallerModulesReady) return true;
+
+    // These calls must precede every AppInstUtil/BGFT API use on PS4. Calling
+    // a linked stub before the corresponding system PRX is resident can fault
+    // the process instead of returning an error.
+    sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_APP_INST_UTIL);
+    sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_BGFT);
+
+    error = sceAppInstUtilInitialize();
+    // Re-initialization may return an "already initialized" code. The module
+    // load is the important part; subsequent API calls remain authoritative.
+    sInstallerModulesReady = true;
+    return true;
+}
+
 bool initBgft(int32_t& error) {
     if (sBgftInitialized) return true;
-
-    // The sysmodule may already be resident because Borealis links SceBgft.
-    // Do not fail solely on the load result; the service init below is authoritative.
-    sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_BGFT);
+    if (!ensureInstallerModules(error)) return false;
 
     sBgftInitParams.heapSize = kBgftHeapSize;
     sBgftInitParams.heap = std::malloc(sBgftInitParams.heapSize);
@@ -302,95 +315,136 @@ bool initBgft(int32_t& error) {
     return true;
 }
 
-InstallResult queueInstall(const std::string& localPath) {
-    InstallResult result;
-
-    int32_t rc = sceAppInstUtilInitialize();
-    if (rc != 0) {
-        result.code = rc;
-        result.stage = "AppInstUtil init";
-        return result;
+bool copyBundledUpdater(std::string& error) {
+    FILE* input = std::fopen(kBundledUpdaterPkg, "rb");
+    if (!input) {
+        error = "bundled updater package is missing";
+        return false;
     }
 
-    // AppInstUtil/BGFT operate outside the application sandbox. GoldHEN exposes
-    // /data to homebrew, while the system service commonly sees the same file as
-    // /user/data. Try the system path first and fall back to the app-visible path.
-    std::vector<std::string> candidates;
-    if (localPath.rfind("/data/", 0) == 0) candidates.push_back("/user" + localPath);
-    candidates.push_back(localPath);
+    FILE* output = std::fopen(kUpdaterPkgPath, "wb");
+    if (!output) {
+        std::fclose(input);
+        error = "cannot write updater package";
+        return false;
+    }
 
-    std::string installPath;
-    char titleId[16] = {};
-    int32_t isApp = 0;
-    for (const auto& candidate : candidates) {
-        std::memset(titleId, 0, sizeof(titleId));
-        rc = sceAppInstUtilGetTitleIdFromPkg(candidate.c_str(), titleId, &isApp);
-        if (rc == 0) {
-            installPath = candidate;
+    std::array<unsigned char, 64 * 1024> buffer{};
+    bool ok = true;
+    while (true) {
+        size_t got = std::fread(buffer.data(), 1, buffer.size(), input);
+        if (got > 0 && std::fwrite(buffer.data(), 1, got, output) != got) {
+            ok = false;
+            break;
+        }
+        if (got < buffer.size()) {
+            if (std::ferror(input)) ok = false;
             break;
         }
     }
+    if (std::fflush(output) != 0) ok = false;
+    std::fclose(output);
+    std::fclose(input);
 
-    if (installPath.empty()) {
-        sceAppInstUtilTerminate();
-        result.code = rc;
-        result.stage = "PKG validation";
+    if (!ok || fileSize(kUpdaterPkgPath) <= 0) {
+        std::remove(kUpdaterPkgPath);
+        error = "failed to copy updater package";
+        return false;
+    }
+    return true;
+}
+
+bool isUpdaterInstalled() {
+    int32_t initError = 0;
+    if (!ensureInstallerModules(initError)) return false;
+    int exists = 0;
+    int32_t rc = sceAppInstUtilAppExists(kUpdaterTitleId, &exists);
+    return rc == 0 && exists != 0;
+}
+
+InstallResult queueUpdaterInstall() {
+    InstallResult result;
+    int32_t initError = 0;
+    if (!ensureInstallerModules(initError)) {
+        result.code = initError;
+        result.stage = "installer module init";
         return result;
     }
-    if (std::string(titleId) != kTitleId || !isApp) {
-        sceAppInstUtilTerminate();
-        result.code = -2;
-        result.stage = "unexpected Title ID";
+
+    std::string copyError;
+    if (!copyBundledUpdater(copyError)) {
+        result.code = -1;
+        result.stage = copyError;
         return result;
     }
 
-    int32_t slot = 0;
-    rc = sceAppInstUtilGetPrimaryAppSlot(kTitleId, &slot);
-    if (rc == 0) {
-        int32_t prep = sceAppInstUtilAppPrepareOverwritePkg(installPath.c_str());
-        if (prep != 0) {
-            sceAppInstUtilTerminate();
-            result.code = prep;
-            result.stage = "prepare overwrite";
-            return result;
+    std::vector<std::string> candidates;
+    candidates.push_back("/user" + std::string(kUpdaterPkgPath));
+    candidates.push_back(kUpdaterPkgPath);
+
+    std::string appInstPath;
+    char titleId[16] = {};
+    int32_t isApp = 0;
+    int32_t rc = -1;
+    for (const auto& candidate : candidates) {
+        std::memset(titleId, 0, sizeof(titleId));
+        isApp = 0;
+        rc = sceAppInstUtilGetTitleIdFromPkg(candidate.c_str(), titleId, &isApp);
+        if (rc == 0) {
+            appInstPath = candidate;
+            break;
         }
-    } else {
-        // GMCA is already running, so normally the title has a primary slot.
-        // Keep slot zero as a conservative fallback and let BGFT decide.
-        slot = 0;
+    }
+    if (appInstPath.empty() || std::string(titleId) != kUpdaterTitleId || !isApp) {
+        result.code = rc == 0 ? -2 : rc;
+        result.stage = "updater PKG validation";
+        return result;
     }
 
     int32_t bgftError = 0;
     if (!initBgft(bgftError)) {
-        sceAppInstUtilTerminate();
         result.code = bgftError;
         result.stage = "BGFT init";
         return result;
     }
 
+    // BGFT runs outside the app sandbox and sees /data as /user/data.
+    const std::string systemPath = "/user" + std::string(kUpdaterPkgPath);
     OrbisBgftDownloadParamEx params{};
     params.params.entitlementType = 5;
     params.params.id = "";
-    params.params.contentUrl = installPath.c_str();
-    params.params.contentName = "GMCA update";
+    params.params.contentUrl = systemPath.c_str();
+    params.params.contentName = "GMCA Updater";
     params.params.iconPath = "";
     params.params.playgoScenarioId = "0";
-    params.params.option = ORBIS_BGFT_TASK_OPT_DISABLE_CDN_QUERY_PARAM;
-    params.slot = static_cast<uint32_t>(slot);
+    params.params.option = kBgftOptInvisible;
+    params.slot = 0;
 
     OrbisBgftTaskId taskId = -1;
     rc = sceBgftServiceIntDownloadRegisterTaskByStorageEx(&params, &taskId);
     if (rc == 0) rc = sceBgftServiceDownloadStartTask(taskId);
-
-    sceAppInstUtilTerminate();
     if (rc != 0) {
         result.code = rc;
-        result.stage = "BGFT queue";
+        result.stage = "updater BGFT queue";
         return result;
     }
 
     result.queued = true;
     return result;
+}
+
+int32_t launchUpdater() {
+    const char* argv[] = {nullptr};
+    GmcaLaunchAppParam param{};
+    param.size = sizeof(param);
+    param.userId = -1;
+    return sceSystemServiceLaunchApp(kUpdaterTitleId, argv, &param);
+}
+
+[[noreturn]] void exitForUpdaterHandoff() {
+    // The helper waits before touching GMCA00000. End this process immediately
+    // so background HTTP/mpv threads cannot keep the title locked.
+    std::_Exit(0);
 }
 
 brls::Dialog* makeUpdateDialog(const std::string& title, const std::string& body) {
