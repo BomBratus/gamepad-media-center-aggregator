@@ -903,11 +903,16 @@ void MPVCore::draw(brls::Rect area, float alpha) {
             mpv_fbo.w = ps4_video_width;
             mpv_fbo.h = ps4_video_height;
             mpv_fbo.internal_format = GL_RGBA;
+            // mpv only needs FLIP_Y for a default framebuffer. This is a
+            // regular texture-backed FBO; NanoVG performs the texture-origin
+            // flip when it composites the image.
+            flip_y = 0;
         } else {
             mpv_fbo.fbo = default_framebuffer;
             mpv_fbo.w = brls::Application::windowWidth;
             mpv_fbo.h = brls::Application::windowHeight;
             mpv_fbo.internal_format = 0;
+            flip_y = 1;
         }
 #endif
         mpv_render_context_render(this->mpv_context, mpv_params);
