@@ -239,8 +239,14 @@ int main(int argc, char* argv[]) {
         });
     }
 
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+    // The PS4 updater still checks the lightweight rolling manifest on each
+    // launch so dismissing one release does not hide later 00.xx packages.
+    AppVersion::checkUpdate();
+#else
     std::string v = conf.getItem(AppConfig::APP_UPDATE, std::string("NaN"));
     if (AppVersion::getVersion().compare(v)) AppVersion::checkUpdate();
+#endif
 
     // Run the app
     while (brls::Application::mainLoop());
