@@ -563,15 +563,24 @@ void MPVCore::init() {
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &default_framebuffer);
     glBindFramebuffer(GL_FRAMEBUFFER, default_framebuffer);
     mpv_fbo.fbo = default_framebuffer;
+    mpv_fbo.w = brls::Application::windowWidth;
+    mpv_fbo.h = brls::Application::windowHeight;
+    // The default framebuffer format is not exposed reliably by Piglet. mpv's
+    // API explicitly allows 0 here to mean "unknown"; this is deterministic and
+    // avoids passing stack/object garbage as a GL internal format.
+    mpv_fbo.internal_format = 0;
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
     const GLubyte* glVendor = glGetString(GL_VENDOR);
     const GLubyte* glRenderer = glGetString(GL_RENDERER);
     const GLubyte* glVersion = glGetString(GL_VERSION);
-    ps4diag::write(fmt::format("gl-info vendor={} renderer={} version={} default-fbo={}",
+    ps4diag::write(fmt::format("gl-info vendor={} renderer={} version={} default-fbo={} size={}x{} internal-format={}",
         glVendor ? reinterpret_cast<const char*>(glVendor) : "-",
         glRenderer ? reinterpret_cast<const char*>(glRenderer) : "-",
         glVersion ? reinterpret_cast<const char*>(glVersion) : "-",
-        default_framebuffer));
+        default_framebuffer,
+        mpv_fbo.w,
+        mpv_fbo.h,
+        mpv_fbo.internal_format));
 #endif
 #endif
 }
