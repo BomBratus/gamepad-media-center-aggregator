@@ -66,7 +66,7 @@ struct InstallResult {
     std::string stage;
 };
 
-static void* sBgftHeap = nullptr;
+static OrbisBgftInitParams sBgftInitParams{};
 static bool sBgftInitialized = false;
 
 inline uint32_t rotr(uint32_t v, uint32_t n) {
@@ -266,20 +266,18 @@ bool initBgft(int32_t& error) {
     // Do not fail solely on the load result; the service init below is authoritative.
     sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_BGFT);
 
-    sBgftHeap = std::malloc(kBgftHeapSize);
-    if (!sBgftHeap) {
+    sBgftInitParams.heapSize = kBgftHeapSize;
+    sBgftInitParams.heap = std::malloc(sBgftInitParams.heapSize);
+    if (!sBgftInitParams.heap) {
         error = -1;
         return false;
     }
-    std::memset(sBgftHeap, 0, kBgftHeapSize);
+    std::memset(sBgftInitParams.heap, 0, sBgftInitParams.heapSize);
 
-    OrbisBgftInitParams params{};
-    params.heap = sBgftHeap;
-    params.heapSize = kBgftHeapSize;
-    error = sceBgftServiceIntInit(&params);
+    error = sceBgftServiceIntInit(&sBgftInitParams);
     if (error != 0) {
-        std::free(sBgftHeap);
-        sBgftHeap = nullptr;
+        std::free(sBgftInitParams.heap);
+        sBgftInitParams = {};
         return false;
     }
     sBgftInitialized = true;
