@@ -417,7 +417,7 @@ InstallResult queueUpdaterInstall() {
     params.params.contentName = "GMCA Updater";
     params.params.iconPath = "";
     params.params.playgoScenarioId = "0";
-    params.params.option = kBgftOptInvisible;
+    params.params.option = static_cast<OrbisBgftTaskOpt>(kBgftOptInvisible);
     params.slot = 0;
 
     OrbisBgftTaskId taskId = -1;
