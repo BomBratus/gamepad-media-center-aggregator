@@ -26,6 +26,7 @@ on:
       - app/include/api/media/types.hpp
       - app/src/view/video_source.cpp
       - app/src/view/mpv_core.cpp
+      - app/include/view/mpv_core.hpp
       - app/src/activity/player_view.cpp
       - app/include/view/video_source.hpp
       - app/src/view/recyling_video.cpp
