@@ -122,7 +122,6 @@ jobs:
           test -f "$pkg"
           test -s "$pkg"
           test -s build/GMCA
-          test -s build/GMCA.self
           test -s build/ps4/resources/font/switch_font.ttf
           test -s build/ps4/updater.pkg
           helper_pkg="$(find build -type f -name '*GMCA00002*.pkg' -print -quit)"
@@ -131,16 +130,35 @@ jobs:
           cp "$helper_pkg" build/GMCA-PS4-Updater.pkg
 
           main_elf_size="$(stat -c '%s' build/GMCA)"
-          main_self_size="$(stat -c '%s' build/GMCA.self)"
           pkg_size="$(stat -c '%s' "$pkg")"
-          if [ "$pkg_size" -le "$main_elf_size" ] || [ "$pkg_size" -le "$main_self_size" ]; then
-            echo "Invalid PS4 package: PKG ($pkg_size bytes) is not larger than the main GMCA ELF ($main_elf_size) and SELF ($main_self_size)."
+          read -r pfs_size header_pkg_size < <(python3 - "$pkg" <<'PY'
+import struct
+import sys
+
+with open(sys.argv[1], "rb") as f:
+    header = f.read(0x438)
+
+if len(header) < 0x438 or header[:4] != b"\\x7fCNT":
+    raise SystemExit("invalid PS4 PKG header")
+
+pfs_size = struct.unpack_from(">Q", header, 0x418)[0]
+package_size = struct.unpack_from(">Q", header, 0x430)[0]
+print(pfs_size, package_size)
+PY
+          )
+
+          echo "PS4 payload sizes: ELF=$main_elf_size PFS=$pfs_size PKG=$pkg_size header-PKG=$header_pkg_size"
+          if [ "$header_pkg_size" -ne "$pkg_size" ]; then
+            echo "Invalid PS4 package: header package size does not match the actual file."
+            exit 1
+          fi
+          if [ "$pkg_size" -le "$main_elf_size" ] || [ "$pfs_size" -le "$main_elf_size" ]; then
+            echo "Invalid PS4 package: payload is not larger than the main GMCA ELF."
             echo "This usually means PacBrew's shared eboot.bin was overwritten by the updater SELF before add_pkg(GMCA)."
             exit 1
           fi
 
           stat -c '%n %s bytes' build/GMCA
-          stat -c '%n %s bytes' build/GMCA.self
           stat -c '%n %s bytes' build/ps4/updater.pkg
           stat -c '%n %s bytes' build/GMCA-PS4-Updater.pkg
           stat -c '%n %s bytes' build/ps4/resources/font/switch_font.ttf
