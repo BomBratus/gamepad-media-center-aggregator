@@ -7,6 +7,7 @@
 #include <orbis/AppInstUtil.h>
 #include <orbis/Bgft.h>
 #include <orbis/Sysmodule.h>
+#include <orbis/_types/sys_service.h>
 
 #include <algorithm>
 #include <array>
@@ -58,14 +59,10 @@ constexpr int kBgftOptInvisible = 0x2;
 extern "C" {
 int sceAppInstUtilAppExists(const char* titleId, int* exists);
 
-struct GmcaLaunchAppParam {
-    unsigned int size;
-    int userId;
-    int appAttr;
-    int enableCrashReport;
-    unsigned long checkFlag;
-};
-int sceSystemServiceLaunchApp(const char* titleId, const char** argv, GmcaLaunchAppParam* param);
+// OpenOrbis' packaged SystemService.h still exposes this as void(void), but
+// the actual syscall ABI takes the documented LncAppParam payload. Import only
+// the canonical type definition above and keep the function prototype here.
+int32_t sceSystemServiceLaunchApp(const char* titleId, const char** argv, LncAppParam* param);
 }
 
 struct Manifest {
@@ -435,9 +432,10 @@ InstallResult queueUpdaterInstall() {
 
 int32_t launchUpdater() {
     const char* argv[] = {nullptr};
-    GmcaLaunchAppParam param{};
+    LncAppParam param{};
     param.size = sizeof(param);
-    param.userId = -1;
+    param.user_id = static_cast<uint32_t>(-1);
+    param.LaunchAppCheck_flag = LaunchApp_None;
     return sceSystemServiceLaunchApp(kUpdaterTitleId, argv, &param);
 }
 
