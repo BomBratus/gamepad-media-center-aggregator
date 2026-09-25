@@ -100,6 +100,11 @@ jobs:
           done
           git config --system --add safe.directory $GITHUB_WORKSPACE
 
+      - name: Set up Python for local libmpv build
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - name: Build GMCA patched PS4 libmpv
         shell: bash
         env:
@@ -107,9 +112,7 @@ jobs:
         run: |
           set -euxo pipefail
 
-          # The container image intentionally keeps host tools minimal. Python
-          # is needed only to bootstrap mpv's pinned waf build system.
-          pacman --noconfirm -Sy python
+          # Python is provided by actions/setup-python only for mpv's pinned waf build.
 
           work=/tmp/gmca-ps4-libmpv
           rm -rf "$work"
