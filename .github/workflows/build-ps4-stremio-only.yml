@@ -131,20 +131,8 @@ jobs:
 
           main_elf_size="$(stat -c '%s' build/GMCA)"
           pkg_size="$(stat -c '%s' "$pkg")"
-          read -r pfs_size header_pkg_size < <(python3 - "$pkg" <<'PY'
-import struct
-import sys
-
-with open(sys.argv[1], "rb") as f:
-    header = f.read(0x438)
-
-if len(header) < 0x438 or header[:4] != b"\\x7fCNT":
-    raise SystemExit("invalid PS4 PKG header")
-
-pfs_size = struct.unpack_from(">Q", header, 0x418)[0]
-package_size = struct.unpack_from(">Q", header, 0x430)[0]
-print(pfs_size, package_size)
-PY
+          read -r pfs_size header_pkg_size < <(
+            python3 -c 'import struct,sys; h=open(sys.argv[1],"rb").read(0x438); assert len(h) >= 0x438 and h[:4] == b"\\x7fCNT"; print(struct.unpack_from(">Q",h,0x418)[0], struct.unpack_from(">Q",h,0x430)[0])' "$pkg"
           )
 
           echo "PS4 payload sizes: ELF=$main_elf_size PFS=$pfs_size PKG=$pkg_size header-PKG=$header_pkg_size"
