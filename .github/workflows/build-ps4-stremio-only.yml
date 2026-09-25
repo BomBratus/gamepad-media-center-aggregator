@@ -156,7 +156,7 @@ jobs:
           ./waf install
 
           test -s "$OPENORBIS/usr/lib/libmpv.a"
-          strings "$OPENORBIS/usr/lib/libmpv.a" | grep -Fq "PS4 BGRA subtitle fallback: using alpha-mask LIBASS path."
+          strings "$OPENORBIS/usr/lib/libmpv.a" | grep -F "PS4 BGRA subtitle fallback: using alpha-mask LIBASS path." >/dev/null
           pkg-config --modversion mpv
           echo "GMCA patched PS4 libmpv installed and verified"
 
