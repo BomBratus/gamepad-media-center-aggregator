@@ -632,12 +632,13 @@ void MPVCore::init() {
     }
 
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
-    // Keep this at WARN for normal runtime: shader compile/link failures and
-    // renderer errors are emitted at warn/error, while requesting verbose mpv
-    // logs globally would add avoidable event traffic on PS4.
-    const int ps4LogRequestResult = mpv_request_log_messages(mpv, "warn");
+    // 00.55 diagnostic build: ra_ps4 reports the generated shader SHA and
+    // whether the embedded Piglet binary was found only at MP_VERBOSE. Request
+    // verbose callbacks for this hardware test, but persist only shader lines
+    // (plus the existing warn/error messages) in eventMainLoop().
+    const int ps4LogRequestResult = mpv_request_log_messages(mpv, "v");
     ps4diag::write(fmt::format(
-        "mpv-log-request level=warn result={}", ps4LogRequestResult));
+        "mpv-log-request level=v shader-diagnostic=1 result={}", ps4LogRequestResult));
 #endif
 
     if (MPVCore::DEBUG) {
@@ -1102,16 +1103,27 @@ void MPVCore::eventMainLoop() {
         case MPV_EVENT_LOG_MESSAGE: {
             auto log = (mpv_event_log_message *)event->data;
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
-            if (log && log->log_level <= MPV_LOG_LEVEL_WARN) {
+            if (log) {
                 std::string text = log->text ? log->text : "";
                 while (!text.empty() && (text.back() == '\n' || text.back() == '\r'))
                     text.pop_back();
-                if (text.size() > 512) text.resize(512);
-                ps4diag::write(fmt::format(
-                    "mpv-log level={} prefix={} text={}",
-                    static_cast<int>(log->log_level),
-                    log->prefix ? log->prefix : "-",
-                    text));
+
+                // The PS4 libmpv ra_ps4 patch emits these at MP_VERBOSE. Keep
+                // only the shader-selection diagnostics instead of copying the
+                // full verbose mpv stream to disk.
+                const bool shaderDiagnostic =
+                    text.find("compile_attach_shader:") != std::string::npos ||
+                    text.find("ps4_mpv_use_precompiled_shaders:") != std::string::npos;
+
+                if (log->log_level <= MPV_LOG_LEVEL_WARN || shaderDiagnostic) {
+                    if (text.size() > 512) text.resize(512);
+                    ps4diag::write(fmt::format(
+                        "mpv-log level={} prefix={} shader={} text={}",
+                        static_cast<int>(log->log_level),
+                        log->prefix ? log->prefix : "-",
+                        shaderDiagnostic ? 1 : 0,
+                        text));
+                }
             }
 #endif
             if (log->log_level <= MPV_LOG_LEVEL_ERROR) {
