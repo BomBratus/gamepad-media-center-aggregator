@@ -534,15 +534,16 @@ void MPVCore::init() {
     std::string confDir = conf.configDir();
 #if defined(__PS4__)
     // The OpenOrbis libmpv package already contains the Piglet shader binaries
-    // used by wiliwili/Switchfin. They are opt-in at runtime; without this flag
-    // mpv falls back to runtime GLSL compilation on Piglet.
+    // used by wiliwili/Switchfin. Keep the precompiled path enabled and, for
+    // the 00.57 diagnostic build, dump only shaders missing from that embedded
+    // set after Piglet runtime compilation. ra_ps4 writes them to /data/<SHA>.c.
     ps4_mpv_use_precompiled_shaders = 1;
-    ps4_mpv_dump_shaders = 0;
+    ps4_mpv_dump_shaders = 1;
 #endif
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
     ps4diag::init(confDir, AppVersion::getUpdateVersion(), AppVersion::getCommit());
     ps4diag::write("mpv-init");
-    ps4diag::write("mpv-ps4 precompiled-shaders=1 dump-shaders=0");
+    ps4diag::write("mpv-ps4 precompiled-shaders=1 dump-shaders=1 dump-path=/data/<SHA>.c");
 #endif
 
     // misc
