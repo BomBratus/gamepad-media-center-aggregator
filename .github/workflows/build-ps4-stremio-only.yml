@@ -131,9 +131,18 @@ jobs:
 
           main_elf_size="$(stat -c '%s' build/GMCA)"
           pkg_size="$(stat -c '%s' "$pkg")"
-          read -r pfs_size header_pkg_size < <(
-            python3 -c 'import struct,sys; h=open(sys.argv[1],"rb").read(0x438); assert len(h) >= 0x438 and h[:4] == b"\\x7fCNT"; print(struct.unpack_from(">Q",h,0x418)[0], struct.unpack_from(">Q",h,0x430)[0])' "$pkg"
-          )
+          read_be64() {
+            local offset="$1"
+            local file="$2"
+            local hex
+            hex="$(dd if="$file" bs=1 skip="$offset" count=8 status=none | od -An -tx1 | tr -d ' \n')"
+            test "${#hex}" -eq 16
+            echo "$((16#$hex))"
+          }
+          magic="$(dd if="$pkg" bs=1 count=4 status=none | od -An -tx1 | tr -d ' \n')"
+          test "$magic" = "7f434e54"
+          pfs_size="$(read_be64 $((0x418)) "$pkg")"
+          header_pkg_size="$(read_be64 $((0x430)) "$pkg")"
 
           echo "PS4 payload sizes: ELF=$main_elf_size PFS=$pfs_size PKG=$pkg_size header-PKG=$header_pkg_size"
           if [ "$header_pkg_size" -ne "$pkg_size" ]; then
