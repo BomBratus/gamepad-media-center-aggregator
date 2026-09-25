@@ -7,7 +7,7 @@
 #include <orbis/AppInstUtil.h>
 #include <orbis/Bgft.h>
 #include <orbis/Sysmodule.h>
-#include <orbis/SystemService.h>
+#include <orbis/_types/sys_service.h>
 
 #include <algorithm>
 #include <array>
@@ -58,6 +58,11 @@ constexpr int kBgftOptInvisible = 0x2;
 
 extern "C" {
 int sceAppInstUtilAppExists(const char* titleId, int* exists);
+
+// OpenOrbis' packaged SystemService.h still exposes this as void(void), but
+// the actual syscall ABI takes the documented LncAppParam payload. Import only
+// the canonical type definition above and keep the function prototype here.
+int32_t sceSystemServiceLaunchApp(const char* titleId, const char** argv, LncAppParam* param);
 }
 
 struct Manifest {
