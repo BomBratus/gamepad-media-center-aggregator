@@ -121,12 +121,26 @@ jobs:
 
           test -f "$pkg"
           test -s "$pkg"
+          test -s build/GMCA
+          test -s build/GMCA.self
           test -s build/ps4/resources/font/switch_font.ttf
           test -s build/ps4/updater.pkg
           helper_pkg="$(find build -type f -name '*GMCA00002*.pkg' -print -quit)"
           test -n "$helper_pkg"
           test -s "$helper_pkg"
           cp "$helper_pkg" build/GMCA-PS4-Updater.pkg
+
+          main_elf_size="$(stat -c '%s' build/GMCA)"
+          main_self_size="$(stat -c '%s' build/GMCA.self)"
+          pkg_size="$(stat -c '%s' "$pkg")"
+          if [ "$pkg_size" -le "$main_elf_size" ] || [ "$pkg_size" -le "$main_self_size" ]; then
+            echo "Invalid PS4 package: PKG ($pkg_size bytes) is not larger than the main GMCA ELF ($main_elf_size) and SELF ($main_self_size)."
+            echo "This usually means PacBrew's shared eboot.bin was overwritten by the updater SELF before add_pkg(GMCA)."
+            exit 1
+          fi
+
+          stat -c '%n %s bytes' build/GMCA
+          stat -c '%n %s bytes' build/GMCA.self
           stat -c '%n %s bytes' build/ps4/updater.pkg
           stat -c '%n %s bytes' build/GMCA-PS4-Updater.pkg
           stat -c '%n %s bytes' build/ps4/resources/font/switch_font.ttf
@@ -139,7 +153,7 @@ jobs:
           )
           cp "$pkg" "$stable_pkg"
 
-          size="$(stat -c '%s' "$pkg")"
+          size="$pkg_size"
           sha="$(sha256sum "$pkg" | awk '{print $1}')"
           stable_sha="$(sha256sum "$stable_pkg" | awk '{print $1}')"
           test "$sha" = "$stable_sha"
