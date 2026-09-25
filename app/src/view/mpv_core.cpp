@@ -538,12 +538,12 @@ void MPVCore::init() {
     // the 00.57 diagnostic build, dump only shaders missing from that embedded
     // set after Piglet runtime compilation. ra_ps4 writes them to /data/<SHA>.c.
     ps4_mpv_use_precompiled_shaders = 1;
-    ps4_mpv_dump_shaders = 1;
+    ps4_mpv_dump_shaders = 0;
 #endif
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
     ps4diag::init(confDir, AppVersion::getUpdateVersion(), AppVersion::getCommit());
     ps4diag::write("mpv-init");
-    ps4diag::write("mpv-ps4 precompiled-shaders=1 dump-shaders=1 dump-path=/data/<SHA>.c");
+    ps4diag::write("mpv-ps4 precompiled-shaders=1 dump-shaders=0 bitmap-subs=alpha-libass-fallback");
 #endif
 
     // misc
@@ -1115,7 +1115,8 @@ void MPVCore::eventMainLoop() {
                 // full verbose mpv stream to disk or the Borealis logger.
                 shaderDiagnostic =
                     text.find("compile_attach_shader:") != std::string::npos ||
-                    text.find("ps4_mpv_use_precompiled_shaders:") != std::string::npos;
+                    text.find("ps4_mpv_use_precompiled_shaders:") != std::string::npos ||
+                    text.find("PS4 BGRA subtitle fallback:") != std::string::npos;
 
                 if (log->log_level <= MPV_LOG_LEVEL_WARN || shaderDiagnostic) {
                     if (text.size() > 512) text.resize(512);
