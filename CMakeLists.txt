@@ -415,6 +415,13 @@ elseif (PLATFORM_PS4)
         DEPENDS gmca_updater_ps4_pkg
     )
 
+    # PacBrew/OpenOrbis add_self() writes every title's eboot to the same
+    # ${CMAKE_BINARY_DIR}/eboot.bin side-effect. Building the helper and GMCA
+    # SELF targets in parallel can therefore package the updater EBOOT into the
+    # main GMCA PKG. Finish the helper bundle before GMCA can link/emit its SELF
+    # so the final eboot.bin used by add_pkg(GMCA) is deterministic.
+    add_dependencies(${PROJECT_NAME} gmca_updater_ps4.bundle)
+
     add_self(${PROJECT_NAME})
     add_pkg(${PROJECT_NAME}
             ${CMAKE_BINARY_DIR}/ps4
