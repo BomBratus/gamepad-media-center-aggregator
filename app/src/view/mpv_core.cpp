@@ -11,6 +11,11 @@
 #include <cstdio>
 #include <sys/stat.h>
 
+extern "C" {
+extern int ps4_mpv_use_precompiled_shaders;
+extern int ps4_mpv_dump_shaders;
+}
+
 // nanovg_gl.h only exposes the backend-specific declaration when included by
 // its implementation unit. Borealis exports this GLES2 helper, so declare the
 // one function GMCA needs without pulling another NanoVG implementation in.
@@ -527,9 +532,17 @@ void MPVCore::init() {
 
     auto &conf = AppConfig::instance();
     std::string confDir = conf.configDir();
+#if defined(__PS4__)
+    // The OpenOrbis libmpv package already contains the Piglet shader binaries
+    // used by wiliwili/Switchfin. They are opt-in at runtime; without this flag
+    // mpv falls back to runtime GLSL compilation on Piglet.
+    ps4_mpv_use_precompiled_shaders = 1;
+    ps4_mpv_dump_shaders = 0;
+#endif
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
     ps4diag::init(confDir, AppVersion::getUpdateVersion(), AppVersion::getCommit());
     ps4diag::write("mpv-init");
+    ps4diag::write("mpv-ps4 precompiled-shaders=1 dump-shaders=0");
 #endif
 
     // misc
@@ -761,18 +774,13 @@ void MPVCore::init() {
 #else
     mpv_opengl_init_params gl_init_params{get_proc_address, nullptr};
 #if defined(__PS4__)
-    // Upstream wiliwili enables advanced control for its PS4/OpenOrbis
-    // libmpv render context. Our on_update callback already calls
-    // mpv_render_context_update() on the Borealis/main render thread, which is
-    // the required contract when this flag is enabled.
-    int advanced_control{1};
+    // Keep advanced control disabled for the shader experiment. 00.53 showed a
+    // real HEVC playback regression with MPV_RENDER_PARAM_ADVANCED_CONTROL=1,
+    // while the blue-frame bug predates that diagnostic change.
 #endif
     mpv_render_param params[] = {
         {MPV_RENDER_PARAM_API_TYPE, const_cast<char *>(MPV_RENDER_API_TYPE_OPENGL)},
         {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl_init_params},
-#if defined(__PS4__)
-        {MPV_RENDER_PARAM_ADVANCED_CONTROL, &advanced_control},
-#endif
 #if defined(GLFW_EXPOSE_NATIVE_X11)
         {MPV_RENDER_PARAM_X11_DISPLAY, glfwGetX11Display()},
 #endif
@@ -790,7 +798,7 @@ void MPVCore::init() {
     }
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
     ps4diag::write(fmt::format(
-        "render-context created advanced-control=1 client-api=0x{:x}",
+        "render-context created advanced-control=0 precompiled-shaders=1 client-api=0x{:x}",
         static_cast<unsigned long long>(mpv_client_api_version())));
 #endif
 #endif
