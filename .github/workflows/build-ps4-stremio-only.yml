@@ -103,7 +103,7 @@ jobs:
       - name: Set up Python for local libmpv build
         uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '3.11'
 
       - name: Build GMCA patched PS4 libmpv
         shell: bash
