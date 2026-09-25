@@ -92,6 +92,7 @@ static void deleteSurfaceObj() {
 static int sPs4GlProbeFrames = 0;
 static bool sPs4GlProbeHadError = false;
 static unsigned sPs4GlSampleCounter = 0;
+static unsigned sPs4GlStateSampleCounter = 0;
 
 static std::string ps4MpvString(mpv_handle* mpv, const char* name) {
     char* value = nullptr;
@@ -153,6 +154,66 @@ static void ps4CheckGlAfterRender() {
             ps4diag::write(fmt::format("gl-probe complete status={}", sPs4GlProbeHadError ? "error" : "no-error"));
     } else if (sawError) {
         ps4diag::write("gl-sample detected-error");
+    }
+}
+
+static void ps4PrepareMpvGlState(GLuint fbo, int width, int height) {
+    // libmpv's OpenGL render API expects standard/default GL state on entry.
+    // NanoVG intentionally leaves blending enabled after its previous-frame
+    // flush, and both renderers share Piglet's context on PS4. Normalize the
+    // small set of state that can leak between them before every mpv render.
+    ++sPs4GlStateSampleCounter;
+    const bool sample = (sPs4GlStateSampleCounter % 600) == 0;
+    if (sample) {
+        GLint program = 0;
+        GLint arrayBuffer = 0;
+        GLint elementBuffer = 0;
+        GLint texture2d = 0;
+        GLint activeTexture = 0;
+        GLint currentFbo = 0;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &arrayBuffer);
+        glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &elementBuffer);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture2d);
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &currentFbo);
+        ps4diag::write(fmt::format(
+            "gl-state pre-mpv blend={} cull={} depth={} scissor={} stencil={} "
+            "program={} array={} element={} texture2d={} active=0x{:04x} fbo={}",
+            glIsEnabled(GL_BLEND) ? 1 : 0,
+            glIsEnabled(GL_CULL_FACE) ? 1 : 0,
+            glIsEnabled(GL_DEPTH_TEST) ? 1 : 0,
+            glIsEnabled(GL_SCISSOR_TEST) ? 1 : 0,
+            glIsEnabled(GL_STENCIL_TEST) ? 1 : 0,
+            program, arrayBuffer, elementBuffer, texture2d,
+            static_cast<unsigned>(activeTexture), currentFbo));
+    }
+
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+    glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_ONE, GL_ZERO);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glStencilMask(0xffffffffu);
+    glStencilFunc(GL_ALWAYS, 0, 0xffffffffu);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glViewport(0, 0, width, height);
+
+    if (sample) {
+        ps4diag::write(fmt::format(
+            "gl-state enter-mpv defaults=1 fbo={} size={}x{}",
+            fbo, width, height));
     }
 }
 
@@ -269,7 +330,7 @@ bool MPVCore::createPs4VideoTarget(int width, int height) {
         ps4_video_texture,
         width,
         height,
-        NVG_IMAGE_FLIPY | GMCA_NVG_IMAGE_NODELETE);
+        GMCA_NVG_IMAGE_NODELETE);
     if (ps4_video_nvg_image <= 0) goto fail;
 
     ps4_video_width = width;
@@ -965,9 +1026,10 @@ void MPVCore::draw(brls::Rect area, float alpha) {
             mpv_fbo.w = ps4_video_width;
             mpv_fbo.h = ps4_video_height;
             mpv_fbo.internal_format = GL_RGBA;
-            // mpv only needs FLIP_Y for a default framebuffer. This is a
-            // regular texture-backed FBO; NanoVG performs the texture-origin
-            // flip when it composites the image.
+            // This is a regular texture-backed FBO, so mpv renders in the
+            // texture's native orientation. The imported NanoVG image is kept
+            // unflipped as well; applying NVG_IMAGE_FLIPY here produced an
+            // upside-down picture on real PS4/Piglet hardware.
             flip_y = 0;
         } else {
             mpv_fbo.fbo = default_framebuffer;
@@ -976,6 +1038,10 @@ void MPVCore::draw(brls::Rect area, float alpha) {
             mpv_fbo.internal_format = 0;
             flip_y = 1;
         }
+#endif
+#if defined(__PS4__) && defined(BOREALIS_USE_OPENGL) && defined(GMCA_PS4_SAFE_SOURCES)
+        ps4PrepareMpvGlState(
+            static_cast<GLuint>(mpv_fbo.fbo), mpv_fbo.w, mpv_fbo.h);
 #endif
         mpv_render_context_render(this->mpv_context, mpv_params);
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
