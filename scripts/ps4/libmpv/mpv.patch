@@ -120,7 +120,7 @@ index f535f1f..5646b7e 100644
  // For ra.priv
  struct ra_gl {
      GL *gl;
-@@ -749,13 +753,45 @@ static void compile_attach_shader(struct ra *ra, GLuint program,
+@@ -749,13 +753,46 @@ static void compile_attach_shader(struct ra *ra, GLuint program,
      GL *gl = ra_gl_get(ra);
  
      GLuint shader = gl->CreateShader(type);
