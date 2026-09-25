@@ -685,9 +685,25 @@ void StremioBackend::getLibraryGrid(const std::string& sectionId, const media::G
             } else {
                 auto cats = engine.catalogsForType(sid);
                 if (cats.empty()) throw std::runtime_error("stremio: no catalog for type");
-                base = cats.front().first.base;
-                ctype = cats.front().second.type;
-                catId = cats.front().second.id;
+
+                // Genre directories are built from the first catalog that actually
+                // declares genre options. Keep the drill-down on that same catalog:
+                // the first catalog for a type may belong to another addon and may
+                // not support the selected genre at all, which produces an empty
+                // grid even though the Genres page itself is populated.
+                auto selected = cats.begin();
+                if (!genreId.empty()) {
+                    for (auto it = cats.begin(); it != cats.end(); ++it) {
+                        const auto& genres = it->second.genres;
+                        if (std::find(genres.begin(), genres.end(), genreId) != genres.end()) {
+                            selected = it;
+                            break;
+                        }
+                    }
+                }
+                base = selected->first.base;
+                ctype = selected->second.type;
+                catId = selected->second.id;
             }
             std::vector<std::pair<std::string, std::string>> extra;
             if (startCopy > 0) extra.emplace_back("skip", std::to_string(startCopy));
