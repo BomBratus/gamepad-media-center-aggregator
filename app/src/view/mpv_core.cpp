@@ -1103,6 +1103,7 @@ void MPVCore::eventMainLoop() {
         case MPV_EVENT_LOG_MESSAGE: {
             auto log = (mpv_event_log_message *)event->data;
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+            bool shaderDiagnostic = false;
             if (log) {
                 std::string text = log->text ? log->text : "";
                 while (!text.empty() && (text.back() == '\n' || text.back() == '\r'))
@@ -1110,8 +1111,8 @@ void MPVCore::eventMainLoop() {
 
                 // The PS4 libmpv ra_ps4 patch emits these at MP_VERBOSE. Keep
                 // only the shader-selection diagnostics instead of copying the
-                // full verbose mpv stream to disk.
-                const bool shaderDiagnostic =
+                // full verbose mpv stream to disk or the Borealis logger.
+                shaderDiagnostic =
                     text.find("compile_attach_shader:") != std::string::npos ||
                     text.find("ps4_mpv_use_precompiled_shaders:") != std::string::npos;
 
@@ -1125,6 +1126,8 @@ void MPVCore::eventMainLoop() {
                         text));
                 }
             }
+            if (!log || (log->log_level > MPV_LOG_LEVEL_WARN && !shaderDiagnostic))
+                break;
 #endif
             if (log->log_level <= MPV_LOG_LEVEL_ERROR) {
                 brls::Logger::error("{}: {}", log->prefix, log->text);
