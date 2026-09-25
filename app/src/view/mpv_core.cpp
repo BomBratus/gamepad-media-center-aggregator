@@ -155,6 +155,60 @@ static void ps4CheckGlAfterRender() {
         ps4diag::write("gl-sample detected-error");
     }
 }
+
+static void ps4ProbeVideoFbo(GLuint fbo, int width, int height) {
+    // glReadPixels is synchronous on Piglet, so keep this deliberately tiny
+    // and infrequent: a 16x16 RGBA8 center tile once every ~10 seconds at
+    // 60 fps. If the TV turns blue while this tile is still varied/non-blue,
+    // the fault is downstream in the FBO -> NanoVG composition path.
+    if (fbo == 0 || width < 16 || height < 16 || (sPs4GlSampleCounter % 600) != 0) return;
+
+    constexpr int kProbeSize = 16;
+    unsigned char pixels[kProbeSize * kProbeSize * 4]{};
+    GLint previousFbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glReadPixels(
+        (width - kProbeSize) / 2,
+        (height - kProbeSize) / 2,
+        kProbeSize,
+        kProbeSize,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        pixels);
+    const GLenum readError = glGetError();
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousFbo));
+
+    if (readError != GL_NO_ERROR) {
+        ps4diag::write(fmt::format(
+            "fbo-pixels read-error=0x{:04x} fbo={} size={}x{}",
+            static_cast<unsigned>(readError), fbo, width, height));
+        return;
+    }
+
+    uint64_t sum[4] = {0, 0, 0, 0};
+    unsigned minv[4] = {255, 255, 255, 255};
+    unsigned maxv[4] = {0, 0, 0, 0};
+    constexpr int kPixelCount = kProbeSize * kProbeSize;
+    for (int i = 0; i < kPixelCount; ++i) {
+        for (int c = 0; c < 4; ++c) {
+            const unsigned value = pixels[i * 4 + c];
+            sum[c] += value;
+            if (value < minv[c]) minv[c] = value;
+            if (value > maxv[c]) maxv[c] = value;
+        }
+    }
+
+    ps4diag::write(fmt::format(
+        "fbo-pixels fbo={} size={}x{} center={}x{} "
+        "avg={},{},{},{} range-r={}..{} range-g={}..{} range-b={}..{} range-a={}..{}",
+        fbo, width, height, kProbeSize, kProbeSize,
+        static_cast<unsigned>(sum[0] / kPixelCount),
+        static_cast<unsigned>(sum[1] / kPixelCount),
+        static_cast<unsigned>(sum[2] / kPixelCount),
+        static_cast<unsigned>(sum[3] / kPixelCount),
+        minv[0], maxv[0], minv[1], maxv[1], minv[2], maxv[2], minv[3], maxv[3]));
+}
 #endif
 
 #if defined(__PS4__) && defined(BOREALIS_USE_OPENGL) && !defined(MPV_SW_RENDER)
@@ -482,6 +536,14 @@ void MPVCore::init() {
         mpv_set_option_string(mpv, "sub-font", "nintendo_udsg-r_ko_003");
 #elif defined(__PS4__)
     mpv_set_option_string(mpv, "vd-lavc-threads", "6");
+    // Piglet/OpenGL ES is more predictable with an 8-bit intermediate target.
+    // mpv's default "auto" can select higher precision internal FBO formats;
+    // keep PS4 on RGBA8 while we isolate the intermittent solid-blue output.
+    const int ps4FboFormatResult = mpv_set_option_string(mpv, "fbo-format", "rgba8");
+#if defined(GMCA_PS4_SAFE_SOURCES)
+    ps4diag::write(fmt::format(
+        "mpv-option fbo-format=rgba8 result={}", ps4FboFormatResult));
+#endif
 #elif defined(__PSV__)
     mpv_set_option_string(mpv, "vd-lavc-threads", "4");
     mpv_set_option_string(mpv, "fbo-format", "rgba8");
@@ -918,6 +980,10 @@ void MPVCore::draw(brls::Rect area, float alpha) {
         mpv_render_context_render(this->mpv_context, mpv_params);
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
         ps4CheckGlAfterRender();
+#if defined(BOREALIS_USE_OPENGL)
+        if (ps4Offscreen)
+            ps4ProbeVideoFbo(ps4_video_fbo, ps4_video_width, ps4_video_height);
+#endif
 #endif
 #ifdef BOREALIS_USE_D3D11
         D3D11_CONTEXT->beginFrame();
