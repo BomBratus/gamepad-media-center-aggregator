@@ -220,9 +220,9 @@ static void ps4PrepareMpvGlState(GLuint fbo, int width, int height) {
 static void ps4ProbeVideoFbo(GLuint fbo, int width, int height) {
     // glReadPixels is synchronous on Piglet, so keep this deliberately tiny
     // and infrequent: a 16x16 RGBA8 center tile once every ~10 seconds at
-    // 60 fps. If the TV turns blue while this tile is still varied/non-blue,
-    // the fault is downstream in the FBO -> NanoVG composition path.
-    if (fbo == 0 || width < 16 || height < 16 || (sPs4GlSampleCounter % 600) != 0) return;
+    // 60 fps. The default PS4 framebuffer is normally object 0, so 0 is a
+    // valid probe target in the direct-framebuffer path.
+    if (width < 16 || height < 16 || (sPs4GlSampleCounter % 600) != 0) return;
 
     constexpr int kProbeSize = 16;
     unsigned char pixels[kProbeSize * kProbeSize * 4]{};
@@ -829,10 +829,12 @@ void MPVCore::init() {
     // API explicitly allows 0 here to mean "unknown"; this is deterministic and
     // avoids passing stack/object garbage as a GL internal format.
     mpv_fbo.internal_format = 0;
-#if defined(__PS4__)
-    createPs4VideoTarget(brls::Application::windowWidth, brls::Application::windowHeight);
-#endif
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+    // Match the PS4 path used by upstream wiliwili: render libmpv directly into
+    // Piglet's system/default framebuffer and let Borealis flush its UI over it.
+    // The dedicated texture-backed FBO used by 00.48-00.51 produced a stable
+    // solid-blue frame inside libmpv itself on real hardware.
+    ps4diag::write("render-path=default-framebuffer direct=1 offscreen=0");
     const GLubyte* glVendor = glGetString(GL_VENDOR);
     const GLubyte* glRenderer = glGetString(GL_RENDERER);
     const GLubyte* glVersion = glGetString(GL_VERSION);
@@ -951,15 +953,12 @@ void MPVCore::setFrameSize(brls::Rect area) {
         mpv_render_context_report_swap(this->mpv_context);
     });
 #elif !defined(BOREALIS_USE_D3D11)
-#if defined(__PS4__)
-    // PS4 normally has a fixed drawable size, but keep the owned target in
-    // sync if Piglet/SDL ever reports a different framebuffer (e.g. Neo mode).
-    if (!createPs4VideoTarget(brls::Application::windowWidth, brls::Application::windowHeight)) {
-        this->mpv_fbo.fbo = default_framebuffer;
-        this->mpv_fbo.internal_format = 0;
-    }
-#else
-    // Using default framebuffer
+#if defined(__PS4__) && defined(BOREALIS_USE_OPENGL)
+    // PS4 follows the upstream MPV_NO_FB strategy: mpv always targets Piglet's
+    // default framebuffer. Keep the target description synchronized with the
+    // actual drawable size, including Neo/alternate output modes.
+    this->mpv_fbo.fbo = default_framebuffer;
+    this->mpv_fbo.internal_format = 0;
 #endif
     this->mpv_fbo.w = brls::Application::windowWidth;
     this->mpv_fbo.h = brls::Application::windowHeight;
@@ -1020,24 +1019,15 @@ void MPVCore::draw(brls::Rect area, float alpha) {
 #endif
         // 绘制视频
 #if defined(__PS4__) && defined(BOREALIS_USE_OPENGL)
-        const bool ps4Offscreen = ps4_video_target_ready && ps4_video_fbo != 0 && ps4_video_nvg_image > 0;
-        if (ps4Offscreen) {
-            mpv_fbo.fbo = static_cast<int>(ps4_video_fbo);
-            mpv_fbo.w = ps4_video_width;
-            mpv_fbo.h = ps4_video_height;
-            mpv_fbo.internal_format = GL_RGBA;
-            // This is a regular texture-backed FBO, so mpv renders in the
-            // texture's native orientation. The imported NanoVG image is kept
-            // unflipped as well; applying NVG_IMAGE_FLIPY here produced an
-            // upside-down picture on real PS4/Piglet hardware.
-            flip_y = 0;
-        } else {
-            mpv_fbo.fbo = default_framebuffer;
-            mpv_fbo.w = brls::Application::windowWidth;
-            mpv_fbo.h = brls::Application::windowHeight;
-            mpv_fbo.internal_format = 0;
-            flip_y = 1;
-        }
+        // PS4/OpenOrbis: render directly to Piglet's default framebuffer, as
+        // upstream wiliwili does with MPV_NO_FB. A default framebuffer needs
+        // mpv's vertical flip; the 00.51 no-flip rule only applied to the
+        // texture-backed offscreen target.
+        mpv_fbo.fbo = default_framebuffer;
+        mpv_fbo.w = brls::Application::windowWidth;
+        mpv_fbo.h = brls::Application::windowHeight;
+        mpv_fbo.internal_format = 0;
+        flip_y = 1;
 #endif
 #if defined(__PS4__) && defined(BOREALIS_USE_OPENGL) && defined(GMCA_PS4_SAFE_SOURCES)
         ps4PrepareMpvGlState(
@@ -1047,8 +1037,8 @@ void MPVCore::draw(brls::Rect area, float alpha) {
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
         ps4CheckGlAfterRender();
 #if defined(BOREALIS_USE_OPENGL)
-        if (ps4Offscreen)
-            ps4ProbeVideoFbo(ps4_video_fbo, ps4_video_width, ps4_video_height);
+        ps4ProbeVideoFbo(
+            static_cast<GLuint>(mpv_fbo.fbo), mpv_fbo.w, mpv_fbo.h);
 #endif
 #endif
 #ifdef BOREALIS_USE_D3D11
@@ -1060,20 +1050,6 @@ void MPVCore::draw(brls::Rect area, float alpha) {
         glViewport(0, 0, brls::Application::windowWidth, brls::Application::windowHeight);
 #endif
         mpv_render_context_report_swap(this->mpv_context);
-#if defined(__PS4__) && defined(BOREALIS_USE_OPENGL)
-        if (ps4Offscreen) {
-            // Composite the completed video texture through NanoVG instead of
-            // leaving mpv and Borealis to render into the same framebuffer.
-            NVGcontext* vg = brls::Application::getNVGContext();
-            NVGpaint image = nvgImagePattern(
-                vg, area.getMinX(), area.getMinY(), area.getWidth(), area.getHeight(),
-                0.0f, ps4_video_nvg_image, alpha);
-            nvgBeginPath(vg);
-            nvgRect(vg, area.getMinX(), area.getMinY(), area.getWidth(), area.getHeight());
-            nvgFillPaint(vg, image);
-            nvgFill(vg);
-        }
-#endif
     }
 #endif
 }
