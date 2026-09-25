@@ -121,12 +121,41 @@ jobs:
 
           test -f "$pkg"
           test -s "$pkg"
+          test -s build/GMCA
           test -s build/ps4/resources/font/switch_font.ttf
           test -s build/ps4/updater.pkg
           helper_pkg="$(find build -type f -name '*GMCA00002*.pkg' -print -quit)"
           test -n "$helper_pkg"
           test -s "$helper_pkg"
           cp "$helper_pkg" build/GMCA-PS4-Updater.pkg
+
+          main_elf_size="$(stat -c '%s' build/GMCA)"
+          pkg_size="$(stat -c '%s' "$pkg")"
+          read_be64() {
+            local offset="$1"
+            local file="$2"
+            local hex
+            hex="$(dd if="$file" bs=1 skip="$offset" count=8 status=none | od -An -tx1 | tr -d ' \n')"
+            test "${#hex}" -eq 16
+            echo "$((16#$hex))"
+          }
+          magic="$(dd if="$pkg" bs=1 count=4 status=none | od -An -tx1 | tr -d ' \n')"
+          test "$magic" = "7f434e54"
+          pfs_size="$(read_be64 $((0x418)) "$pkg")"
+          header_pkg_size="$(read_be64 $((0x430)) "$pkg")"
+
+          echo "PS4 payload sizes: ELF=$main_elf_size PFS=$pfs_size PKG=$pkg_size header-PKG=$header_pkg_size"
+          if [ "$header_pkg_size" -ne "$pkg_size" ]; then
+            echo "Invalid PS4 package: header package size does not match the actual file."
+            exit 1
+          fi
+          if [ "$pkg_size" -le "$main_elf_size" ] || [ "$pfs_size" -le "$main_elf_size" ]; then
+            echo "Invalid PS4 package: payload is not larger than the main GMCA ELF."
+            echo "This usually means PacBrew's shared eboot.bin was overwritten by the updater SELF before add_pkg(GMCA)."
+            exit 1
+          fi
+
+          stat -c '%n %s bytes' build/GMCA
           stat -c '%n %s bytes' build/ps4/updater.pkg
           stat -c '%n %s bytes' build/GMCA-PS4-Updater.pkg
           stat -c '%n %s bytes' build/ps4/resources/font/switch_font.ttf
@@ -139,7 +168,7 @@ jobs:
           )
           cp "$pkg" "$stable_pkg"
 
-          size="$(stat -c '%s' "$pkg")"
+          size="$pkg_size"
           sha="$(sha256sum "$pkg" | awk '{print $1}')"
           stable_sha="$(sha256sum "$stable_pkg" | awk '{print $1}')"
           test "$sha" = "$stable_sha"
