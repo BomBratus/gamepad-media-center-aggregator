@@ -8,8 +8,8 @@ arch=('any')
 url='https://mpv.io/'
 license=('GPL')
 options=(!strip !debug libtool staticlibs)
-source=("libmpv-${pkgver}.tar.gz::https://github.com/mpv-player/mpv/archive/v${pkgver}.tar.gz" "mpv.patch")
-sha256sums=('29abc44f8ebee013bb2f9fe14d80b30db19b534c679056e4851ceadf5a5e8bf6' 'SKIP')
+source=("libmpv-${pkgver}.tar.gz::https://github.com/mpv-player/mpv/archive/v${pkgver}.tar.gz" "mpv.patch" "gmca-bitmap-subs.patch")
+sha256sums=('29abc44f8ebee013bb2f9fe14d80b30db19b534c679056e4851ceadf5a5e8bf6' 'SKIP' 'SKIP')
 makedepends=('ps4-openorbis-pkg-config' 'ps4-openorbis-vars')
 depends=('ps4-openorbis-sdl2' 'ps4-openorbis-ffmpeg')
 groups=('ps4-openorbis-portlibs')
@@ -17,6 +17,7 @@ groups=('ps4-openorbis-portlibs')
 prepare() {
   cd mpv-$pkgver
   patch -Np1 -i "$srcdir/mpv.patch"
+  patch -Np1 -i "$srcdir/gmca-bitmap-subs.patch"
 }
 
 build() {
