@@ -1,0 +1,96 @@
+diff --git a/video/out/gpu/osd.c b/video/out/gpu/osd.c
+--- a/video/out/gpu/osd.c
++++ b/video/out/gpu/osd.c
+@@ -121,21 +121,30 @@ static bool upload_osd(struct mpgl_osd *ctx, struct mpgl_osd_part *osd,
+ {
+     struct ra *ra = ctx->ra;
+     bool ok = false;
++#ifdef __PS4__
++    uint8_t *ps4_alpha = NULL;
++#endif
+ 
+     assert(imgs->packed);
+ 
+     int req_w = next_pow2(imgs->packed_w);
+     int req_h = next_pow2(imgs->packed_h);
+ 
+-    const struct ra_format *fmt = ctx->fmt_table[imgs->format];
++    enum sub_bitmap_format upload_format = imgs->format;
++#ifdef __PS4__
++    if (upload_format == SUBBITMAP_BGRA)
++        upload_format = SUBBITMAP_LIBASS;
++#endif
++
++    const struct ra_format *fmt = ctx->fmt_table[upload_format];
+     assert(fmt);
+ 
+     if (!osd->texture || req_w > osd->w || req_h > osd->h ||
+-        osd->format != imgs->format)
++        osd->format != upload_format)
+     {
+         ra_tex_free(ra, &osd->texture);
+ 
+-        osd->format = imgs->format;
++        osd->format = upload_format;
+         osd->w = MPMAX(32, req_w);
+         osd->h = MPMAX(32, req_h);
+ 
+@@ -165,17 +174,44 @@ static bool upload_osd(struct mpgl_osd *ctx, struct mpgl_osd_part *osd,
+             goto done;
+     }
+ 
++    const uint8_t *upload_src = imgs->packed->planes[0];
++    int upload_stride = imgs->packed->stride[0];
++#ifdef __PS4__
++    if (imgs->format == SUBBITMAP_BGRA) {
++        size_t alpha_size = (size_t)imgs->packed_w * imgs->packed_h;
++        ps4_alpha = talloc_array(NULL, uint8_t, alpha_size);
++        if (!ps4_alpha)
++            goto done;
++
++        for (int y = 0; y < imgs->packed_h; y++) {
++            const uint8_t *src =
++                (const uint8_t *)imgs->packed->planes[0] +
++                (ptrdiff_t)y * imgs->packed->stride[0];
++            uint8_t *dst = ps4_alpha + (size_t)y * imgs->packed_w;
++            for (int x = 0; x < imgs->packed_w; x++)
++                dst[x] = src[x * 4 + 3];
++        }
++
++        upload_src = ps4_alpha;
++        upload_stride = imgs->packed_w;
++        MP_VERBOSE(ctx, "PS4 BGRA subtitle fallback: using alpha-mask LIBASS path.\n");
++    }
++#endif
++
+     struct ra_tex_upload_params params = {
+         .tex = osd->texture,
+-        .src = imgs->packed->planes[0],
++        .src = upload_src,
+         .invalidate = true,
+         .rc = &(struct mp_rect){0, 0, imgs->packed_w, imgs->packed_h},
+-        .stride = imgs->packed->stride[0],
++        .stride = upload_stride,
+     };
+ 
+     ok = ra->fns->tex_upload(ra, &params);
+ 
+ done:
++#ifdef __PS4__
++    talloc_free(ps4_alpha);
++#endif
+     return ok;
+ }
+ 
+@@ -199,6 +235,12 @@ static void gen_osd_cb(void *pctx, struct sub_bitmaps *imgs)
+ 
+     MP_TARRAY_GROW(osd, osd->subparts, osd->num_subparts);
+     memcpy(osd->subparts, imgs->parts,
+            osd->num_subparts * sizeof(osd->subparts[0]));
++#ifdef __PS4__
++    if (imgs->format == SUBBITMAP_BGRA) {
++        for (int n = 0; n < osd->num_subparts; n++)
++            osd->subparts[n].libass.color = 0xFFFFFF00;
++    }
++#endif
+ }
