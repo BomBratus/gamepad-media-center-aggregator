@@ -597,13 +597,8 @@ void MPVCore::init() {
         mpv_set_option_string(mpv, "sub-font", "nintendo_udsg-r_ko_003");
 #elif defined(__PS4__)
     mpv_set_option_string(mpv, "vd-lavc-threads", "6");
-    // Piglet/OpenGL ES is more predictable with an 8-bit intermediate target.
-    // mpv's default "auto" can select higher precision internal FBO formats;
-    // keep PS4 on RGBA8 while we isolate the intermittent solid-blue output.
-    const int ps4FboFormatResult = mpv_set_option_string(mpv, "fbo-format", "rgba8");
 #if defined(GMCA_PS4_SAFE_SOURCES)
-    ps4diag::write(fmt::format(
-        "mpv-option fbo-format=rgba8 result={}", ps4FboFormatResult));
+    ps4diag::write("mpv-option fbo-format=auto (00.50 rgba8 experiment removed)");
 #endif
 #elif defined(__PSV__)
     mpv_set_option_string(mpv, "vd-lavc-threads", "4");
@@ -622,6 +617,15 @@ void MPVCore::init() {
     } else {
         mpv_set_option_string(mpv, "hwdec", "no");
     }
+
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+    // Keep this at WARN for normal runtime: shader compile/link failures and
+    // renderer errors are emitted at warn/error, while requesting verbose mpv
+    // logs globally would add avoidable event traffic on PS4.
+    const int ps4LogRequestResult = mpv_request_log_messages(mpv, "warn");
+    ps4diag::write(fmt::format(
+        "mpv-log-request level=warn result={}", ps4LogRequestResult));
+#endif
 
     if (MPVCore::DEBUG) {
         mpv_set_option_string(mpv, "terminal", "yes");
@@ -756,9 +760,19 @@ void MPVCore::init() {
     }
 #else
     mpv_opengl_init_params gl_init_params{get_proc_address, nullptr};
+#if defined(__PS4__)
+    // Upstream wiliwili enables advanced control for its PS4/OpenOrbis
+    // libmpv render context. Our on_update callback already calls
+    // mpv_render_context_update() on the Borealis/main render thread, which is
+    // the required contract when this flag is enabled.
+    int advanced_control{1};
+#endif
     mpv_render_param params[] = {
         {MPV_RENDER_PARAM_API_TYPE, const_cast<char *>(MPV_RENDER_API_TYPE_OPENGL)},
         {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl_init_params},
+#if defined(__PS4__)
+        {MPV_RENDER_PARAM_ADVANCED_CONTROL, &advanced_control},
+#endif
 #if defined(GLFW_EXPOSE_NATIVE_X11)
         {MPV_RENDER_PARAM_X11_DISPLAY, glfwGetX11Display()},
 #endif
@@ -775,7 +789,9 @@ void MPVCore::init() {
         brls::fatal("failed to initialize mpv context");
     }
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
-    ps4diag::write("render-context created");
+    ps4diag::write(fmt::format(
+        "render-context created advanced-control=1 client-api=0x{:x}",
+        static_cast<unsigned long long>(mpv_client_api_version())));
 #endif
 #endif
 #ifdef BOREALIS_USE_D3D11
@@ -1077,6 +1093,19 @@ void MPVCore::eventMainLoop() {
             return;
         case MPV_EVENT_LOG_MESSAGE: {
             auto log = (mpv_event_log_message *)event->data;
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+            if (log && log->log_level <= MPV_LOG_LEVEL_WARN) {
+                std::string text = log->text ? log->text : "";
+                while (!text.empty() && (text.back() == '\n' || text.back() == '\r'))
+                    text.pop_back();
+                if (text.size() > 512) text.resize(512);
+                ps4diag::write(fmt::format(
+                    "mpv-log level={} prefix={} text={}",
+                    static_cast<int>(log->log_level),
+                    log->prefix ? log->prefix : "-",
+                    text));
+            }
+#endif
             if (log->log_level <= MPV_LOG_LEVEL_ERROR) {
                 brls::Logger::error("{}: {}", log->prefix, log->text);
             } else if (log->log_level <= MPV_LOG_LEVEL_WARN) {
