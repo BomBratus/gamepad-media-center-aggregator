@@ -1,7 +1,7 @@
 diff --git a/video/out/gpu/osd.c b/video/out/gpu/osd.c
 --- a/video/out/gpu/osd.c
 +++ b/video/out/gpu/osd.c
-@@ -121,19 +121,29 @@ static bool upload_osd(struct mpgl_osd *ctx, struct mpgl_osd_part *osd,
+@@ -121,21 +121,30 @@ static bool upload_osd(struct mpgl_osd *ctx, struct mpgl_osd_part *osd,
  {
      struct ra *ra = ctx->ra;
      bool ok = false;
@@ -35,7 +35,7 @@ diff --git a/video/out/gpu/osd.c b/video/out/gpu/osd.c
          osd->w = MPMAX(32, req_w);
          osd->h = MPMAX(32, req_h);
  
-@@ -165,17 +175,39 @@ static bool upload_osd(struct mpgl_osd *ctx, struct mpgl_osd_part *osd,
+@@ -165,17 +174,44 @@ static bool upload_osd(struct mpgl_osd *ctx, struct mpgl_osd_part *osd,
              goto done;
      }
  
@@ -82,7 +82,7 @@ diff --git a/video/out/gpu/osd.c b/video/out/gpu/osd.c
      return ok;
  }
  
-@@ -199,6 +231,13 @@ static void gen_osd_cb(void *pctx, struct sub_bitmaps *imgs)
+@@ -199,6 +235,12 @@ static void gen_osd_cb(void *pctx, struct sub_bitmaps *imgs)
  
      MP_TARRAY_GROW(osd, osd->subparts, osd->num_subparts);
      memcpy(osd->subparts, imgs->parts,
