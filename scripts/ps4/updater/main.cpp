@@ -174,8 +174,11 @@ int main(int, char*[]) {
         resolve(hApp, "sceAppInstUtilAppExists", reinterpret_cast<void**>(&pAppExists)) &
         resolve(hBgft, "sceBgftServiceInit", reinterpret_cast<void**>(&pBgftInit)) &
         resolve(hBgft, "sceBgftServiceIntDownloadRegisterTaskByStorageEx", reinterpret_cast<void**>(&pBgftRegister)) &
-        resolve(hBgft, "sceBgftServiceDownloadStartTask", reinterpret_cast<void**>(&pBgftStart)) &
-        resolve(hBgft, "sceBgftServiceDownloadGetProgress", reinterpret_cast<void**>(&pBgftGetProgress));
+        resolve(hBgft, "sceBgftServiceDownloadStartTask", reinterpret_cast<void**>(&pBgftStart));
+    bool progressOk =
+        resolve(hBgft, "sceBgftServiceDownloadGetProgress", reinterpret_cast<void**>(&pBgftGetProgress)) ||
+        resolve(hBgft, "sceBgftServiceIntDownloadGetProgress", reinterpret_cast<void**>(&pBgftGetProgress));
+    ok = ok && progressOk;
     if (!ok) {
         logLine("required installer symbol missing");
         return 4;
