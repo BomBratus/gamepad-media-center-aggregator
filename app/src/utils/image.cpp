@@ -1,6 +1,7 @@
 #include "utils/image.hpp"
 #include "utils/thread.hpp"
 #include <fstream>
+#include <vector>
 #include <fmt/format.h>
 #include <borealis/core/cache_helper.hpp>
 #ifdef USE_WEBP
