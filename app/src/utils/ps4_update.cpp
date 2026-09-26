@@ -54,6 +54,8 @@ constexpr size_t kBgftHeapSize = 1024 * 1024;
 constexpr const char* kUpdaterTitleId = "GMCA00002";
 constexpr const char* kBundledUpdaterPkg = "/app0/updater.pkg";
 constexpr const char* kUpdaterPkgPath = "/data/GMCA/updater.pkg";
+constexpr const char* kDownloadedPkgPath = "/data/pkg/GMCA-PS4-Stremio-only.pkg";
+constexpr const char* kUpdateCompleteMarker = "/data/GMCA/update-complete";
 constexpr int kBgftOptInvisible = 0x2;
 
 extern "C" {
@@ -83,6 +85,7 @@ struct InstallResult {
 static OrbisBgftInitParams sBgftInitParams{};
 static bool sBgftInitialized = false;
 static bool sInstallerModulesReady = false;
+static std::atomic_bool sCleanupStarted{false};
 
 inline uint32_t rotr(uint32_t v, uint32_t n) {
     return (v >> n) | (v << (32 - n));
@@ -368,6 +371,36 @@ InstallResult queueUpdaterInstall() {
         return result;
     }
 
+    // Always install the helper bundled with THIS GMCA build. A helper left by
+    // an older release must never be reused: updater behavior changes independently
+    // from the main title and stale GMCA00002 was the cause of repeated bad handoffs.
+    int exists = 0;
+    int32_t rc = sceAppInstUtilAppExists(kUpdaterTitleId, &exists);
+    if (rc != 0) {
+        result.code = rc;
+        result.stage = "updater presence check";
+        return result;
+    }
+    if (exists) {
+        rc = sceAppInstUtilAppUnInstall(kUpdaterTitleId);
+        if (rc != 0) {
+            result.code = rc;
+            result.stage = "old updater removal";
+            return result;
+        }
+        for (int i = 0; i < 30; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            exists = 0;
+            rc = sceAppInstUtilAppExists(kUpdaterTitleId, &exists);
+            if (rc == 0 && !exists) break;
+        }
+        if (rc != 0 || exists) {
+            result.code = rc == 0 ? -3 : rc;
+            result.stage = "old updater removal timeout";
+            return result;
+        }
+    }
+
     std::string copyError;
     if (!copyBundledUpdater(copyError)) {
         result.code = -1;
@@ -382,7 +415,7 @@ InstallResult queueUpdaterInstall() {
     std::string appInstPath;
     char titleId[16] = {};
     int32_t isApp = 0;
-    int32_t rc = -1;
+    rc = -1;
     for (const auto& candidate : candidates) {
         std::memset(titleId, 0, sizeof(titleId));
         isApp = 0;
@@ -439,10 +472,11 @@ int32_t launchUpdater() {
     return sceSystemServiceLaunchApp(kUpdaterTitleId, argv, &param);
 }
 
-[[noreturn]] void exitForUpdaterHandoff() {
-    // The helper waits before touching GMCA00000. End this process immediately
-    // so background HTTP/mpv threads cannot keep the title locked.
-    std::_Exit(0);
+void exitForUpdaterHandoff() {
+    // Request Borealis' normal shutdown instead of killing the process with
+    // _Exit(). main() will unwind the UI and stop GMCA's worker pool cleanly;
+    // the helper already waits before touching GMCA00000.
+    brls::Application::quit();
 }
 
 brls::Dialog* makeUpdateDialog(const std::string& title, const std::string& body) {
@@ -536,17 +570,14 @@ void startUpdate(const Manifest& manifest) {
             // Never ask the running GMCA title to overwrite itself. Prepare a
             // separate helper title, launch it, then terminate this process
             // immediately so GMCA00000 is unlocked before AppInstUtil touches it.
-            bool helperReady = isUpdaterInstalled();
-            InstallResult helperInstall;
-            if (!helperReady) {
-                helperInstall = queueUpdaterInstall();
-                if (helperInstall.queued) {
-                    for (int i = 0; i < 60 && !helperReady; ++i) {
-                        std::this_thread::sleep_for(std::chrono::seconds(2));
-                        helperReady = isUpdaterInstalled();
-                    }
-                    if (helperReady) std::this_thread::sleep_for(std::chrono::seconds(3));
+            bool helperReady = false;
+            InstallResult helperInstall = queueUpdaterInstall();
+            if (helperInstall.queued) {
+                for (int i = 0; i < 60 && !helperReady; ++i) {
+                    std::this_thread::sleep_for(std::chrono::seconds(2));
+                    helperReady = isUpdaterInstalled();
                 }
+                if (helperReady) std::this_thread::sleep_for(std::chrono::seconds(3));
             }
 
             int32_t launchResult = helperReady ? launchUpdater() : -1;
@@ -587,6 +618,64 @@ void startUpdate(const Manifest& manifest) {
     });
 }
 
+void cleanupUpdaterArtifacts() {
+    if (sCleanupStarted.exchange(true)) return;
+
+    // Normal launches should not pay the AppInstUtil cost. A bundled helper copy
+    // or completion marker means an updater handoff actually happened (including
+    // stale pre-00.61 helpers), so clean it asynchronously after startup.
+    if (fileSize(kUpdaterPkgPath) <= 0 && fileSize(kUpdateCompleteMarker) < 0) return;
+
+    ThreadPool::instance().submit([](HTTP&) {
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+
+        int32_t initError = 0;
+        if (!ensureInstallerModules(initError)) {
+            brls::Logger::warning("PS4 updater cleanup: installer init failed 0x{:08X}",
+                static_cast<uint32_t>(initError));
+            return;
+        }
+
+        int updating = 0;
+        int32_t rc = sceAppInstUtilAppIsInUpdating(kTitleId, &updating);
+        if (rc == 0 && updating) {
+            brls::Logger::warning("PS4 updater cleanup deferred: GMCA is still updating");
+            return;
+        }
+
+        bool helperGone = false;
+        for (int i = 0; i < 15; ++i) {
+            int exists = 0;
+            rc = sceAppInstUtilAppExists(kUpdaterTitleId, &exists);
+            if (rc == 0 && !exists) {
+                helperGone = true;
+                break;
+            }
+            if (rc == 0 && exists) {
+                int32_t removeRc = sceAppInstUtilAppUnInstall(kUpdaterTitleId);
+                if (removeRc != 0)
+                    brls::Logger::warning("PS4 updater cleanup retry {}: uninstall returned 0x{:08X}",
+                        i + 1, static_cast<uint32_t>(removeRc));
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+
+        if (!helperGone) {
+            brls::Logger::warning("PS4 updater cleanup: helper still installed; will retry next launch");
+            return;
+        }
+
+        std::remove(kUpdaterPkgPath);
+        if (fileSize(kUpdateCompleteMarker) >= 0) {
+            // Only a helper-confirmed completed overwrite may delete the recovery
+            // PKG. Failed/incomplete updates intentionally leave it in /data/pkg.
+            std::remove(kDownloadedPkgPath);
+            std::remove(kUpdateCompleteMarker);
+        }
+        brls::Logger::info("PS4 updater cleanup complete");
+    });
+}
+
 }  // namespace
 
 std::string currentVersion() {
@@ -594,6 +683,8 @@ std::string currentVersion() {
 }
 
 void checkUpdate(int delay, bool showUpToDateDialog) {
+    cleanupUpdaterArtifacts();
+
     if (!AppVersion::updating->load()) {
         Dialog::cancelable("main/setting/others/updating"_i18n, [] { AppVersion::updating->store(true); });
         return;
