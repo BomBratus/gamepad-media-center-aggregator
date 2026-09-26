@@ -4,10 +4,6 @@
 
 #include <borealis.hpp>
 #include <nlohmann/json.hpp>
-#include <orbis/AppInstUtil.h>
-#include <orbis/Bgft.h>
-#include <orbis/Sysmodule.h>
-#include <orbis/_types/sys_service.h>
 
 #include <algorithm>
 #include <array>
@@ -17,7 +13,6 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -26,7 +21,6 @@
 #include <string>
 #include <sys/stat.h>
 #include <thread>
-#include <vector>
 
 #include "api/http.hpp"
 #include "utils/config.hpp"
@@ -50,22 +44,6 @@ constexpr const char* kManifestUrl =
 constexpr const char* kPackageUrl =
     "https://github.com/BomBratus/gamepad-media-center-aggregator/releases/download/"
     "ps4-stremio-latest/GMCA-PS4-Stremio-only.pkg";
-constexpr size_t kBgftHeapSize = 1024 * 1024;
-constexpr const char* kUpdaterTitleId = "GMCA00002";
-constexpr const char* kBundledUpdaterPkg = "/app0/updater.pkg";
-constexpr const char* kUpdaterPkgPath = "/data/GMCA/updater.pkg";
-constexpr const char* kDownloadedPkgPath = "/data/pkg/GMCA-PS4-Stremio-only.pkg";
-constexpr const char* kUpdateCompleteMarker = "/data/GMCA/update-complete";
-constexpr int kBgftOptInvisible = 0x2;
-
-extern "C" {
-int sceAppInstUtilAppExists(const char* titleId, int* exists);
-
-// OpenOrbis' packaged SystemService.h still exposes this as void(void), but
-// the actual syscall ABI takes the documented LncAppParam payload. Import only
-// the canonical type definition above and keep the function prototype here.
-int32_t sceSystemServiceLaunchApp(const char* titleId, const char** argv, LncAppParam* param);
-}
 
 struct Manifest {
     std::string version;
@@ -75,17 +53,6 @@ struct Manifest {
     std::string notes;
     int64_t size = 0;
 };
-
-struct InstallResult {
-    bool queued = false;
-    int32_t code = 0;
-    std::string stage;
-};
-
-static OrbisBgftInitParams sBgftInitParams{};
-static bool sBgftInitialized = false;
-static bool sInstallerModulesReady = false;
-static std::atomic_bool sCleanupStarted{false};
 
 inline uint32_t rotr(uint32_t v, uint32_t n) {
     return (v >> n) | (v << (32 - n));
@@ -277,207 +244,6 @@ Manifest fetchManifest() {
     return m;
 }
 
-bool ensureInstallerModules(int32_t& error) {
-    if (sInstallerModulesReady) return true;
-
-    // These calls must precede every AppInstUtil/BGFT API use on PS4. Calling
-    // a linked stub before the corresponding system PRX is resident can fault
-    // the process instead of returning an error.
-    sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_APP_INST_UTIL);
-    sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_BGFT);
-
-    error = sceAppInstUtilInitialize();
-    // Re-initialization may return an "already initialized" code. The module
-    // load is the important part; subsequent API calls remain authoritative.
-    sInstallerModulesReady = true;
-    return true;
-}
-
-bool initBgft(int32_t& error) {
-    if (sBgftInitialized) return true;
-    if (!ensureInstallerModules(error)) return false;
-
-    sBgftInitParams.heapSize = kBgftHeapSize;
-    sBgftInitParams.heap = std::malloc(sBgftInitParams.heapSize);
-    if (!sBgftInitParams.heap) {
-        error = -1;
-        return false;
-    }
-    std::memset(sBgftInitParams.heap, 0, sBgftInitParams.heapSize);
-
-    error = sceBgftServiceIntInit(&sBgftInitParams);
-    if (error != 0) {
-        std::free(sBgftInitParams.heap);
-        sBgftInitParams = {};
-        return false;
-    }
-    sBgftInitialized = true;
-    return true;
-}
-
-bool copyBundledUpdater(std::string& error) {
-    FILE* input = std::fopen(kBundledUpdaterPkg, "rb");
-    if (!input) {
-        error = "bundled updater package is missing";
-        return false;
-    }
-
-    FILE* output = std::fopen(kUpdaterPkgPath, "wb");
-    if (!output) {
-        std::fclose(input);
-        error = "cannot write updater package";
-        return false;
-    }
-
-    std::array<unsigned char, 64 * 1024> buffer{};
-    bool ok = true;
-    while (true) {
-        size_t got = std::fread(buffer.data(), 1, buffer.size(), input);
-        if (got > 0 && std::fwrite(buffer.data(), 1, got, output) != got) {
-            ok = false;
-            break;
-        }
-        if (got < buffer.size()) {
-            if (std::ferror(input)) ok = false;
-            break;
-        }
-    }
-    if (std::fflush(output) != 0) ok = false;
-    std::fclose(output);
-    std::fclose(input);
-
-    if (!ok || fileSize(kUpdaterPkgPath) <= 0) {
-        std::remove(kUpdaterPkgPath);
-        error = "failed to copy updater package";
-        return false;
-    }
-    return true;
-}
-
-bool isUpdaterInstalled() {
-    int32_t initError = 0;
-    if (!ensureInstallerModules(initError)) return false;
-    int exists = 0;
-    int32_t rc = sceAppInstUtilAppExists(kUpdaterTitleId, &exists);
-    return rc == 0 && exists != 0;
-}
-
-InstallResult queueUpdaterInstall() {
-    InstallResult result;
-    int32_t initError = 0;
-    if (!ensureInstallerModules(initError)) {
-        result.code = initError;
-        result.stage = "installer module init";
-        return result;
-    }
-
-    // Always install the helper bundled with THIS GMCA build. A helper left by
-    // an older release must never be reused: updater behavior changes independently
-    // from the main title and stale GMCA00002 was the cause of repeated bad handoffs.
-    int exists = 0;
-    int32_t rc = sceAppInstUtilAppExists(kUpdaterTitleId, &exists);
-    if (rc != 0) {
-        result.code = rc;
-        result.stage = "updater presence check";
-        return result;
-    }
-    if (exists) {
-        rc = sceAppInstUtilAppUnInstall(kUpdaterTitleId);
-        if (rc != 0) {
-            result.code = rc;
-            result.stage = "old updater removal";
-            return result;
-        }
-        for (int i = 0; i < 30; ++i) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            exists = 0;
-            rc = sceAppInstUtilAppExists(kUpdaterTitleId, &exists);
-            if (rc == 0 && !exists) break;
-        }
-        if (rc != 0 || exists) {
-            result.code = rc == 0 ? -3 : rc;
-            result.stage = "old updater removal timeout";
-            return result;
-        }
-    }
-
-    std::string copyError;
-    if (!copyBundledUpdater(copyError)) {
-        result.code = -1;
-        result.stage = copyError;
-        return result;
-    }
-
-    std::vector<std::string> candidates;
-    candidates.push_back("/user" + std::string(kUpdaterPkgPath));
-    candidates.push_back(kUpdaterPkgPath);
-
-    std::string appInstPath;
-    char titleId[16] = {};
-    int32_t isApp = 0;
-    rc = -1;
-    for (const auto& candidate : candidates) {
-        std::memset(titleId, 0, sizeof(titleId));
-        isApp = 0;
-        rc = sceAppInstUtilGetTitleIdFromPkg(candidate.c_str(), titleId, &isApp);
-        if (rc == 0) {
-            appInstPath = candidate;
-            break;
-        }
-    }
-    if (appInstPath.empty() || std::string(titleId) != kUpdaterTitleId || !isApp) {
-        result.code = rc == 0 ? -2 : rc;
-        result.stage = "updater PKG validation";
-        return result;
-    }
-
-    int32_t bgftError = 0;
-    if (!initBgft(bgftError)) {
-        result.code = bgftError;
-        result.stage = "BGFT init";
-        return result;
-    }
-
-    // BGFT runs outside the app sandbox and sees /data as /user/data.
-    const std::string systemPath = "/user" + std::string(kUpdaterPkgPath);
-    OrbisBgftDownloadParamEx params{};
-    params.params.entitlementType = 5;
-    params.params.id = "";
-    params.params.contentUrl = systemPath.c_str();
-    params.params.contentName = "GMCA Updater";
-    params.params.iconPath = "";
-    params.params.playgoScenarioId = "0";
-    params.params.option = static_cast<OrbisBgftTaskOpt>(kBgftOptInvisible);
-    params.slot = 0;
-
-    OrbisBgftTaskId taskId = -1;
-    rc = sceBgftServiceIntDownloadRegisterTaskByStorageEx(&params, &taskId);
-    if (rc == 0) rc = sceBgftServiceDownloadStartTask(taskId);
-    if (rc != 0) {
-        result.code = rc;
-        result.stage = "updater BGFT queue";
-        return result;
-    }
-
-    result.queued = true;
-    return result;
-}
-
-int32_t launchUpdater() {
-    const char* argv[] = {nullptr};
-    LncAppParam param{};
-    param.size = sizeof(param);
-    param.user_id = static_cast<uint32_t>(-1);
-    param.LaunchAppCheck_flag = LaunchApp_None;
-    return sceSystemServiceLaunchApp(kUpdaterTitleId, argv, &param);
-}
-
-void exitForUpdaterHandoff() {
-    // Request Borealis' normal shutdown instead of killing the process with
-    // _Exit(). main() will unwind the UI and stop GMCA's worker pool cleanly;
-    // the helper already waits before touching GMCA00000.
-    brls::Application::quit();
-}
 
 brls::Dialog* makeUpdateDialog(const std::string& title, const std::string& body) {
     auto* box = dynamic_cast<brls::Box*>(brls::View::createFromXMLResource("view/update_dialog.xml"));
@@ -495,7 +261,8 @@ brls::Dialog* makeUpdateDialog(const std::string& title, const std::string& body
     return new brls::Dialog(box);
 }
 
-void startUpdate(const Manifest& manifest) {
+
+void startDownload(const Manifest& manifest) {
     AppVersion::updating->store(false);
 
     brls::Style style = brls::Application::getStyle();
@@ -563,46 +330,13 @@ void startUpdate(const Manifest& manifest) {
             if (actualHash != manifest.sha256)
                 throw std::runtime_error("PKG SHA-256 mismatch");
 
-            brls::sync([label, dismissed]() {
-                if (!dismissed->load()) label->setText("main/setting/others/installing"_i18n);
-            });
-
-            // Never ask the running GMCA title to overwrite itself. Prepare a
-            // separate helper title, launch it, then terminate this process
-            // immediately so GMCA00000 is unlocked before AppInstUtil touches it.
-            bool helperReady = false;
-            InstallResult helperInstall = queueUpdaterInstall();
-            if (helperInstall.queued) {
-                for (int i = 0; i < 60 && !helperReady; ++i) {
-                    std::this_thread::sleep_for(std::chrono::seconds(2));
-                    helperReady = isUpdaterInstalled();
-                }
-                if (helperReady) std::this_thread::sleep_for(std::chrono::seconds(3));
-            }
-
-            int32_t launchResult = helperReady ? launchUpdater() : -1;
             AppVersion::updating->store(true);
-
-            if (helperReady && launchResult >= 0) {
-                finish([]() { exitForUpdaterHandoff(); });
-                return;
-            }
-
-            std::string stage;
-            std::string code;
-            if (!helperReady) {
-                stage = helperInstall.stage.empty() ? "updater install timeout" : helperInstall.stage;
-                code = fmt::format("0x{:08X}", static_cast<uint32_t>(helperInstall.code));
-            } else {
-                stage = "updater launch";
-                code = fmt::format("0x{:08X}", static_cast<uint32_t>(launchResult));
-            }
-            finish([manifest, path, stage, code]() {
+            finish([manifest, path]() {
                 Dialog::show(fmt::format(
-                    "GMCA PS4 {} was downloaded and SHA-256 verified, but the automatic updater could not take over "
-                    "({}: {}). The verified PKG is still in {}. Close GMCA and install it with GoldHEN Package "
-                    "Installer from HDD /data/pkg; no FTP transfer is needed.",
-                    manifest.version, stage, code, path));
+                    "GMCA PS4 {} downloaded and SHA-256 verified.\n\n"
+                    "For safety, GMCA will not install or launch any updater automatically. "
+                    "Close GMCA, open GoldHEN Package Installer and install the verified PKG from:\n{}",
+                    manifest.version, path));
             });
         } catch (const std::exception& ex) {
             const bool canceled = dismissed->load() && AppVersion::updating->load();
@@ -611,68 +345,11 @@ void startUpdate(const Manifest& manifest) {
                 std::remove(path.c_str());
                 return;
             }
+            // A file that failed size/hash verification must never be offered for manual installation.
             std::remove(path.c_str());
             std::string msg = ex.what();
             finish([msg]() { Dialog::show(msg); });
         }
-    });
-}
-
-void cleanupUpdaterArtifacts() {
-    if (sCleanupStarted.exchange(true)) return;
-
-    // Normal launches should not pay the AppInstUtil cost. A bundled helper copy
-    // or completion marker means an updater handoff actually happened (including
-    // stale pre-00.61 helpers), so clean it asynchronously after startup.
-    if (fileSize(kUpdaterPkgPath) <= 0 && fileSize(kUpdateCompleteMarker) < 0) return;
-
-    ThreadPool::instance().submit([](HTTP&) {
-        std::this_thread::sleep_for(std::chrono::seconds(3));
-
-        int32_t initError = 0;
-        if (!ensureInstallerModules(initError)) {
-            brls::Logger::warning("PS4 updater cleanup: installer init failed 0x{:08X}",
-                static_cast<uint32_t>(initError));
-            return;
-        }
-
-        int updating = 0;
-        int32_t rc = sceAppInstUtilAppIsInUpdating(kTitleId, &updating);
-        if (rc == 0 && updating) {
-            brls::Logger::warning("PS4 updater cleanup deferred: GMCA is still updating");
-            return;
-        }
-
-        bool helperGone = false;
-        for (int i = 0; i < 15; ++i) {
-            int exists = 0;
-            rc = sceAppInstUtilAppExists(kUpdaterTitleId, &exists);
-            if (rc == 0 && !exists) {
-                helperGone = true;
-                break;
-            }
-            if (rc == 0 && exists) {
-                int32_t removeRc = sceAppInstUtilAppUnInstall(kUpdaterTitleId);
-                if (removeRc != 0)
-                    brls::Logger::warning("PS4 updater cleanup retry {}: uninstall returned 0x{:08X}",
-                        i + 1, static_cast<uint32_t>(removeRc));
-            }
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-        }
-
-        if (!helperGone) {
-            brls::Logger::warning("PS4 updater cleanup: helper still installed; will retry next launch");
-            return;
-        }
-
-        std::remove(kUpdaterPkgPath);
-        if (fileSize(kUpdateCompleteMarker) >= 0) {
-            // Only a helper-confirmed completed overwrite may delete the recovery
-            // PKG. Failed/incomplete updates intentionally leave it in /data/pkg.
-            std::remove(kDownloadedPkgPath);
-            std::remove(kUpdateCompleteMarker);
-        }
-        brls::Logger::info("PS4 updater cleanup complete");
     });
 }
 
@@ -683,8 +360,6 @@ std::string currentVersion() {
 }
 
 void checkUpdate(int delay, bool showUpToDateDialog) {
-    cleanupUpdaterArtifacts();
-
     if (!AppVersion::updating->load()) {
         Dialog::cancelable("main/setting/others/updating"_i18n, [] { AppVersion::updating->store(true); });
         return;
@@ -720,7 +395,7 @@ void checkUpdate(int delay, bool showUpToDateDialog) {
                 dialog->addButton("hints/cancel"_i18n, [version = manifest.version]() {
                     AppConfig::instance().setItem(AppConfig::APP_UPDATE, version);
                 });
-                dialog->addButton("hints/ok"_i18n, [manifest]() { startUpdate(manifest); });
+                dialog->addButton("hints/ok"_i18n, [manifest]() { startDownload(manifest); });
                 dialog->open();
             });
         } catch (const std::exception& ex) {

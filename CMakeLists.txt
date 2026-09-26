@@ -365,63 +365,10 @@ elseif (PLATFORM_PSV)
         FILE ${PSV_ASSETS_FILES}
     )
 elseif (PLATFORM_PS4)
-    # Explicit installer/service libraries used by the PS4 self-updater.
-    target_link_libraries(${PROJECT_NAME} PRIVATE
-        SceBgft
-        SceAppInstUtil
-        SceUserService
-        SceSystemService
-    )
-
-    # A running PS4 title cannot safely replace itself. Build a tiny second
-    # title that GMCA launches only after the update PKG has been downloaded
-    # and SHA-256 verified; GMCA then exits and the helper prepares/queues the
-    # overwrite while GMCA00000 is no longer running.
-    add_executable(gmca_updater_ps4 scripts/ps4/updater/main.cpp)
-    target_compile_definitions(gmca_updater_ps4 PRIVATE __PS4__)
-    if (NOT TARGET SDL2::SDL2-static)
-        find_package(SDL2 REQUIRED)
-    endif()
-    target_link_libraries(gmca_updater_ps4 PRIVATE
-        SceBgft
-        SceAppInstUtil
-        SceUserService
-        SceSystemService
-        SDL2::SDL2-static
-    )
-    add_custom_target(gmca_updater_ps4.data
-        COMMAND "${CMAKE_COMMAND}" -E copy_directory
-            ${BOREALIS_DIR}/ps4 ${CMAKE_BINARY_DIR}/ps4_updater
-        COMMAND "${CMAKE_COMMAND}" -E copy_directory
-            ${CMAKE_SOURCE_DIR}/app/platform/ps4 ${CMAKE_BINARY_DIR}/ps4_updater
-    )
-    add_dependencies(gmca_updater_ps4 gmca_updater_ps4.data)
-    add_self(gmca_updater_ps4)
-    add_pkg(gmca_updater_ps4
-            ${CMAKE_BINARY_DIR}/ps4_updater
-            "GMCA00002"
-            "GMCA Updater"
-            "01.01"
-            8388608
-    )
-
-    # Copy the helper PKG into GMCA's own app0 so users still install only one
-    # package. GMCA installs the helper on demand because it is a different,
-    # non-running title, then launches it for the actual self-replacement.
-    add_custom_target(gmca_updater_ps4.bundle
-        COMMAND "${CMAKE_COMMAND}"
-            -DSRC_DIR=${CMAKE_BINARY_DIR}
-            -DDST=${CMAKE_BINARY_DIR}/ps4/updater.pkg
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/bundle_ps4_updater_pkg.cmake
-        DEPENDS gmca_updater_ps4_pkg
-    )
-
-    # PacBrew/OpenOrbis add_self() writes every title's eboot to the same
-    # ${CMAKE_BINARY_DIR}/eboot.bin side-effect. Building the helper and GMCA
-    # SELF targets in parallel can therefore package the updater EBOOT into the
-    # main GMCA PKG. Finish the helper bundle before GMCA can link/emit its SELF
-    # so the final eboot.bin used by add_pkg(GMCA) is deterministic.
-    add_dependencies(${PROJECT_NAME} gmca_updater_ps4.bundle)
+    # PS4 updates are download-only. GMCA verifies the rolling PKG and leaves it
+    # in /data/pkg for manual installation through GoldHEN Package Installer.
+    # Do not bundle or invoke AppInstUtil/BGFT from the running title.
+    target_link_libraries(${PROJECT_NAME} PRIVATE SceSystemService)
 
     add_self(${PROJECT_NAME})
     add_pkg(${PROJECT_NAME}
@@ -431,8 +378,6 @@ elseif (PLATFORM_PS4)
             ${VITA_VERSION}
             8388608
     )
-    add_dependencies(${PROJECT_NAME}_pkg gmca_updater_ps4.bundle)
-
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_directory ${BOREALIS_DIR}/ps4/sce_module ${CMAKE_BINARY_DIR}/ps4/sce_module
         COMMAND "${CMAKE_COMMAND}" -E copy_directory ${CMAKE_SOURCE_DIR}/app/platform/ps4/sce_sys ${CMAKE_BINARY_DIR}/ps4/sce_sys
