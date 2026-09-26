@@ -679,9 +679,20 @@ void StremioBackend::getLibraryGrid(const std::string& sectionId, const media::G
         try {
             engine.ensureLoaded();
             std::string base, ctype, catId;
+            bool supportsSkip = true;
             if (isCatalogKey(sid)) {
                 if (!splitCatalogKey(sid, base, ctype, catId))
                     throw std::runtime_error("stremio: malformed section id");
+
+                // Routed keys originate from a manifest catalog. Recover its
+                // pagination capability from the already-loaded metadata; if a
+                // stale key cannot be found, preserve the old behavior.
+                for (auto& pc : engine.catalogsForType(ctype)) {
+                    if (pc.first.base == base && pc.second.id == catId) {
+                        supportsSkip = pc.second.hasSkip();
+                        break;
+                    }
+                }
             } else {
                 auto cats = engine.catalogsForType(sid);
                 if (cats.empty()) throw std::runtime_error("stremio: no catalog for type");
@@ -704,14 +715,24 @@ void StremioBackend::getLibraryGrid(const std::string& sectionId, const media::G
                 base = selected->first.base;
                 ctype = selected->second.type;
                 catId = selected->second.id;
+                supportsSkip = selected->second.hasSkip();
             }
+
+            media::Container<media::Item> c;
+            c.StartIndex = (long)startCopy;
+            if (startCopy > 0 && !supportsSkip) {
+                // The addon cannot address another page. Return an empty page
+                // without repeating page zero or issuing a useless network GET.
+                c.TotalRecordCount = (long)startCopy;
+                brls::sync(std::bind(then, std::move(c)));
+                return;
+            }
+
             std::vector<std::pair<std::string, std::string>> extra;
             if (startCopy > 0) extra.emplace_back("skip", std::to_string(startCopy));
             if (!genreId.empty()) extra.emplace_back("genre", genreId);
             CatalogResult res = parseCatalog(getSync(buildCatalogUrl(base, ctype, catId, extra)));
-            media::Container<media::Item> c;
             c.Items = std::move(res.items);
-            c.StartIndex = (long)startCopy;
             // Stremio gives no total; report a running count (UI paginates via skip).
             c.TotalRecordCount = (long)(startCopy + c.Items.size());
             brls::sync(std::bind(then, std::move(c)));
@@ -732,16 +753,32 @@ void StremioBackend::getHubPage(
     // hubKey = "base\ttype\tcatId" (set on home/section hubs). Page via skip.
     std::string key = hubKey;
     size_t startCopy = start;
-    brls::async([key, startCopy, then, error]() {
+    brls::async([this, key, startCopy, then, error]() {
         try {
+            engine.ensureLoaded();
             std::string base, ctype, catId;
             if (!splitCatalogKey(key, base, ctype, catId)) throw std::runtime_error("stremio: bad hub key");
+
+            bool supportsSkip = true;
+            for (auto& pc : engine.catalogsForType(ctype)) {
+                if (pc.first.base == base && pc.second.id == catId) {
+                    supportsSkip = pc.second.hasSkip();
+                    break;
+                }
+            }
+
+            media::Container<media::Item> c;
+            c.StartIndex = (long)startCopy;
+            if (startCopy > 0 && !supportsSkip) {
+                c.TotalRecordCount = (long)startCopy;
+                brls::sync(std::bind(then, std::move(c)));
+                return;
+            }
+
             std::vector<std::pair<std::string, std::string>> extra;
             if (startCopy > 0) extra.emplace_back("skip", std::to_string(startCopy));
             CatalogResult res = parseCatalog(getSync(buildCatalogUrl(base, ctype, catId, extra)));
-            media::Container<media::Item> c;
             c.Items = std::move(res.items);
-            c.StartIndex = (long)startCopy;
             c.TotalRecordCount = (long)(startCopy + c.Items.size());
             brls::sync(std::bind(then, std::move(c)));
         } catch (const std::exception& ex) {

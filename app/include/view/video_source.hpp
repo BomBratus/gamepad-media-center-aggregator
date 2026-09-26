@@ -24,6 +24,11 @@ public:
 
     void appendData(const MediaList& data);
 
+    /// Append only items whose non-empty ratingKey is not already present.
+    /// Used by Stremio pagination as a safety net for addons that return
+    /// overlapping pages or ignore `skip`. Generic backend append semantics stay unchanged.
+    size_t appendUniqueData(const MediaList& data);
+
     /// End-of-list "+" card (hubs with more=1): opens the full hub page
     /// (HubView on `key`). The host recycler MUST have registered the
     /// "More" cell (MoreCardCell) — cf. RecylingVideo.

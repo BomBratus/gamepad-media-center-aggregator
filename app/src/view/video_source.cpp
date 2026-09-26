@@ -21,6 +21,7 @@
 #include "view/video_source.hpp"
 #include "view/context_menu.hpp"
 #include "view/auto_tab_frame.hpp"
+#include <unordered_set>
 
 using namespace brls::literals;  // for _i18n
 
@@ -298,4 +299,19 @@ void VideoDataSource::clearData() { this->list.clear(); }
 
 void VideoDataSource::appendData(const MediaList& data) {
     this->list.insert(this->list.end(), data.begin(), data.end());
+}
+
+size_t VideoDataSource::appendUniqueData(const MediaList& data) {
+    std::unordered_set<std::string> seen;
+    seen.reserve(this->list.size() + data.size());
+    for (const auto& item : this->list)
+        if (!item.ratingKey.empty()) seen.insert(item.ratingKey);
+
+    size_t added = 0;
+    for (const auto& item : data) {
+        if (!item.ratingKey.empty() && !seen.insert(item.ratingKey).second) continue;
+        this->list.push_back(item);
+        ++added;
+    }
+    return added;
 }
