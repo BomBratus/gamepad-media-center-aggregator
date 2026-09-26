@@ -843,6 +843,16 @@ inline nlohmann::json getSync(const std::string& url, long timeout = HTTP::TIMEO
         return nlohmann::json::parse(resp);
     }
 
+    // Catalog responses are repeatedly revisited while moving Home -> section ->
+    // detail -> Back. A short exact-URL cache avoids another addon round-trip
+    // without prefetching extra pages or hiding catalog changes for long.
+    if (url.find("/catalog/") != std::string::npos) {
+        long ttl = url.find("/search=") != std::string::npos ? 15000L : 30000L;
+        std::string resp = requests::getCached(url, timeout, ttl);
+        if (resp.empty()) return nlohmann::json::object();
+        return nlohmann::json::parse(resp);
+    }
+
 #if defined(GMCA_PS4_SAFE_SOURCES)
     // Reopening the same episode/source picker should not repeat an identical
     // network fan-out. Keep stream JSON only briefly because debrid URLs may be
