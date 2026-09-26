@@ -382,6 +382,14 @@ void Image::doRequest(HTTP& s) {
             imageData = compressed;
         }
 #endif
+
+#ifdef BOREALIS_USE_GXM
+        int imageFlags = (hasAlpha ? NVG_IMAGE_DXT5 : NVG_IMAGE_DXT1) | NVG_IMAGE_LPDDR;
+#else
+        int imageFlags = 0;
+        (void)hasAlpha;
+#endif
+
 #if defined(__PS4__)
         auto groupCopy = this->group;
         auto groupKeyCopy = this->groupKey;
@@ -447,12 +455,6 @@ void Image::doRequest(HTTP& s) {
         auto* imagePtr = this->image.load();
         auto urlCopy = this->url;
         auto isCancelCopy = this->isCancel;
-#ifdef BOREALIS_USE_GXM
-        int imageFlags = (hasAlpha ? NVG_IMAGE_DXT5 : NVG_IMAGE_DXT1) | NVG_IMAGE_LPDDR;
-#else
-        int imageFlags = 0;
-        (void)hasAlpha;
-#endif
 
         brls::Logger::verbose("request Image {} size {}", urlCopy, data.size());
         brls::sync([imagePtr, urlCopy, isCancelCopy, imageData, imageW, imageH, isWebp, imageFlags, texBytes] {
