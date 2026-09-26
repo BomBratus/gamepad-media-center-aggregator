@@ -16,6 +16,8 @@ on:
       - scripts/ps4/libmpv/**
       - cmake/bundle_ps4_updater_pkg.cmake
       - app/include/utils/config.hpp
+      - app/include/utils/image.hpp
+      - app/src/utils/image.cpp
       - app/include/utils/ps4_diagnostics.hpp
       - app/include/utils/ps4_update.hpp
       - app/src/view/connection_switcher.cpp
