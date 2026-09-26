@@ -184,12 +184,6 @@ jobs:
           test -s "$pkg"
           test -s build/GMCA
           test -s build/ps4/resources/font/switch_font.ttf
-          test -s build/ps4/updater.pkg
-          helper_pkg="$(find build -type f -name '*GMCA00002*.pkg' -print -quit)"
-          test -n "$helper_pkg"
-          test -s "$helper_pkg"
-          cp "$helper_pkg" build/GMCA-PS4-Updater.pkg
-
           main_elf_size="$(stat -c '%s' build/GMCA)"
           pkg_size="$(stat -c '%s' "$pkg")"
           read_be64() {
@@ -212,19 +206,16 @@ jobs:
           fi
           if [ "$pkg_size" -le "$main_elf_size" ] || [ "$pfs_size" -le "$main_elf_size" ]; then
             echo "Invalid PS4 package: payload is not larger than the main GMCA ELF."
-            echo "This usually means PacBrew's shared eboot.bin was overwritten by the updater SELF before add_pkg(GMCA)."
             exit 1
           fi
 
           stat -c '%n %s bytes' build/GMCA
-          stat -c '%n %s bytes' build/ps4/updater.pkg
-          stat -c '%n %s bytes' build/GMCA-PS4-Updater.pkg
           stat -c '%n %s bytes' build/ps4/resources/font/switch_font.ttf
           stat -c '%n %s bytes' "$pkg"
 
           (
             cd build
-            sha256sum "${{ steps.ps4ver.outputs.pkg }}" GMCA-PS4-Updater.pkg | tee SHA256SUMS
+            sha256sum "${{ steps.ps4ver.outputs.pkg }}" | tee SHA256SUMS
             sha256sum -c SHA256SUMS
           )
           cp "$pkg" "$stable_pkg"
@@ -263,7 +254,6 @@ jobs:
           path: |
             build/${{ steps.ps4ver.outputs.pkg }}
             build/GMCA-PS4-Stremio-only.pkg
-            build/GMCA-PS4-Updater.pkg
             build/SHA256SUMS
             build/PS4-UPDATE-SHA256SUMS
             build/ps4-update.json
