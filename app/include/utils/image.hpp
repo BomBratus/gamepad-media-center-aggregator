@@ -1,11 +1,17 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
+#include <unordered_map>
 #include <borealis.hpp>
 #include "api/http.hpp"
 #include "api/backend.hpp"
 #include "config.hpp"
 #include "image_cache.hpp"
+
+#if defined(__PS4__)
+struct ImageRequestGroup;
+#endif
 
 class Image {
     using Ref = std::shared_ptr<Image>;
@@ -84,6 +90,18 @@ private:
     // fetched over HTTP; the decode/downscale/upload path is otherwise shared.
     bool local = false;
 
+#if defined(__PS4__)
+    // PS4-only in-flight coalescing: several Stremio rows often reference the
+    // same absolute poster URL before the first texture reaches TextureCache.
+    // Followers share one network/decode/upload job instead of consuming more
+    // slots from the console's four-worker pool.
+    std::shared_ptr<ImageRequestGroup> group;
+    std::string groupKey;
+#endif
+
     inline static std::mutex requestMutex;
     inline static std::unordered_map<brls::Image*, Ref> requests;
+#if defined(__PS4__)
+    inline static std::unordered_map<std::string, std::weak_ptr<ImageRequestGroup>> requestGroups;
+#endif
 };
