@@ -254,7 +254,7 @@ void Image::cancel(brls::Image* view) {
 }
 
 void Image::doRequest(HTTP& s) {
-    // PS4 duplicate requests share one transfer. The group's cancel flag only
+    // PS4 duplicate requests share one transfer. The group cancel flag only
     // flips when every waiting view has gone away, so recycling the leader cell
     // cannot abort artwork still needed by another row.
     HTTP::Cancel requestCancel = this->isCancel;
@@ -265,71 +265,7 @@ void Image::doRequest(HTTP& s) {
 #if defined(__PS4__)
         return;
 #else
-        // clear() ends in view->ptrUnlock(), and ptrLockCounter is a plain int
-        // only ever touched from the UI thread.
-#if defined(__PS4__)
-        auto groupCopy = this->group;
-        auto groupKeyCopy = this->groupKey;
-        auto urlCopy = this->url;
-        auto isWebpCopy = isWebp;
-        brls::Logger::verbose("request Image {} size {}", urlCopy, data.size());
-        brls::sync([groupCopy, groupKeyCopy, urlCopy, imageData, imageW, imageH, isWebpCopy, imageFlags, texBytes] {
-            std::vector<Ref> members;
-            {
-                std::lock_guard<std::mutex> lock(requestMutex);
-                if (groupCopy) {
-                    members.reserve(groupCopy->members.size());
-                    for (const auto& weak : groupCopy->members) {
-                        if (auto member = weak.lock()) members.push_back(std::move(member));
-                    }
-                }
-                auto it = requestGroups.find(groupKeyCopy);
-                if (it != requestGroups.end() && it->second.lock() == groupCopy) requestGroups.erase(it);
-            }
-
-            bool textureReferenceHeld = false;
-            bool createAttempted = false;
-            for (const auto& member : members) {
-                auto* imagePtr = member->image.load();
-                if (!imagePtr || member->isCancel->load()) continue;
-
-                int viewTex = 0;
-                if (!textureReferenceHeld) {
-                    // getCache increments the cache reference count on a hit.
-                    // addCache creates the first reference on a miss.
-                    viewTex = brls::TextureCache::instance().getCache(urlCopy);
-                    if (viewTex == 0 && imageData != nullptr && !createAttempted) {
-                        createAttempted = true;
-                        NVGcontext* vg = brls::Application::getNVGContext();
-                        viewTex = nvgCreateImageRGBA(vg, imageW, imageH, imageFlags, imageData);
-                        brls::TextureCache::instance().addCache(urlCopy, viewTex, texBytes);
-                    }
-                    textureReferenceHeld = viewTex > 0;
-                } else {
-                    // Every additional view owns another cache reference; without
-                    // this, recycling one duplicate card could evict the texture
-                    // while another card still draws it.
-                    viewTex = brls::TextureCache::instance().getCache(urlCopy);
-                }
-
-                if (viewTex > 0) imagePtr->innerSetImage(viewTex);
-                clear(imagePtr);
-            }
-
-            if (imageData) {
-#ifdef BOREALIS_USE_GXM
-                free(imageData);
-#else
-#ifdef USE_WEBP
-                if (isWebpCopy)
-                    WebPFree(imageData);
-                else
-#endif
-                    stbi_image_free(imageData);
-#endif
-            }
-        });
-#else
+        // clear() must stay on the UI thread because ptrLockCounter is not atomic.
         auto* imagePtr = this->image.load();
         brls::sync([imagePtr] { Image::clear(imagePtr); });
         return;
@@ -446,6 +382,68 @@ void Image::doRequest(HTTP& s) {
             imageData = compressed;
         }
 #endif
+#if defined(__PS4__)
+        auto groupCopy = this->group;
+        auto groupKeyCopy = this->groupKey;
+        auto urlCopy = this->url;
+        auto isWebpCopy = isWebp;
+        brls::Logger::verbose("request Image {} size {}", urlCopy, data.size());
+        brls::sync([groupCopy, groupKeyCopy, urlCopy, imageData, imageW, imageH, isWebpCopy, imageFlags, texBytes] {
+            std::vector<Ref> members;
+            {
+                std::lock_guard<std::mutex> lock(requestMutex);
+                if (groupCopy) {
+                    members.reserve(groupCopy->members.size());
+                    for (const auto& weak : groupCopy->members) {
+                        if (auto member = weak.lock()) members.push_back(std::move(member));
+                    }
+                }
+                auto it = requestGroups.find(groupKeyCopy);
+                if (it != requestGroups.end() && it->second.lock() == groupCopy) requestGroups.erase(it);
+            }
+
+            bool textureReferenceHeld = false;
+            bool createAttempted = false;
+            for (const auto& member : members) {
+                auto* imagePtr = member->image.load();
+                if (!imagePtr || member->isCancel->load()) continue;
+
+                int viewTex = 0;
+                if (!textureReferenceHeld) {
+                    // getCache increments the cache refcount on a hit; addCache
+                    // owns the first reference on a miss.
+                    viewTex = brls::TextureCache::instance().getCache(urlCopy);
+                    if (viewTex == 0 && imageData != nullptr && !createAttempted) {
+                        createAttempted = true;
+                        NVGcontext* vg = brls::Application::getNVGContext();
+                        viewTex = nvgCreateImageRGBA(vg, imageW, imageH, imageFlags, imageData);
+                        brls::TextureCache::instance().addCache(urlCopy, viewTex, texBytes);
+                    }
+                    textureReferenceHeld = viewTex > 0;
+                } else {
+                    // Give each duplicate card its own TextureCache reference so
+                    // recycling one card cannot invalidate another card's texture.
+                    viewTex = brls::TextureCache::instance().getCache(urlCopy);
+                }
+
+                if (viewTex > 0) imagePtr->innerSetImage(viewTex);
+                clear(imagePtr);
+            }
+
+            if (imageData) {
+#ifdef BOREALIS_USE_GXM
+                free(imageData);
+#else
+#ifdef USE_WEBP
+                if (isWebpCopy)
+                    WebPFree(imageData);
+                else
+#endif
+                    stbi_image_free(imageData);
+#endif
+            }
+        });
+#else
         auto* imagePtr = this->image.load();
         auto urlCopy = this->url;
         auto isCancelCopy = this->isCancel;
