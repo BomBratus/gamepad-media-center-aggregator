@@ -386,6 +386,7 @@ elseif (PLATFORM_PS4)
         SceBgft
         SceAppInstUtil
         SceUserService
+        SceSystemService
         SDL2::SDL2-static
     )
     add_custom_target(gmca_updater_ps4.data
@@ -400,7 +401,7 @@ elseif (PLATFORM_PS4)
             ${CMAKE_BINARY_DIR}/ps4_updater
             "GMCA00002"
             "GMCA Updater"
-            "01.00"
+            "01.01"
             8388608
     )
 
