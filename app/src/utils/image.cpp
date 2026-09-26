@@ -8,6 +8,24 @@
 #endif
 #include <stb_image.h>
 
+#if defined(__PS4__)
+struct ImageRequestGroup {
+    HTTP::Cancel cancel = std::make_shared<std::atomic_bool>(false);
+    std::vector<std::weak_ptr<Image>> members;
+};
+#endif
+
+static HTTP::Timeout imageRequestTimeout() {
+#if defined(__PS4__)
+    // Artwork is not latency-critical like API navigation. Three seconds was
+    // short enough to abort healthy CDN downloads on PS4 Wi-Fi. Keep a short
+    // connect/DNS budget for dead hosts, but allow the body time to arrive.
+    return HTTP::Timeout{8000L, 2500L};
+#else
+    return HTTP::Timeout{};
+#endif
+}
+
 #ifdef BOREALIS_USE_GXM
 #ifndef MAX
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
@@ -146,32 +164,54 @@ void Image::with(brls::Image* view, const std::string& url, int width, int heigh
         return;
     }
 
-    // One fresh Image per request. Recycling a pooled object whose previous
-    // doRequest could still be in flight shared url/image/isCancel between two
-    // requests: resetting isCancel here REVOKED the cancellation of the old
-    // transfer, which then finished and cached its pixels under this request's
-    // key (wrong artwork, persistent), while both sides raced on the fields.
+    // One Image state per view. On PS4, identical URLs are grouped below so the
+    // expensive HTTP/decode/upload work is shared without sharing cancellation
+    // or view lifetime.
     Ref item = std::make_shared<Image>();
-
-    std::lock_guard<std::mutex> lock(requestMutex);
-
-    auto it = requests.insert(std::make_pair(view, item));
-    if (!it.second) {
-        brls::Logger::warning("insert Image {} failed", fmt::ptr(view));
-        return;
-    }
-
     item->image = view;
     item->url = url;
     item->targetW = width;
     item->targetH = height;
-    view->ptrLock();
-    // 设置图片组件不处理纹理的销毁，由缓存统一管理纹理销毁
-    view->setFreeTexture(false);
 
-    ThreadPool::instance().submit([item](HTTP& s) { item->doRequest(s); });
+    bool shouldSubmit = true;
+    {
+        std::lock_guard<std::mutex> lock(requestMutex);
+
+        auto it = requests.insert(std::make_pair(view, item));
+        if (!it.second) {
+            brls::Logger::warning("insert Image {} failed", fmt::ptr(view));
+            return;
+        }
+
+        view->ptrLock();
+        // 图片组件不处理纹理销毁，由缓存统一管理
+        view->setFreeTexture(false);
+
+#if defined(__PS4__)
+        std::shared_ptr<ImageRequestGroup> group;
+        auto git = requestGroups.find(url);
+        if (git != requestGroups.end()) {
+            group = git->second.lock();
+            if (!group || group->cancel->load()) {
+                requestGroups.erase(git);
+                group.reset();
+            }
+        }
+        if (!group) {
+            group = std::make_shared<ImageRequestGroup>();
+            requestGroups[url] = group;
+        } else {
+            shouldSubmit = false;
+        }
+
+        item->group = group;
+        item->groupKey = url;
+        group->members.emplace_back(item);
+#endif
+    }
+
+    if (shouldSubmit) ThreadPool::instance().submit([item](HTTP& s) { item->doRequest(s); });
 }
-
 #ifdef BOREALIS_USE_GXM
 void Image::withLocal(brls::Image* view, const std::string& localPath, int width, int height) {
     // Mirrors with(): the cache is keyed by the local path (as setImageFromFile
@@ -213,14 +253,86 @@ void Image::cancel(brls::Image* view) {
 }
 
 void Image::doRequest(HTTP& s) {
-    // clear() ends in view->ptrUnlock(), and ptrLockCounter is a plain int
-    // only ever touched from the UI thread (Box::removeView, the free queue) —
-    // so the worker-side failure paths must route it through brls::sync, like
-    // the success path does.
-    if (this->isCancel->load()) {
+    // PS4 duplicate requests share one transfer. The group's cancel flag only
+    // flips when every waiting view has gone away, so recycling the leader cell
+    // cannot abort artwork still needed by another row.
+    HTTP::Cancel requestCancel = this->isCancel;
+#if defined(__PS4__)
+    if (this->group) requestCancel = this->group->cancel;
+#endif
+    if (requestCancel->load()) {
+#if defined(__PS4__)
+        return;
+#else
+        // clear() ends in view->ptrUnlock(), and ptrLockCounter is a plain int
+        // only ever touched from the UI thread.
+#if defined(__PS4__)
+        auto groupCopy = this->group;
+        auto groupKeyCopy = this->groupKey;
+        auto urlCopy = this->url;
+        auto isWebpCopy = isWebp;
+        brls::Logger::verbose("request Image {} size {}", urlCopy, data.size());
+        brls::sync([groupCopy, groupKeyCopy, urlCopy, imageData, imageW, imageH, isWebpCopy, imageFlags, texBytes] {
+            std::vector<Ref> members;
+            {
+                std::lock_guard<std::mutex> lock(requestMutex);
+                if (groupCopy) {
+                    members.reserve(groupCopy->members.size());
+                    for (const auto& weak : groupCopy->members) {
+                        if (auto member = weak.lock()) members.push_back(std::move(member));
+                    }
+                }
+                auto it = requestGroups.find(groupKeyCopy);
+                if (it != requestGroups.end() && it->second.lock() == groupCopy) requestGroups.erase(it);
+            }
+
+            bool textureReferenceHeld = false;
+            bool createAttempted = false;
+            for (const auto& member : members) {
+                auto* imagePtr = member->image.load();
+                if (!imagePtr || member->isCancel->load()) continue;
+
+                int viewTex = 0;
+                if (!textureReferenceHeld) {
+                    // getCache increments the cache reference count on a hit.
+                    // addCache creates the first reference on a miss.
+                    viewTex = brls::TextureCache::instance().getCache(urlCopy);
+                    if (viewTex == 0 && imageData != nullptr && !createAttempted) {
+                        createAttempted = true;
+                        NVGcontext* vg = brls::Application::getNVGContext();
+                        viewTex = nvgCreateImageRGBA(vg, imageW, imageH, imageFlags, imageData);
+                        brls::TextureCache::instance().addCache(urlCopy, viewTex, texBytes);
+                    }
+                    textureReferenceHeld = viewTex > 0;
+                } else {
+                    // Every additional view owns another cache reference; without
+                    // this, recycling one duplicate card could evict the texture
+                    // while another card still draws it.
+                    viewTex = brls::TextureCache::instance().getCache(urlCopy);
+                }
+
+                if (viewTex > 0) imagePtr->innerSetImage(viewTex);
+                clear(imagePtr);
+            }
+
+            if (imageData) {
+#ifdef BOREALIS_USE_GXM
+                free(imageData);
+#else
+#ifdef USE_WEBP
+                if (isWebpCopy)
+                    WebPFree(imageData);
+                else
+#endif
+                    stbi_image_free(imageData);
+#endif
+            }
+        });
+#else
         auto* imagePtr = this->image.load();
         brls::sync([imagePtr] { Image::clear(imagePtr); });
         return;
+#endif
     }
     try {
         std::string data;
@@ -234,7 +346,7 @@ void Image::doRequest(HTTP& s) {
             if (data.empty()) throw std::runtime_error("empty or unreadable cache file");
         } else {
             std::ostringstream body;
-            HTTP::set_option(s, this->isCancel, HTTP::Timeout{});
+            HTTP::set_option(s, requestCancel, imageRequestTimeout());
             s._get(this->url, &body);
             data = body.str();
         }
@@ -369,21 +481,66 @@ void Image::doRequest(HTTP& s) {
 #endif
             }
         });
+#endif
     } catch (const std::exception& ex) {
         brls::Logger::warning("request image {} {}", this->url, ex.what());
+#if defined(__PS4__)
+        auto groupCopy = this->group;
+        auto groupKeyCopy = this->groupKey;
+        brls::sync([groupCopy, groupKeyCopy] {
+            std::vector<Ref> members;
+            {
+                std::lock_guard<std::mutex> lock(requestMutex);
+                if (groupCopy) {
+                    members.reserve(groupCopy->members.size());
+                    for (const auto& weak : groupCopy->members) {
+                        if (auto member = weak.lock()) members.push_back(std::move(member));
+                    }
+                }
+                auto it = requestGroups.find(groupKeyCopy);
+                if (it != requestGroups.end() && it->second.lock() == groupCopy) requestGroups.erase(it);
+            }
+            for (const auto& member : members) {
+                auto* imagePtr = member->image.load();
+                if (imagePtr) Image::clear(imagePtr);
+            }
+        });
+#else
         auto* imagePtr = this->image.load();
         brls::sync([imagePtr] { Image::clear(imagePtr); });
+#endif
     }
 }
 
 void Image::clear(brls::Image* view) {
+    if (!view) return;
+
     std::lock_guard<std::mutex> lock(requestMutex);
 
     auto it = requests.find(view);
     if (it == requests.end()) return;
 
+    Ref item = it->second;
     view->ptrUnlock();
-    it->second->image = nullptr;
-    it->second->isCancel->store(true);
+    item->image = nullptr;
+    item->isCancel->store(true);
     requests.erase(it);
+
+#if defined(__PS4__)
+    if (item->group) {
+        bool active = false;
+        for (const auto& weak : item->group->members) {
+            auto member = weak.lock();
+            if (member && !member->isCancel->load() && member->image.load() != nullptr) {
+                active = true;
+                break;
+            }
+        }
+        if (!active) {
+            item->group->cancel->store(true);
+            auto git = requestGroups.find(item->groupKey);
+            if (git != requestGroups.end() && git->second.lock() == item->group) requestGroups.erase(git);
+        }
+    }
+#endif
 }
