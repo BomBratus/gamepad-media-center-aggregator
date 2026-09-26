@@ -54,7 +54,9 @@ void HubView::doRequest() {
     AppConfig::instance().backend().getHubPage(this->hubKey, this->startIndex, this->pageSize,
         [ASYNC_TOKEN, reqStart](const media::Container<media::Item>& r) {
             ASYNC_RELEASE
-            this->startIndex = reqStart + this->pageSize;
+            const bool stremioPagination =
+                AppConfig::instance().backend().type() == media::BackendType::Stremio;
+            this->startIndex = reqStart + (stremioPagination ? r.Items.size() : this->pageSize);
             if (r.TotalRecordCount == 0 && reqStart == 0) {
                 this->recycler->setEmpty();
             } else if (reqStart == 0) {
@@ -65,8 +67,12 @@ void HubView::doRequest() {
                 this->recycler->setDataSource(new VideoDataSource(r.Items));
             } else if (r.Items.size() > 0) {
                 auto dataSrc = dynamic_cast<VideoDataSource*>(this->recycler->getDataSource());
-                dataSrc->appendData(r.Items);
-                this->recycler->notifyDataChanged();
+                if (stremioPagination) {
+                    if (dataSrc->appendUniqueData(r.Items) > 0) this->recycler->notifyDataChanged();
+                } else {
+                    dataSrc->appendData(r.Items);
+                    this->recycler->notifyDataChanged();
+                }
             }
         },
         [ASYNC_TOKEN, reqStart](const std::string& ex) {

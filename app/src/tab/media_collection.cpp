@@ -367,7 +367,9 @@ void MediaCollection::doRequest() {
     size_t reqStart = this->startIndex;
     auto onItems = [ASYNC_TOKEN, reqStart](const media::Container<media::Item>& r) {
             ASYNC_RELEASE
-            this->startIndex = reqStart + this->pageSize;
+            const bool stremioPagination =
+                AppConfig::instance().backend().type() == media::BackendType::Stremio;
+            this->startIndex = reqStart + (stremioPagination ? r.Items.size() : this->pageSize);
             // Only the FIRST page being empty means the library is empty. The
             // recycler pre-fetches the next page; that past-the-end page returns
             // TotalRecordCount=0 and must not wipe a grid filled by page 0.
@@ -401,8 +403,12 @@ void MediaCollection::doRequest() {
                 if (hasFocusWithin(this)) brls::Application::giveFocus(this->recycler);
             } else if (r.Items.size() > 0) {
                 auto dataSrc = dynamic_cast<VideoDataSource*>(this->recycler->getDataSource());
-                dataSrc->appendData(r.Items);
-                this->recycler->notifyDataChanged();
+                if (stremioPagination) {
+                    if (dataSrc->appendUniqueData(r.Items) > 0) this->recycler->notifyDataChanged();
+                } else {
+                    dataSrc->appendData(r.Items);
+                    this->recycler->notifyDataChanged();
+                }
             }
     };
     auto onError = [ASYNC_TOKEN, reqStart](const std::string& ex) {
@@ -451,15 +457,14 @@ public:
         AppConfig::instance().backend().getLibraryGrid(this->catalogKey, q, this->start, this->pageSize,
             [ASYNC_TOKEN, reqStart](const media::Container<media::Item>& r) {
                 ASYNC_RELEASE
-                this->start = reqStart + this->pageSize;
+                this->start = reqStart + r.Items.size();
                 if (r.TotalRecordCount == 0 && reqStart == 0) {
                     this->setEmpty();
                 } else if (reqStart == 0) {
                     this->setDataSource(new VideoDataSource(r.Items));
                 } else if (r.Items.size() > 0) {
                     auto dataSrc = dynamic_cast<VideoDataSource*>(this->getDataSource());
-                    dataSrc->appendData(r.Items);
-                    this->notifyDataChanged();
+                    if (dataSrc->appendUniqueData(r.Items) > 0) this->notifyDataChanged();
                 }
             },
             [ASYNC_TOKEN, reqStart](const std::string& ex) {
