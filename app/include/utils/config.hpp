@@ -121,6 +121,7 @@ public:
         PLAYER_ASPECT,
         PLAYER_SUBS_FALLBACK,
         PLAYER_SUBTITLE_LANG,  // preferred external-subtitle language: "auto" (= app locale), "off", or a 2-letter code
+        PLAYER_AUTOPLAY_NEXT,  // automatically advance episodic playback after the Up Next countdown
         PLAYER_TV_MODE,
         ALWAYS_ON_TOP,
         SINGLE,
