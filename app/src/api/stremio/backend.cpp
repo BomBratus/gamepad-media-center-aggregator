@@ -478,6 +478,9 @@ std::vector<media::Item> fetchImdbTop(media::MediaKind kind) {
         ++fallbackRank;
     }
     if (out.empty()) throw std::runtime_error("IMDb chart returned no titles");
+    std::stable_sort(out.begin(), out.end(), [](const media::Item& a, const media::Item& b) {
+        return a.index < b.index;
+    });
     return out;
 }
 
@@ -811,7 +814,7 @@ void StremioBackend::getTopRated(media::MediaKind kind, size_t start, size_t siz
             if (!fresh) {
                 try {
                     items = fetchImdbTop(kind);
-                    int64_t refreshedAt = now > 0 ? now : fetchedAt;
+                    int64_t refreshedAt = now > 0 ? now : 1;
                     {
                         std::lock_guard<std::mutex> lock(imdbTopCache.mutex);
                         auto& target = series ? imdbTopCache.series : imdbTopCache.movies;
@@ -822,6 +825,15 @@ void StremioBackend::getTopRated(media::MediaKind kind, size_t start, size_t siz
                     saveImdbTopCacheFile(series, items, refreshedAt);
                 } catch (const std::exception& ex) {
                     if (items.empty()) throw;
+                    // Do not hammer IMDb again on every local pagination request.
+                    // Mark only the in-memory snapshot as fresh for this session;
+                    // the old on-disk timestamp is intentionally preserved so the
+                    // next app launch will retry the refresh.
+                    {
+                        std::lock_guard<std::mutex> lock(imdbTopCache.mutex);
+                        auto& stamp = series ? imdbTopCache.seriesFetchedAt : imdbTopCache.moviesFetchedAt;
+                        stamp = now > 0 ? now : 1;
+                    }
                     brls::Logger::warning("IMDb Top refresh failed; using cached snapshot: {}", ex.what());
                 }
             }
