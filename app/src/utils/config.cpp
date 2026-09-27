@@ -82,6 +82,7 @@ std::unordered_map<AppConfig::Item, AppConfig::Option> AppConfig::settingMap = {
     // options/labels are built at runtime from media::subtitleLangCatalog() in the
     // settings tab (value stored as-is: "auto" | "off" | 2-letter code)
     {PLAYER_SUBTITLE_LANG, {"player_subtitle_lang"}},
+    {PLAYER_AUTOPLAY_NEXT, {"player_autoplay_next"}},
     {PLAYER_INMEMORY_CACHE,
         {
             "player_inmemory_cache",
