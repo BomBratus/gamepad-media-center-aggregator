@@ -47,20 +47,29 @@ public:
         });
         this->cancel->addGestureRecognizer(new brls::TapGestureRecognizer(this->cancel));
 
-        this->sortBy->init("main/media/sort_by"_i18n,
-            {
-                "main/media/date_add"_i18n,
-                "main/media/name"_i18n,
-                "main/media/premiere_date"_i18n,
-            },
-            selectedSort, [](int selected) { selectedSort = selected; });
+        const bool stremioLibrary =
+            AppConfig::instance().backend().type() == media::BackendType::Stremio;
+        if (stremioLibrary) {
+            // Stremio's account library has no server-side sort contract. Hiding
+            // these prevents a selector that looks authoritative while doing nothing.
+            this->sortBy->setVisibility(brls::Visibility::GONE);
+            this->sortOrder->setVisibility(brls::Visibility::GONE);
+        } else {
+            this->sortBy->init("main/media/sort_by"_i18n,
+                {
+                    "main/media/date_add"_i18n,
+                    "main/media/name"_i18n,
+                    "main/media/premiere_date"_i18n,
+                },
+                selectedSort, [](int selected) { selectedSort = selected; });
 
-        this->sortOrder->init("main/media/order"_i18n,
-            {
-                "main/media/ascending"_i18n,
-                "main/media/descending"_i18n,
-            },
-            selectedOrder, [](int selected) { selectedOrder = selected; });
+            this->sortOrder->init("main/media/order"_i18n,
+                {
+                    "main/media/ascending"_i18n,
+                    "main/media/descending"_i18n,
+                },
+                selectedOrder, [](int selected) { selectedOrder = selected; });
+        }
 
         this->filterType->init("main/remote/type"_i18n,
             {
@@ -70,13 +79,24 @@ public:
             },
             selectedType, [](int selected) { selectedType = selected; });
 
-        this->filterAvailability->init("main/watchlist/availability"_i18n,
-            {
-                "main/watchlist/all"_i18n,
-                "main/watchlist/on_server"_i18n,
-                "main/watchlist/not_on_server"_i18n,
-            },
-            selectedAvailability, [](int selected) { selectedAvailability = selected; });
+        if (stremioLibrary) {
+            this->filterAvailability->init("Progress",
+                {
+                    "main/watchlist/all"_i18n,
+                    "In progress",
+                    "Unwatched",
+                    "Watched",
+                },
+                selectedProgress, [](int selected) { selectedProgress = selected; });
+        } else {
+            this->filterAvailability->init("main/watchlist/availability"_i18n,
+                {
+                    "main/watchlist/all"_i18n,
+                    "main/watchlist/on_server"_i18n,
+                    "main/watchlist/not_on_server"_i18n,
+                },
+                selectedAvailability, [](int selected) { selectedAvailability = selected; });
+        }
     }
 
     ~WatchlistFilter() override { brls::Logger::debug("WatchlistFilter: delete"); }
@@ -89,7 +109,8 @@ public:
     inline static int selectedSort = 0;   // index into sortList
     inline static int selectedOrder = 1;  // 0 ascending, 1 descending
     inline static int selectedType = 0;   // 0 all, 1 movies, 2 shows
-    inline static int selectedAvailability = 0;  // 0 all, 1 on server, 2 absent
+    inline static int selectedAvailability = 0;  // Plex: 0 all, 1 on server, 2 absent
+    inline static int selectedProgress = 0;  // Stremio: 0 all, 1 in progress, 2 unwatched, 3 watched
 
     /// Honored provider sort fields, aligned with the selector labels
     inline static std::string sortList[] = {
@@ -211,11 +232,13 @@ void WatchlistTab::onCreate() {
     // affected by a sort/filter change
     this->recycler->registerAction("main/media/sort"_i18n, brls::BUTTON_Y, [this](...) {
         auto before = std::make_tuple(WatchlistFilter::selectedSort, WatchlistFilter::selectedOrder,
-            WatchlistFilter::selectedType, WatchlistFilter::selectedAvailability);
+            WatchlistFilter::selectedType, WatchlistFilter::selectedAvailability,
+            WatchlistFilter::selectedProgress);
         WatchlistFilter* filter = new WatchlistFilter();
         filter->getEvent()->subscribe([this, before]() {
             auto after = std::make_tuple(WatchlistFilter::selectedSort, WatchlistFilter::selectedOrder,
-                WatchlistFilter::selectedType, WatchlistFilter::selectedAvailability);
+                WatchlistFilter::selectedType, WatchlistFilter::selectedAvailability,
+                WatchlistFilter::selectedProgress);
             if (after != before) this->refresh(false);
         });
         brls::Application::pushActivity(new brls::Activity(filter));
@@ -275,33 +298,56 @@ void WatchlistTab::doRequest() {
                             : WatchlistFilter::selectedType == 2 ? media::MediaKind::Show
                                                                  : media::MediaKind::Any;
     bool favorites = AppConfig::instance().backend().caps().listKind == media::ListKind::Favorites;
+    bool stremioLibrary = favorites &&
+        AppConfig::instance().backend().type() == media::BackendType::Stremio;
 
     ASYNC_RETAIN
     // personal list: Plex watchlist (provider items) or Jellyfin favorites (server items)
     AppConfig::instance().backend().listWatchlist(
         sort, kind, this->startIndex, this->pageSize,
-        [ASYNC_TOKEN, favorites](const media::Container<media::Item>& r) {
+        [ASYNC_TOKEN, favorites, stremioLibrary](const media::Container<media::Item>& r) {
             ASYNC_RELEASE
             this->startIndex = r.StartIndex + this->pageSize;
             bool more = !r.Items.empty() && (long)this->startIndex < r.TotalRecordCount;
 
             if (favorites) {
-                // favorites are normal server items -> standard grid (click opens
-                // the detail page, context menu works); no provider images, no dimming
+                // Favorites/Stremio library items are normal backend items. Stremio
+                // progress filtering is intentionally client-side over the account
+                // library rows returned by this request; no catalog/source fetches.
+                std::vector<media::Item> items;
+                if (!stremioLibrary || WatchlistFilter::selectedProgress == 0) {
+                    items = r.Items;
+                } else {
+                    int wanted = WatchlistFilter::selectedProgress;
+                    for (const auto& item : r.Items) {
+                        bool watched = item.played();
+                        bool inProgress = !watched && item.viewOffset > 0;
+                        bool unwatched = !watched && item.viewOffset <= 0;
+                        bool match = (wanted == 1 && inProgress) ||
+                                     (wanted == 2 && unwatched) ||
+                                     (wanted == 3 && watched);
+                        if (match) items.push_back(item);
+                    }
+                }
+
                 if (!this->loaded) {
-                    if (!r.Items.empty()) {
+                    if (!items.empty()) {
                         this->loaded = true;
-                        this->recycler->setDataSource(new VideoDataSource(r.Items));
+                        this->recycler->setDataSource(new VideoDataSource(items));
                     } else if (more) {
+                        // A filtered page can legitimately be empty; continue until
+                        // a match appears or account pagination is exhausted.
                         this->doRequest();
-                    } else {
+                    } else if (r.TotalRecordCount == 0 && (!stremioLibrary || WatchlistFilter::selectedProgress == 0)) {
                         this->recycler->setEmpty("main/favorites/empty_title"_i18n,
                             "main/favorites/empty_sub"_i18n, "icon/ico-bookmark.svg");
+                    } else {
+                        this->recycler->setEmpty();
                     }
-                } else if (!r.Items.empty()) {
+                } else if (!items.empty()) {
                     auto* ds = dynamic_cast<VideoDataSource*>(this->recycler->getDataSource());
                     if (ds) {
-                        ds->appendData(r.Items);
+                        ds->appendData(items);
                         this->recycler->notifyDataChanged();
                     }
                 } else if (more) {
