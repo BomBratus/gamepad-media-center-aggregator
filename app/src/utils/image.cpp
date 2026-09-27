@@ -145,6 +145,41 @@ static uint8_t* halve_rgba(const uint8_t* src, int w, int h, int* outW, int* out
 }
 #endif
 
+#if defined(__PS4__) && !defined(BOREALIS_USE_GXM)
+// PS4/Piglet uploads ordinary RGBA textures. Stremio artwork URLs frequently
+// ignore GMCA's requested dimensions, so decode at source size and shrink in RAM
+// before the GPU upload. Repeated 2x box filtering is intentionally simple and
+// bounded: it avoids keeping multi-megapixel posters/backdrops in the texture
+// cache while preserving enough pixels for the actual on-screen card.
+static uint8_t* ps4_halve_rgba(const uint8_t* src, int w, int h, int* outW, int* outH) {
+    int dw = (w + 1) / 2;
+    int dh = (h + 1) / 2;
+    auto* dst = static_cast<uint8_t*>(malloc((size_t)dw * dh * 4));
+    if (!dst) return nullptr;
+
+    for (int y = 0; y < dh; y++) {
+        int sy0 = y * 2;
+        int sy1 = sy0 + 1 < h ? sy0 + 1 : h - 1;
+        const uint8_t* r0 = src + (size_t)sy0 * w * 4;
+        const uint8_t* r1 = src + (size_t)sy1 * w * 4;
+        uint8_t* d = dst + (size_t)y * dw * 4;
+        for (int x = 0; x < dw; x++) {
+            int sx0 = x * 2;
+            int sx1 = sx0 + 1 < w ? sx0 + 1 : w - 1;
+            for (int ch = 0; ch < 4; ch++) {
+                unsigned sum = r0[sx0 * 4 + ch] + r0[sx1 * 4 + ch] +
+                               r1[sx0 * 4 + ch] + r1[sx1 * 4 + ch];
+                d[x * 4 + ch] = static_cast<uint8_t>((sum + 2) / 4);
+            }
+        }
+    }
+
+    *outW = dw;
+    *outH = dh;
+    return dst;
+}
+#endif
+
 Image::Image() : image(nullptr) {
     this->isCancel = std::make_shared<std::atomic_bool>(false);
     brls::Logger::verbose("new Image {}", fmt::ptr(this));
@@ -308,10 +343,45 @@ void Image::doRequest(HTTP& s) {
             imageData = stbi_load_from_memory((unsigned char*)data.c_str(), data.size(), &imageW, &imageH, &n, 4);
         }
 
+#if defined(__PS4__) && !defined(BOREALIS_USE_GXM)
+        if (imageData && imageW > 0 && imageH > 0) {
+            int tW = this->targetW;
+            int tH = this->targetH;
+            if (tW > 0 && tH == 0) tH = (int)((int64_t)tW * imageH / imageW);
+            if (tH > 0 && tW == 0) tW = (int)((int64_t)tH * imageW / imageH);
+
+            // Never shrink below 128 px on either known display axis (small UI
+            // icons stay crisp), while unknown-size images are still bounded to
+            // 2048 px — above the PS4 app's 1080p output needs.
+            int capW = tW > 0 ? (tW < 128 ? 128 : tW) : 2048;
+            int capH = tH > 0 ? (tH < 128 ? 128 : tH) : 2048;
+            while (imageData && (imageW > capW || imageH > capH)) {
+                int nw = 0;
+                int nh = 0;
+                uint8_t* half = ps4_halve_rgba(imageData, imageW, imageH, &nw, &nh);
+                if (!half) break;
+#ifdef USE_WEBP
+                if (isWebp)
+                    WebPFree(imageData);
+                else
+#endif
+                    stbi_image_free(imageData);
+                imageData = half;
+                imageW = nw;
+                imageH = nh;
+                // ps4_halve_rgba allocates with malloc; stbi_image_free maps to free.
+                isWebp = false;
+            }
+        }
+#endif
+
         bool hasAlpha = isWebp;
         // exact GPU footprint of the upload, forwarded to the TextureCache
         // byte capacity; 0 = let addCache estimate (w*h*4)
         size_t texBytes = 0;
+#if defined(__PS4__) && !defined(BOREALIS_USE_GXM)
+        if (imageData) texBytes = (size_t)imageW * imageH * 4;
+#endif
 #ifdef BOREALIS_USE_GXM
         if (imageData) {
             // Downscale to the smallest power-of-two texture that still covers the
