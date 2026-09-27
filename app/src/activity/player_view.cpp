@@ -37,9 +37,9 @@ static Ps4SubtitleSidecarSafety ps4SubtitleSidecarSafety(const std::string& rawU
         size_t n = std::strlen(suffix);
         return url.size() >= n && url.compare(url.size() - n, n, suffix) == 0;
     };
-    if (endsWith(".srt") || endsWith(".vtt")) return Ps4SubtitleSidecarSafety::SafeText;
-    if (endsWith(".ass") || endsWith(".ssa") || endsWith(".sup") ||
-        endsWith(".sub") || endsWith(".idx"))
+    if (endsWith(".srt") || endsWith(".vtt") || endsWith(".ass") || endsWith(".ssa"))
+        return Ps4SubtitleSidecarSafety::SafeText;
+    if (endsWith(".sup") || endsWith(".sub") || endsWith(".idx"))
         return Ps4SubtitleSidecarSafety::Risky;
     return Ps4SubtitleSidecarSafety::Unknown;
 }
