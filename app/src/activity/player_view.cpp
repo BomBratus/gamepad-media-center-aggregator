@@ -50,9 +50,13 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
         PlayerSetting::showAudioMenu(&this->stream);
         return true;
     });
-    // transcode stream failed to play -> retry once in direct play before the
-    // error dialog (Vita hardware decode can reject the transcoded stream)
-    view->registerError([this](...) { return this->tryDirectPlayFallback(); });
+    // Recovery stays backend-aware: Plex/Vita gets its direct-play retry first;
+    // Stremio then offers the already-resolved alternate sources without any
+    // hidden refetch or addon reordering.
+    view->registerError([this](...) {
+        if (this->tryDirectPlayFallback()) return true;
+        return this->trySourceRecovery();
+    });
 
     // stable session identifier (24 characters)
     this->sessionId = misc::randHex(12);
@@ -327,6 +331,7 @@ void PlayerView::playMedia(const int64_t seekMs) {
             // caller-chosen source (Stremio picker) if it still resolves to an
             // accessible file; otherwise the first accessible version.
             const plex::Media* chosen = nullptr;
+            int chosenIndex = -1;
             auto accessible = [](const plex::Media& m) {
                 for (auto& p : m.parts)
                     if (p.accessible && p.exists && !p.key.empty()) return true;
@@ -334,16 +339,19 @@ void PlayerView::playMedia(const int64_t seekMs) {
             };
             if (this->preferredVersion >= 0 && this->preferredVersion < (int)this->item.media.size() &&
                 accessible(this->item.media[this->preferredVersion])) {
-                chosen = &this->item.media[this->preferredVersion];
+                chosenIndex = this->preferredVersion;
+                chosen = &this->item.media[(size_t)chosenIndex];
             }
-            for (auto& m : this->item.media) {
-                if (chosen) break;
-                if (accessible(m)) chosen = &m;
+            for (size_t i = 0; i < this->item.media.size() && !chosen; ++i) {
+                if (!accessible(this->item.media[i])) continue;
+                chosenIndex = (int)i;
+                chosen = &this->item.media[i];
             }
             if (!chosen) {
                 Dialog::show("main/player/error"_i18n, []() { VideoView::close(); });
                 return;
             }
+            this->preferredVersion = chosenIndex;
             this->stream = *chosen;
             this->setChapters(this->item.chapters, this->item.duration);
             this->startPlayback(seekMs);
@@ -394,6 +402,7 @@ void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
                 // (e.g. Stremio with no direct/debrid stream) instead of throwing
                 // across the async/TU boundary; surface it as a player error.
                 if (src.url.empty()) {
+                    if (this->trySourceRecovery()) return;
                     Dialog::show("main/player/error"_i18n, []() { VideoView::close(); });
                     return;
                 }
@@ -409,6 +418,7 @@ void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
             std::string msg = ex.what();
             brls::sync([ASYNC_TOKEN, msg]() {
                 ASYNC_RELEASE
+                if (this->trySourceRecovery()) return;
                 Dialog::show(msg, []() { VideoView::close(); });
             });
         }
@@ -494,6 +504,65 @@ bool PlayerView::tryDirectPlayFallback() {
     // surface the reason to the user too, so bug reports carry the mpv code
     brls::Application::notify(fmt::format("{} ({})", "main/player/direct_fallback"_i18n, mpv.getError()));
     return true;  // handled: no error dialog
+}
+
+bool PlayerView::trySourceRecovery(int64_t resumeMs) {
+    if (AppConfig::instance().backend().type() != media::BackendType::Stremio || this->item.media.size() < 2)
+        return false;
+
+    auto accessible = [](const media::Media& m) {
+        for (const auto& p : m.parts)
+            if (p.accessible && p.exists && !p.key.empty()) return true;
+        return false;
+    };
+    auto mediaKey = [](const media::Media& m) -> std::string {
+        return m.parts.empty() ? std::string() : m.parts.front().key;
+    };
+
+    int current = this->preferredVersion;
+    if (current < 0 || current >= (int)this->item.media.size()) {
+        std::string key = mediaKey(this->stream);
+        for (size_t i = 0; i < this->item.media.size(); ++i)
+            if (!key.empty() && mediaKey(this->item.media[i]) == key) {
+                current = (int)i;
+                break;
+            }
+    }
+
+    std::vector<int> alternatives;
+    std::vector<std::string> labels;
+    for (size_t i = 0; i < this->item.media.size(); ++i) {
+        if ((int)i == current || !accessible(this->item.media[i])) continue;
+        const auto& m = this->item.media[i];
+        std::string label;
+        if (!m.videoResolution.empty()) label += m.videoResolution;
+        if (!m.videoCodec.empty()) label += (label.empty() ? "" : " · ") + m.videoCodec;
+        if (!m.label.empty()) label += (label.empty() ? "" : " · ") + m.label;
+        if (!m.detail.empty()) label += (label.empty() ? "" : " · ") + m.detail;
+        if (label.empty()) label = fmt::format("Source {}", i + 1);
+        alternatives.push_back((int)i);
+        labels.push_back(std::move(label));
+    }
+    if (alternatives.empty()) return false;
+
+    if (resumeMs < 0) {
+        resumeMs = int64_t(MPVCore::instance().playback_time) * 1000;
+        if (resumeMs <= 0) resumeMs = this->item.viewOffset;
+    }
+    const int64_t resume = resumeMs;
+    auto* picker = new brls::Dropdown("Choose another source", labels,
+        [this, alternatives, resume](int selected) {
+            if (selected < 0 || selected >= (int)alternatives.size()) return;
+            int index = alternatives[(size_t)selected];
+            MPVCore::instance().reset();
+            this->preferredVersion = index;
+            this->stream = this->item.media[(size_t)index];
+            this->externalSubsItem.clear();
+            this->externalSubs.clear();
+            this->startPlayback(resume);
+        });
+    brls::Application::pushActivity(new brls::Activity(picker));
+    return true;
 }
 
 void PlayerView::stopTranscode() {
