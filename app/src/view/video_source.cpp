@@ -21,6 +21,7 @@
 #include "view/video_source.hpp"
 #include "view/context_menu.hpp"
 #include "view/auto_tab_frame.hpp"
+#include <algorithm>
 #include <unordered_set>
 
 using namespace brls::literals;  // for _i18n
