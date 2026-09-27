@@ -50,14 +50,13 @@ diff --git a/app/src/tab/media_movie.cpp b/app/src/tab/media_movie.cpp
 +}
 +
  /// A selectable release/source line. Paints a light-orange "selected" fill on
-@@ -445,4 +497,6 @@
+@@ -445,7 +497,14 @@
  #if defined(GMCA_PS4_SAFE_SOURCES)
          std::string warning = stremio::ps4WarningLabel(m);
          if (!warning.empty()) cells.push_back(sourcePill(warning, goldBg, goldFg));
 +        if (movieSourceHasItalianAudio(m))
 +            cells.push_back(sourcePill("ITA AUDIO", pillBg, textCol));
  #endif
-@@ -449,3 +503,10 @@
 -        // source name (grows) + meta (codec · size)
 -        cells.push_back(sourceLabel(m.label, 15, textCol, true));
 -        if (!m.detail.empty()) cells.push_back(sourceLabel(m.detail, 13, greyCol));
