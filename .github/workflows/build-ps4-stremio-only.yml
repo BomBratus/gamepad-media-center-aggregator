@@ -25,6 +25,9 @@ on:
       - app/src/tab/server_type_choose.cpp
       - app/src/tab/stremio_add.cpp
       - app/src/tab/setting_tab.cpp
+      - app/include/tab/setting_tab.hpp
+      - app/src/tab/watchlist_tab.cpp
+      - resources/xml/tabs/settings.xml
       - app/src/api/stremio/**
       - app/include/api/stremio/**
       - app/include/api/media/types.hpp
@@ -32,6 +35,9 @@ on:
       - app/src/view/mpv_core.cpp
       - app/include/view/mpv_core.hpp
       - app/src/activity/player_view.cpp
+      - app/include/activity/player_view.hpp
+      - app/src/view/video_view.cpp
+      - app/include/view/video_view.hpp
       - app/include/view/video_source.hpp
       - app/src/view/recyling_video.cpp
       - app/include/view/recyling_video.hpp
@@ -97,6 +103,12 @@ jobs:
           grep -Fq 'GMCA_PS4_VERSION=${PS4_VERSION}' CMakeLists.txt
           grep -Fq 'setByteCapacity(128 * 1024 * 1024)' app/src/utils/config.cpp
           grep -Fq 'ps4_halve_rgba' app/src/utils/image.cpp
+          grep -Fq 'PLAYER_AUTOPLAY_NEXT' app/include/utils/config.hpp
+          grep -Fq 'Choose another source' app/src/activity/player_view.cpp
+          grep -Fq 'PS4 subtitle guard' app/src/activity/player_view.cpp
+          grep -Fq 'Restart episode' app/src/view/video_source.cpp
+          grep -Fq 'selectedProgress' app/src/tab/watchlist_tab.cpp
+          grep -Fq 'ITA AUDIO' app/src/tab/media_movie.cpp
           git checkout -- custom/ps4-safe-sources.patch custom/ps4-ui-followups.patch
           git diff --check
 
