@@ -28,6 +28,7 @@
 #include <borealis/core/i18n.hpp>
 #include <algorithm>
 #include <cctype>
+#include <ctime>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -328,6 +329,172 @@ std::string buildCatalogUrl(const std::string& base, const std::string& type, co
     return url;
 }
 
+// ---- IMDb all-time Top 250 ----------------------------------------------------
+// IMDb's public chart pages are the semantic source, but fetching/parsing their
+// HTML on a console is brittle. The same chart data is exposed by IMDb's internal
+// GraphQL endpoint in one compact request. It is deliberately isolated here in
+// the Stremio backend: the UI only sees neutral media::Item rows.
+//
+// Reliability contract: cache one snapshot per kind on disk and in RAM. A fresh
+// (<24 h) snapshot avoids the network entirely; if a refresh fails, stale cached
+// data is still shown rather than silently substituting Cinemeta "Featured".
+constexpr int64_t IMDB_TOP_CACHE_TTL = 24 * 60 * 60;
+constexpr int IMDB_TOP_LIMIT = 250;
+
+struct ImdbTopCacheState {
+    std::mutex mutex;
+    std::vector<media::Item> movies;
+    std::vector<media::Item> series;
+    int64_t moviesFetchedAt = 0;
+    int64_t seriesFetchedAt = 0;
+    bool moviesLoaded = false;
+    bool seriesLoaded = false;
+};
+ImdbTopCacheState imdbTopCache;
+
+std::string imdbTopCachePath(bool series) {
+    return AppConfig::instance().configDir() + (series ? "/imdb-top-series.json" : "/imdb-top-movies.json");
+}
+
+media::Item imdbTopItemFromJson(const nlohmann::json& j, bool series) {
+    media::Item item;
+    std::string id = jstr(j, "id");
+    if (id.rfind("tt", 0) != 0) return item;
+    item.guid = id;
+    item.ratingKey = std::string(series ? "series:" : "movie:") + id;
+    item.key = item.ratingKey;
+    item.type = series ? media::mediaTypeShow : media::mediaTypeMovie;
+    item.title = jstr(j, "title");
+    item.year = jint(j, "year");
+    item.rating = jnum(j, "rating");
+    item.ratingImage = "imdb://image.rating";
+    item.index = jint(j, "rank");  // rank is otherwise unused for movie/show cards
+    item.thumb = "https://images.metahub.space/poster/medium/" + id + "/img";
+    return item;
+}
+
+void loadImdbTopCacheFile(bool series, std::vector<media::Item>& out, int64_t& fetchedAt) {
+    out.clear();
+    fetchedAt = 0;
+    try {
+        std::ifstream in(imdbTopCachePath(series));
+        if (!in.is_open()) return;
+        nlohmann::json root;
+        in >> root;
+        if (jint(root, "schema") != 1) return;
+        fetchedAt = jint(root, "fetchedAt");
+        auto it = root.find("items");
+        if (it == root.end() || !it->is_array()) return;
+        for (const auto& entry : *it) {
+            media::Item item = imdbTopItemFromJson(entry, series);
+            if (!item.ratingKey.empty()) out.push_back(std::move(item));
+        }
+    } catch (const std::exception& ex) {
+        brls::Logger::warning("IMDb Top cache read {}: {}", imdbTopCachePath(series), ex.what());
+        out.clear();
+        fetchedAt = 0;
+    }
+}
+
+void saveImdbTopCacheFile(bool series, const std::vector<media::Item>& items, int64_t fetchedAt) {
+    try {
+        nlohmann::json root;
+        root["schema"] = 1;
+        root["fetchedAt"] = fetchedAt;
+        root["items"] = nlohmann::json::array();
+        for (const auto& item : items) {
+            root["items"].push_back({{"id", item.guid}, {"title", item.title}, {"year", item.year},
+                {"rating", item.rating}, {"rank", item.index}});
+        }
+        std::ofstream out(imdbTopCachePath(series), std::ios::trunc);
+        if (!out.is_open()) throw std::runtime_error("could not open cache file");
+        out << root.dump();
+    } catch (const std::exception& ex) {
+        brls::Logger::warning("IMDb Top cache write {}: {}", imdbTopCachePath(series), ex.what());
+    }
+}
+
+std::vector<media::Item> fetchImdbTop(media::MediaKind kind) {
+    const bool series = kind == media::MediaKind::Show;
+    const std::string chartType = series ? "TOP_RATED_TV" : "TOP_RATED_MOVIES";
+    const std::string query =
+        "query GetChart($first: Int!) {"
+        " chartTitles(first: $first, chart: {chartType: " + chartType + "}) {"
+        " edges { node { id titleText { text } releaseYear { year }"
+        " ratingsSummary { aggregateRating voteCount topRanking { rank } } } }"
+        " }"
+        "}";
+    nlohmann::json body = {
+        {"query", query}, {"variables", {{"first", IMDB_TOP_LIMIT}}}, {"operationName", "GetChart"}};
+    HTTP::Header headers = {
+        "Content-Type: application/json",
+        "Accept: application/json",
+        "Origin: https://www.imdb.com",
+        "Referer: https://www.imdb.com/",
+        "User-Agent: Mozilla/5.0 (GMCA; IMDb Top 250)",
+    };
+    HTTP::Timeout timeout;
+    timeout.timeout = 10000;
+    timeout.connect = 3500;
+    nlohmann::json root = nlohmann::json::parse(
+        HTTP::post("https://api.graphql.imdb.com/", body.dump(), headers, timeout));
+    if (root.contains("errors")) throw std::runtime_error("IMDb chart request returned an error");
+    auto data = root.find("data");
+    if (data == root.end() || !data->is_object()) throw std::runtime_error("IMDb chart response has no data");
+    auto chart = data->find("chartTitles");
+    if (chart == data->end() || !chart->is_object()) throw std::runtime_error("IMDb chart response has no chart");
+    auto edges = chart->find("edges");
+    if (edges == chart->end() || !edges->is_array()) throw std::runtime_error("IMDb chart response has no rows");
+
+    std::vector<media::Item> out;
+    out.reserve(IMDB_TOP_LIMIT);
+    int64_t fallbackRank = 1;
+    for (const auto& edge : *edges) {
+        auto node = edge.find("node");
+        if (node == edge.end() || !node->is_object()) continue;
+        std::string id = jstr(*node, "id");
+        if (id.rfind("tt", 0) != 0) continue;
+
+        media::Item item;
+        item.guid = id;
+        item.ratingKey = std::string(series ? "series:" : "movie:") + id;
+        item.key = item.ratingKey;
+        item.type = series ? media::mediaTypeShow : media::mediaTypeMovie;
+        if (auto title = node->find("titleText"); title != node->end() && title->is_object())
+            item.title = jstr(*title, "text");
+        if (auto year = node->find("releaseYear"); year != node->end() && year->is_object())
+            item.year = jint(*year, "year");
+        item.index = fallbackRank;
+        if (auto ratings = node->find("ratingsSummary"); ratings != node->end() && ratings->is_object()) {
+            item.rating = jnum(*ratings, "aggregateRating");
+            item.ratingImage = "imdb://image.rating";
+            if (auto top = ratings->find("topRanking"); top != ratings->end() && top->is_object()) {
+                int64_t rank = jint(*top, "rank");
+                if (rank > 0) item.index = rank;
+            }
+        }
+        item.thumb = "https://images.metahub.space/poster/medium/" + id + "/img";
+        out.push_back(std::move(item));
+        ++fallbackRank;
+    }
+    if (out.empty()) throw std::runtime_error("IMDb chart returned no titles");
+    std::stable_sort(out.begin(), out.end(), [](const media::Item& a, const media::Item& b) {
+        return a.index < b.index;
+    });
+    return out;
+}
+
+media::Container<media::Item> pageImdbTop(
+    const std::vector<media::Item>& items, size_t start, size_t size) {
+    media::Container<media::Item> out;
+    out.StartIndex = (long)start;
+    out.TotalRecordCount = (long)items.size();
+    if (start >= items.size() || size == 0) return out;
+    size_t end = std::min(items.size(), start + size);
+    out.Items.insert(out.Items.end(), items.begin() + start, items.begin() + end);
+    return out;
+}
+
 media::Stream subtitleOptionToStream(const SubtitleOption& sub) {
     media::Stream st;
     st.streamType = media::streamTypeSubtitle;
@@ -608,6 +775,71 @@ void StremioBackend::getSectionHubs(
             }
             out.TotalRecordCount = (long)out.Items.size();
             brls::sync(std::bind(then, std::move(out)));
+        } catch (const std::exception& ex) {
+            if (error) brls::sync(std::bind(error, std::string(ex.what())));
+        }
+    });
+}
+
+void StremioBackend::getTopRated(media::MediaKind kind, size_t start, size_t size,
+    media::Then<media::Container<media::Item>> then, media::OnError error) {
+    if (kind != media::MediaKind::Movie && kind != media::MediaKind::Show) {
+        if (error) error("IMDb Top is available only for movies and series");
+        return;
+    }
+    const bool series = kind == media::MediaKind::Show;
+    const size_t startCopy = start, sizeCopy = size;
+    brls::async([kind, series, startCopy, sizeCopy, then, error]() {
+        try {
+            const int64_t now = (int64_t)std::time(nullptr);
+            std::vector<media::Item> cached;
+            int64_t fetchedAt = 0;
+            bool fresh = false;
+            {
+                std::lock_guard<std::mutex> lock(imdbTopCache.mutex);
+                auto& loaded = series ? imdbTopCache.seriesLoaded : imdbTopCache.moviesLoaded;
+                auto& items = series ? imdbTopCache.series : imdbTopCache.movies;
+                auto& stamp = series ? imdbTopCache.seriesFetchedAt : imdbTopCache.moviesFetchedAt;
+                if (!loaded) {
+                    loadImdbTopCacheFile(series, items, stamp);
+                    loaded = true;
+                }
+                cached = items;
+                fetchedAt = stamp;
+                fresh = !cached.empty() && fetchedAt > 0 &&
+                        (now <= fetchedAt || now - fetchedAt < IMDB_TOP_CACHE_TTL);
+            }
+
+            std::vector<media::Item> items = cached;
+            if (!fresh) {
+                try {
+                    items = fetchImdbTop(kind);
+                    int64_t refreshedAt = now > 0 ? now : 1;
+                    {
+                        std::lock_guard<std::mutex> lock(imdbTopCache.mutex);
+                        auto& target = series ? imdbTopCache.series : imdbTopCache.movies;
+                        auto& stamp = series ? imdbTopCache.seriesFetchedAt : imdbTopCache.moviesFetchedAt;
+                        target = items;
+                        stamp = refreshedAt;
+                    }
+                    saveImdbTopCacheFile(series, items, refreshedAt);
+                } catch (const std::exception& ex) {
+                    if (items.empty()) throw;
+                    // Do not hammer IMDb again on every local pagination request.
+                    // Mark only the in-memory snapshot as fresh for this session;
+                    // the old on-disk timestamp is intentionally preserved so the
+                    // next app launch will retry the refresh.
+                    {
+                        std::lock_guard<std::mutex> lock(imdbTopCache.mutex);
+                        auto& stamp = series ? imdbTopCache.seriesFetchedAt : imdbTopCache.moviesFetchedAt;
+                        stamp = now > 0 ? now : 1;
+                    }
+                    brls::Logger::warning("IMDb Top refresh failed; using cached snapshot: {}", ex.what());
+                }
+            }
+
+            media::Container<media::Item> page = pageImdbTop(items, startCopy, sizeCopy);
+            brls::sync(std::bind(then, std::move(page)));
         } catch (const std::exception& ex) {
             if (error) brls::sync(std::bind(error, std::string(ex.what())));
         }

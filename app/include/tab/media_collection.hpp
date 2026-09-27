@@ -56,9 +56,9 @@ private:
     static std::map<std::string, std::string> customPrefs;
 };
 
-/// Stremio library section (Films / Séries): a compact Discover tab shows
-/// addon catalogs as vertical hub shelves (Populaires / Nouveautés / …), plus a
-/// separate Genres tab. Used instead of MediaCollection for Stremio sections.
+/// Stremio library section (Films / Séries): Discover shows addon catalogs
+/// as vertical hub shelves, Top IMDb exposes the cached all-time IMDb Top 250,
+/// and Genres remains a separate browsing mode. Used instead of MediaCollection.
 /// Kept separate so the Plex/Jellyfin MediaCollection path is untouched.
 class StremioCatalogs : public AttachedView {
 public:

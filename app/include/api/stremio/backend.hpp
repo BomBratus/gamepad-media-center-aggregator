@@ -35,6 +35,8 @@ public:
         media::OnError error) override;
     void getSectionHubs(const std::string& sectionId, int count, media::Then<media::Container<media::Hub>> then,
         media::OnError error) override;
+    void getTopRated(media::MediaKind kind, size_t start, size_t size,
+        media::Then<media::Container<media::Item>> then, media::OnError error) override;
     void getContinueWatching(int count, media::Then<media::Container<media::Hub>> then, media::OnError error) override;
     void getLibraryGrid(const std::string& sectionId, const media::GridQuery& q, size_t start, size_t size,
         media::Then<media::Container<media::Item>> then, media::OnError error) override;
