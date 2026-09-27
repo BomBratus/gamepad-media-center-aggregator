@@ -52,7 +52,6 @@ on:
       - resources/xml/view/episode_card.xml
       - custom/ps4-safe-sources.patch
       - custom/ps4-ui-followups.patch
-      - custom/ps4-playback-ux.patch
       - custom/apply-ps4-search-ui.awk
       - .github/workflows/build-ps4-stremio-only.yml
       - .github/workflows/publish-ps4-update.yml
@@ -94,13 +93,10 @@ jobs:
           git config --global --add safe.directory '*'
           printf '\n' >> custom/ps4-safe-sources.patch
           printf '\n' >> custom/ps4-ui-followups.patch
-          printf '\n' >> custom/ps4-playback-ux.patch
           git apply --check custom/ps4-safe-sources.patch
           git apply --verbose custom/ps4-safe-sources.patch
           git apply --check --recount --verbose custom/ps4-ui-followups.patch
           git apply --verbose --recount custom/ps4-ui-followups.patch
-          git apply --check --recount --verbose custom/ps4-playback-ux.patch
-          git apply --verbose --recount custom/ps4-playback-ux.patch
           awk -f custom/apply-ps4-search-ui.awk app/src/tab/search_tab.cpp > /tmp/search_tab.cpp
           mv /tmp/search_tab.cpp app/src/tab/search_tab.cpp
           grep -q "set(PS4_VERSION \"${{ steps.ps4ver.outputs.version }}\")" CMakeLists.txt
@@ -113,7 +109,7 @@ jobs:
           grep -Fq 'Restart episode' app/src/view/video_source.cpp
           grep -Fq 'selectedProgress' app/src/tab/watchlist_tab.cpp
           grep -Fq 'ITA AUDIO' app/src/tab/media_movie.cpp
-          git checkout -- custom/ps4-safe-sources.patch custom/ps4-ui-followups.patch custom/ps4-playback-ux.patch
+          git checkout -- custom/ps4-safe-sources.patch custom/ps4-ui-followups.patch
           git diff --check
 
       - name: Apply borealis patches
