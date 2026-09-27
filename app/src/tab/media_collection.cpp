@@ -485,16 +485,25 @@ StremioCatalogs::StremioCatalogs(const std::string& sectionKey, const std::strin
     brls::Logger::debug("StremioCatalogs: create {} type {}", sectionKey, sectionType);
     this->inflateFromXMLRes("xml/tabs/stremio_catalogs.xml");
 
-    // one tab per catalog of this type (Populaires / Nouveautés / À la une / …)
-    for (auto& t : AppConfig::instance().backend().sectionTabs(sectionKey)) {
-        std::string catKey = t.first, type = sectionType;
+    // Stremio discovery is easier to scan as vertical shelves than as one
+    // top-level tab per addon catalog. Reuse the existing section-hub views:
+    // each catalog becomes a controller-friendly horizontal row with a trailing
+    // "+" card that opens its existing paginated HubView.
+    {
+        std::string key = sectionKey;
         auto* item = new AutoSidebarItem();
         item->setTabStyle(AutoTabBarStyle::ACCENT);
         item->setFontSize(18);
-        item->setLabel(t.second);
-        this->tabFrame->addTab(item, [catKey, type]() { return new CatalogGrid(catKey, type); });
+        item->setLabel("main/tabs/suggest"_i18n);
+        if (sectionType == plex::mediaTypeShow) {
+            this->tabFrame->addTab(item, [key]() { return new SuggestShow(key); });
+        } else {
+            this->tabFrame->addTab(item, [key]() { return new SuggestMovie(key); });
+        }
     }
-    // a Genres tab when the backend exposes genre directories
+
+    // Genres remains a separate browsing mode instead of competing with every
+    // addon catalog in the top bar.
     if (AppConfig::instance().backend().caps().genres) {
         std::string key = sectionKey, type = sectionType;
         auto* item = new AutoSidebarItem();

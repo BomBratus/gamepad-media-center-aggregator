@@ -37,6 +37,12 @@ on:
       - app/include/view/recyling_video.hpp
       - app/src/tab/home_tab.cpp
       - app/src/tab/media_series.cpp
+      - app/src/tab/media_collection.cpp
+      - app/include/tab/media_collection.hpp
+      - app/src/tab/suggest_movie.cpp
+      - app/src/tab/suggest_show.cpp
+      - resources/xml/tabs/stremio_catalogs.xml
+      - resources/xml/tabs/suggest_show.xml
       - resources/xml/view/episode_card.xml
       - custom/ps4-safe-sources.patch
       - custom/ps4-ui-followups.patch
