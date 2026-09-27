@@ -120,12 +120,11 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
                     std::string url = AppConfig::instance().backend().subtitleSidecarUrl(s.key);
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
                     auto safety = ps4SubtitleSidecarSafety(url);
-                    if (safety == Ps4SubtitleSidecarSafety::Risky) {
-                        brls::Logger::warning("PS4 subtitle guard: skipped risky sidecar {}", url);
-                        continue;
-                    }
-                    // Unknown extensions are still exposed, but never auto-selected:
-                    // a malformed/unsupported sidecar must not corrupt video startup.
+                    if (safety == Ps4SubtitleSidecarSafety::Risky)
+                        brls::Logger::info("PS4 subtitle guard: bitmap sidecar is manual-select only {}", url);
+                    // Only known text formats may be selected automatically.
+                    // Bitmap and unknown sidecars stay available in the menu, but
+                    // cannot alter the renderer during video startup.
                     const char* ps4Flag =
                         safety == Ps4SubtitleSidecarSafety::SafeText ? flag : "auto";
                     mpv.command("sub-add", url.c_str(), ps4Flag, s.displayTitle.c_str());
@@ -447,6 +446,10 @@ void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
                 // transcode session, leaving stopTranscode a safe no-op.
                 this->transcodeSession = src.transcodeSession;
                 MPVCore::instance().setUrl(src.url, src.mpvExtra);
+                // Resolve subtitles only after a playable URL has actually been
+                // accepted. This preserves the single-worker playback-first order
+                // while avoiding an addon subtitle request for a failed source.
+                this->resolveExternalSubtitles();
             });
         } catch (const std::exception& ex) {
             std::string msg = ex.what();
@@ -458,15 +461,6 @@ void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
         }
     });
 
-    // Resolve external subtitles AFTER queuing the playback task above. brls::async
-    // is a single FIFO worker thread (not a pool): the Stremio subtitle fan-out
-    // (ensureLoaded + one getSync per subtitles addon, up to a 15 s timeout each)
-    // would otherwise run to completion BEFORE the fast resolvePlayback task and
-    // stall the video start behind it. Queuing playback first lets mpv start
-    // loading while subtitles resolve; the mpvLoaded/addExternalSubtitles handoff
-    // adds them whenever the fetch lands. (No-op for Plex/Jellyfin: getSubtitles
-    // returns synchronously.)
-    this->resolveExternalSubtitles();
 }
 
 void PlayerView::resolveExternalSubtitles() {
@@ -521,12 +515,10 @@ void PlayerView::addExternalSubtitles() {
         const char* flag = preferred ? "select" : "auto";
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
         auto safety = ps4SubtitleSidecarSafety(url);
-        if (safety == Ps4SubtitleSidecarSafety::Risky) {
-            brls::Logger::warning("PS4 subtitle guard: skipped risky external sidecar {}", url);
-            continue;
-        }
-        // Preserve preferred-language auto-selection for known-safe SRT/VTT only.
-        // Unknown URLs stay available in the menu but require explicit selection.
+        if (safety == Ps4SubtitleSidecarSafety::Risky)
+            brls::Logger::info("PS4 subtitle guard: bitmap external sidecar is manual-select only {}", url);
+        // Preserve preferred-language auto-selection for known-safe text formats
+        // only. Bitmap/unknown URLs stay available but require explicit selection.
         if (safety != Ps4SubtitleSidecarSafety::SafeText) flag = "auto";
 #endif
         mpv.command("sub-add", url.c_str(), flag, s.displayTitle.c_str(), s.languageTag.c_str());
