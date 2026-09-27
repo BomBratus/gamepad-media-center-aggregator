@@ -638,10 +638,11 @@ void VideoView::registerMpvEvent() {
             }
             break;
         case MpvEventEnum::END_OF_FILE:
-            // 播放结束
+            // End of an episode. PlayerView owns the Up Next prompt; this gate
+            // preserves the legacy immediate advance only when autoplay remains enabled.
             disableDimming(false);
             this->toggleIcon->setImageFromSVGRes("icon/ico-play.svg");
-            this->playIndexEvent.fire(++this->playIndex);
+            if (this->autoNext) this->playIndexEvent.fire(++this->playIndex);
             break;
         case MpvEventEnum::CACHE_SPEED_CHANGE:
             // 仅当加载圈已经开始转起的情况显示缓存
