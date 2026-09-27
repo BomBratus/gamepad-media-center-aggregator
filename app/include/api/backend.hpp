@@ -129,6 +129,13 @@ public:
     }
     virtual void getHomeHubs(int count, bool excludeContinueWatching, Then<Container<Hub>> then, OnError error) = 0;
     virtual void getSectionHubs(const std::string& sectionId, int count, Then<Container<Hub>> then, OnError error) = 0;
+    /// Provider-backed top-rated chart. Backends that do not expose one keep
+    /// this default unsupported implementation. Stremio maps it to IMDb's
+    /// all-time Top 250 movie / TV charts and pages the cached result locally.
+    virtual void getTopRated(
+        MediaKind kind, size_t start, size_t size, Then<Container<Item>> then, OnError error) {
+        if (error) error("top rated unsupported");
+    }
     virtual void getContinueWatching(int count, Then<Container<Hub>> then, OnError error) = 0;
     virtual void getLibraryGrid(
         const std::string& sectionId, const GridQuery& q, size_t start, size_t size, Then<Container<Item>> then,
