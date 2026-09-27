@@ -5,7 +5,10 @@
     transcoder offset in whole seconds.
 */
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
+#include <cstring>
 
 #include "activity/player_view.hpp"
 #include "api/plex.hpp"
