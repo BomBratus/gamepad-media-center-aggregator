@@ -24,6 +24,24 @@ using namespace brls::literals;
 /// LibraryVideoPlayedThreshold
 static const double SCROBBLE_THRESHOLD = 0.90;
 
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+enum class Ps4SubtitleSidecarSafety { SafeText, Unknown, Risky };
+
+static Ps4SubtitleSidecarSafety ps4SubtitleSidecarSafety(const std::string& rawUrl) {
+    std::string url = rawUrl.substr(0, rawUrl.find_first_of("?#"));
+    for (auto& ch : url) ch = (char)std::tolower((unsigned char)ch);
+    auto endsWith = [&url](const char* suffix) {
+        size_t n = std::strlen(suffix);
+        return url.size() >= n && url.compare(url.size() - n, n, suffix) == 0;
+    };
+    if (endsWith(".srt") || endsWith(".vtt")) return Ps4SubtitleSidecarSafety::SafeText;
+    if (endsWith(".ass") || endsWith(".ssa") || endsWith(".sup") ||
+        endsWith(".sub") || endsWith(".idx"))
+        return Ps4SubtitleSidecarSafety::Risky;
+    return Ps4SubtitleSidecarSafety::Unknown;
+}
+#endif
+
 PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int versionIndex)
     : itemId(item.ratingKey), item(item), preferredVersion(versionIndex) {
     // take sole ownership of MPVCore: if music was playing, the audio controller
@@ -97,7 +115,20 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
                 for (auto& s : part.streams) {
                     if (s.streamType != media::streamTypeSubtitle || s.key.empty()) continue;
                     std::string url = AppConfig::instance().backend().subtitleSidecarUrl(s.key);
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+                    auto safety = ps4SubtitleSidecarSafety(url);
+                    if (safety == Ps4SubtitleSidecarSafety::Risky) {
+                        brls::Logger::warning("PS4 subtitle guard: skipped risky sidecar {}", url);
+                        continue;
+                    }
+                    // Unknown extensions are still exposed, but never auto-selected:
+                    // a malformed/unsupported sidecar must not corrupt video startup.
+                    const char* ps4Flag =
+                        safety == Ps4SubtitleSidecarSafety::SafeText ? flag : "auto";
+                    mpv.command("sub-add", url.c_str(), ps4Flag, s.displayTitle.c_str());
+#else
                     mpv.command("sub-add", url.c_str(), flag, s.displayTitle.c_str());
+#endif
                 }
             }
             // External subtitles resolved lazily by the backend (Stremio addons):
@@ -485,6 +516,16 @@ void PlayerView::addExternalSubtitles() {
         // "auto" so they stay pickable in the subtitle menu without stealing it.
         bool preferred = !pref.empty() && s.languageTag == pref;
         const char* flag = preferred ? "select" : "auto";
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+        auto safety = ps4SubtitleSidecarSafety(url);
+        if (safety == Ps4SubtitleSidecarSafety::Risky) {
+            brls::Logger::warning("PS4 subtitle guard: skipped risky external sidecar {}", url);
+            continue;
+        }
+        // Preserve preferred-language auto-selection for known-safe SRT/VTT only.
+        // Unknown URLs stay available in the menu but require explicit selection.
+        if (safety != Ps4SubtitleSidecarSafety::SafeText) flag = "auto";
+#endif
         mpv.command("sub-add", url.c_str(), flag, s.displayTitle.c_str(), s.languageTag.c_str());
     }
 }
