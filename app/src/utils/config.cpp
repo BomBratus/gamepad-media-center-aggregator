@@ -451,7 +451,7 @@ bool AppConfig::init() {
         // 初始化纹理缓存数量
 #if defined(__PSV__) || defined(__PS4__)
         brls::TextureCache::instance().cache.setCapacity(1);
-#ifdef __PSV__
+#if defined(__PSV__)
         // The entry-count cap alone (401 effective: setCapacity ADDS
         // DEFAULT_CAPACITY) lets artwork pin ~100+ MB and starve mpv of
         // LPDDR/CDRAM. Cap the BYTES too: 48 MB of DXT posters is ~200-400
@@ -459,6 +459,12 @@ bool AppConfig::init() {
         // (48, not 64: the music-view crash log peaked near ~54 MB of artwork
         // before the blue light — the budget must sit safely below that.)
         brls::TextureCache::instance().cache.setByteCapacity(48 * 1024 * 1024);
+#elif defined(__PS4__)
+        // PS4 Stremio artwork arrives as absolute CDN images and is uploaded as
+        // RGBA textures. The nominal 401-entry cache can otherwise retain
+        // hundreds of MiB after long browsing sessions. Keep a generous but
+        // bounded artwork budget so mpv/Piglet still has headroom for playback.
+        brls::TextureCache::instance().cache.setByteCapacity(128 * 1024 * 1024);
 #endif
 #else
         brls::TextureCache::instance().cache.setCapacity(getItem(TEXTURE_CACHE_NUM, 200));
