@@ -429,6 +429,80 @@ void MediaCollection::doRequest() {
 
 // ---- Stremio: catalogs-as-subtabs section view ---------------------------------
 
+class TopRatedDataSource : public VideoDataSource {
+public:
+    explicit TopRatedDataSource(const MediaList& r) : VideoDataSource(r) {}
+
+    RecyclingGridItem* cellForRow(RecyclingView* recycler, size_t index) override {
+        RecyclingGridItem* raw = VideoDataSource::cellForRow(recycler, index);
+        if (index >= this->list.size()) return raw;
+        auto* cell = dynamic_cast<VideoCardCell*>(raw);
+        if (!cell) return raw;
+        const auto& item = this->list.at(index);
+        std::string meta;
+        if (item.index > 0) meta = fmt::format("#{}", item.index);
+        if (item.rating > 0.0) meta += fmt::format("{}IMDb {:.1f}", meta.empty() ? "" : " · ", item.rating);
+        if (item.year > 0) meta += fmt::format("{}{}", meta.empty() ? "" : " · ", item.year);
+        if (meta.empty())
+            cell->labelExt->setVisibility(brls::Visibility::GONE);
+        else {
+            cell->labelExt->setText(meta);
+            cell->labelExt->setVisibility(brls::Visibility::VISIBLE);
+        }
+        return raw;
+    }
+};
+
+/// IMDb's official all-time Top 250 chart, fetched once by the Stremio backend
+/// and paged locally. This is intentionally separate from Cinemeta's
+/// "imdbRating" / Featured catalog, which is not the all-time chart.
+class TopRatedGrid : public RecyclingGrid {
+public:
+    explicit TopRatedGrid(const std::string& itemType) : itemType(itemType) {
+        this->setGrow(1.f);
+        this->registerCell("Cell", VideoCardCell::create);
+        this->spanCount = brls::getStyle().getMetric("app/grid/6");
+        this->itemImageRatio = 1.5f;
+        this->itemExtraHeight = 55;
+        float side = brls::getStyle()["main/content_padding_sides"];
+        this->setPadding(70, side, brls::getStyle()["main/content_padding_top_bottom"], side);
+        this->onNextPage([this] { this->doRequest(); });
+        this->doRequest();
+    }
+
+private:
+    void doRequest() {
+        ASYNC_RETAIN
+        size_t reqStart = this->start;
+        media::MediaKind kind =
+            this->itemType == media::mediaTypeShow ? media::MediaKind::Show : media::MediaKind::Movie;
+        AppConfig::instance().backend().getTopRated(kind, this->start, this->pageSize,
+            [ASYNC_TOKEN, reqStart](const media::Container<media::Item>& r) {
+                ASYNC_RELEASE
+                this->start = reqStart + r.Items.size();
+                if (r.TotalRecordCount == 0 && reqStart == 0) {
+                    this->setEmpty();
+                } else if (reqStart == 0) {
+                    this->setDataSource(new TopRatedDataSource(r.Items));
+                } else if (!r.Items.empty()) {
+                    auto* dataSrc = dynamic_cast<TopRatedDataSource*>(this->getDataSource());
+                    if (dataSrc && dataSrc->appendUniqueData(r.Items) > 0) this->notifyDataChanged();
+                }
+            },
+            [ASYNC_TOKEN, reqStart](const std::string& ex) {
+                ASYNC_RELEASE
+                if (reqStart == 0)
+                    this->setError(ex);
+                else
+                    brls::Application::notify(ex);
+            });
+    }
+
+    std::string itemType;
+    size_t start = 0;
+    size_t pageSize = 60;
+};
+
 /// Paginated grid of ONE catalog (getLibraryGrid on a routed catalog key).
 /// Mirror of CollectionsTab but backed by the library grid endpoint.
 class CatalogGrid : public RecyclingGrid {
