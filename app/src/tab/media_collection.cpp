@@ -576,6 +576,17 @@ StremioCatalogs::StremioCatalogs(const std::string& sectionKey, const std::strin
         }
     }
 
+    // IMDb Top is a true all-time chart, intentionally separate from Cinemeta's
+    // Featured/imdbRating shelf. It is fetched lazily only when this tab opens.
+    {
+        std::string type = sectionType;
+        auto* item = new AutoSidebarItem();
+        item->setTabStyle(AutoTabBarStyle::ACCENT);
+        item->setFontSize(18);
+        item->setLabel("Top IMDb");
+        this->tabFrame->addTab(item, [type]() { return new TopRatedGrid(type); });
+    }
+
     // Genres remains a separate browsing mode instead of competing with every
     // addon catalog in the top bar.
     if (AppConfig::instance().backend().caps().genres) {
