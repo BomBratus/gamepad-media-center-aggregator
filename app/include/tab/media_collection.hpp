@@ -56,9 +56,9 @@ private:
     static std::map<std::string, std::string> customPrefs;
 };
 
-/// Stremio library section (Films / Séries): the type's catalogs become the
-/// sub-tabs (Populaires / Nouveautés / À la une / Public Domain…), plus a Genres
-/// tab. Used instead of MediaCollection when the backend exposes sectionTabs().
+/// Stremio library section (Films / Séries): a compact Discover tab shows
+/// addon catalogs as vertical hub shelves (Populaires / Nouveautés / …), plus a
+/// separate Genres tab. Used instead of MediaCollection for Stremio sections.
 /// Kept separate so the Plex/Jellyfin MediaCollection path is untouched.
 class StremioCatalogs : public AttachedView {
 public:
