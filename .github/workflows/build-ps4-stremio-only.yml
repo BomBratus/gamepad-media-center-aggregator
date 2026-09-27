@@ -16,6 +16,7 @@ on:
       - scripts/ps4/libmpv/**
       - cmake/bundle_ps4_updater_pkg.cmake
       - app/include/utils/config.hpp
+      - app/src/utils/config.cpp
       - app/include/utils/image.hpp
       - app/src/utils/image.cpp
       - app/include/utils/ps4_diagnostics.hpp
@@ -88,6 +89,8 @@ jobs:
           mv /tmp/search_tab.cpp app/src/tab/search_tab.cpp
           grep -q "set(PS4_VERSION \"${{ steps.ps4ver.outputs.version }}\")" CMakeLists.txt
           grep -Fq 'GMCA_PS4_VERSION=${PS4_VERSION}' CMakeLists.txt
+          grep -Fq 'setByteCapacity(128 * 1024 * 1024)' app/src/utils/config.cpp
+          grep -Fq 'ps4_halve_rgba' app/src/utils/image.cpp
           git checkout -- custom/ps4-safe-sources.patch custom/ps4-ui-followups.patch
           git diff --check
 
@@ -159,6 +162,7 @@ jobs:
 
           test -s "$OPENORBIS/usr/lib/libmpv.a"
           strings "$OPENORBIS/usr/lib/libmpv.a" | grep -F "PS4 BGRA subtitle fallback: using alpha-mask LIBASS path." >/dev/null
+          strings "$OPENORBIS/usr/lib/libmpv.a" | grep -F "precompiled shader found, using it" >/dev/null
           pkg-config --modversion mpv
           echo "GMCA patched PS4 libmpv installed and verified"
 
