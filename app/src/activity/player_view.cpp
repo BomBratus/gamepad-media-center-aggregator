@@ -13,6 +13,7 @@
 #include "activity/player_view.hpp"
 #include "api/plex.hpp"
 #include "api/backend.hpp"
+#include "tab/media_series.hpp"
 #include "utils/dialog.hpp"
 #include "utils/misc.hpp"
 #include "view/mpv_core.hpp"
@@ -20,6 +21,7 @@
 #include "view/video_view.hpp"
 #include "view/video_profile.hpp"
 #include "view/audio_player.hpp"
+#include "view/auto_tab_frame.hpp"
 
 using namespace brls::literals;
 
@@ -316,6 +318,20 @@ void PlayerView::updateUpNext(int64_t progressSeconds) {
         this->upNextDismissed = true;
         this->view->setAutoNext(false);
     });
+    if (!this->item.grandparentRatingKey.empty()) {
+        dialog->addButton("Open series", [this]() {
+            this->upNextDialog = nullptr;
+            this->upNextLabel = nullptr;
+            plex::Item show;
+            show.ratingKey = this->item.grandparentRatingKey;
+            show.type = plex::mediaTypeShow;
+            show.title = this->item.grandparentTitle;
+            brls::Application::popActivity(brls::TransitionAnimation::NONE, [show]() {
+                if (auto* focus = brls::Application::getCurrentFocus())
+                    ui::presentDetail(focus, new MediaSeries(show));
+            });
+        });
+    }
     dialog->open();
 }
 
