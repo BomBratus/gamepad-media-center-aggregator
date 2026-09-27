@@ -175,7 +175,7 @@ diff --git a/app/src/tab/media_movie.cpp b/app/src/tab/media_movie.cpp
  #include "api/backend.hpp"
 +#include "api/stremio/types.hpp"
  #include "utils/misc.hpp"
-@@ -444,3 +445,14 @@
+@@ -439,3 +440,14 @@
 -        // source name (grows) + meta (codec · size)
 -        cells.push_back(sourceLabel(m.label, 15, textCol, true));
 -        if (!m.detail.empty()) cells.push_back(sourceLabel(m.detail, 13, greyCol));
