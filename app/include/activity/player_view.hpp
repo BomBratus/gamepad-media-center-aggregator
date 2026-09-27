@@ -53,6 +53,7 @@ private:
     /// where the hardware decoder can choke on the transcoded stream). Returns
     /// true when a fallback was started (so the error dialog is suppressed).
     bool tryDirectPlayFallback();
+    bool trySourceRecovery(int64_t resumeMs = -1);
     bool playIndex(int index);
     void updateUpNext(int64_t progressSeconds);
     void dismissUpNext();
