@@ -778,6 +778,62 @@ void StremioBackend::getSectionHubs(
     });
 }
 
+void StremioBackend::getTopRated(media::MediaKind kind, size_t start, size_t size,
+    media::Then<media::Container<media::Item>> then, media::OnError error) {
+    if (kind != media::MediaKind::Movie && kind != media::MediaKind::Show) {
+        if (error) error("IMDb Top is available only for movies and series");
+        return;
+    }
+    const bool series = kind == media::MediaKind::Show;
+    const size_t startCopy = start, sizeCopy = size;
+    brls::async([kind, series, startCopy, sizeCopy, then, error]() {
+        try {
+            const int64_t now = (int64_t)std::time(nullptr);
+            std::vector<media::Item> cached;
+            int64_t fetchedAt = 0;
+            bool fresh = false;
+            {
+                std::lock_guard<std::mutex> lock(imdbTopCache.mutex);
+                auto& loaded = series ? imdbTopCache.seriesLoaded : imdbTopCache.moviesLoaded;
+                auto& items = series ? imdbTopCache.series : imdbTopCache.movies;
+                auto& stamp = series ? imdbTopCache.seriesFetchedAt : imdbTopCache.moviesFetchedAt;
+                if (!loaded) {
+                    loadImdbTopCacheFile(series, items, stamp);
+                    loaded = true;
+                }
+                cached = items;
+                fetchedAt = stamp;
+                fresh = !cached.empty() && fetchedAt > 0 &&
+                        (now <= fetchedAt || now - fetchedAt < IMDB_TOP_CACHE_TTL);
+            }
+
+            std::vector<media::Item> items = cached;
+            if (!fresh) {
+                try {
+                    items = fetchImdbTop(kind);
+                    int64_t refreshedAt = now > 0 ? now : fetchedAt;
+                    {
+                        std::lock_guard<std::mutex> lock(imdbTopCache.mutex);
+                        auto& target = series ? imdbTopCache.series : imdbTopCache.movies;
+                        auto& stamp = series ? imdbTopCache.seriesFetchedAt : imdbTopCache.moviesFetchedAt;
+                        target = items;
+                        stamp = refreshedAt;
+                    }
+                    saveImdbTopCacheFile(series, items, refreshedAt);
+                } catch (const std::exception& ex) {
+                    if (items.empty()) throw;
+                    brls::Logger::warning("IMDb Top refresh failed; using cached snapshot: {}", ex.what());
+                }
+            }
+
+            media::Container<media::Item> page = pageImdbTop(items, startCopy, sizeCopy);
+            brls::sync(std::bind(then, std::move(page)));
+        } catch (const std::exception& ex) {
+            if (error) brls::sync(std::bind(error, std::string(ex.what())));
+        }
+    });
+}
+
 void StremioBackend::getContinueWatching(
     int count, media::Then<media::Container<media::Hub>> then, media::OnError error) {
     std::string key = accountKey();
