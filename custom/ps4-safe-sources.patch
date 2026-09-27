@@ -141,7 +141,7 @@ diff --git a/app/src/tab/media_movie.cpp b/app/src/tab/media_movie.cpp
 diff --git a/app/src/tab/media_movie.cpp b/app/src/tab/media_movie.cpp
 --- a/app/src/tab/media_movie.cpp
 +++ b/app/src/tab/media_movie.cpp
-@@ -44,4 +44,56 @@
+@@ -44,4 +44,48 @@
      return box;
  }
  
@@ -193,7 +193,7 @@ diff --git a/app/src/tab/media_movie.cpp b/app/src/tab/media_movie.cpp
 diff --git a/app/src/tab/media_movie.cpp b/app/src/tab/media_movie.cpp
 --- a/app/src/tab/media_movie.cpp
 +++ b/app/src/tab/media_movie.cpp
-@@ -444,3 +497,14 @@
+@@ -444,3 +489,14 @@
 -        // source name (grows) + meta (codec · size)
 -        cells.push_back(sourceLabel(m.label, 15, textCol, true));
 -        if (!m.detail.empty()) cells.push_back(sourceLabel(m.detail, 13, greyCol));
