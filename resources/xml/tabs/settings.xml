@@ -47,6 +47,8 @@
                     id="setting/video/subs_fallback" />
                 <brls:SelectorCell
                     id="setting/playback/subtitle_lang" />
+                <brls:BooleanCell
+                    id="setting/playback/autoplay_next" />
             </brls:Box>
 
             <brls:Header
