@@ -53,13 +53,17 @@ diff --git a/app/src/tab/media_movie.cpp b/app/src/tab/media_movie.cpp
 diff --git a/app/src/tab/media_movie.cpp b/app/src/tab/media_movie.cpp
 --- a/app/src/tab/media_movie.cpp
 +++ b/app/src/tab/media_movie.cpp
-@@ -445,9 +497,17 @@
+@@ -445,4 +497,6 @@
  #if defined(GMCA_PS4_SAFE_SOURCES)
          std::string warning = stremio::ps4WarningLabel(m);
          if (!warning.empty()) cells.push_back(sourcePill(warning, goldBg, goldFg));
 +        if (movieSourceHasItalianAudio(m))
 +            cells.push_back(sourcePill("ITA AUDIO", pillBg, textCol));
  #endif
+diff --git a/app/src/tab/media_movie.cpp b/app/src/tab/media_movie.cpp
+--- a/app/src/tab/media_movie.cpp
++++ b/app/src/tab/media_movie.cpp
+@@ -449,3 +503,10 @@
 -        // source name (grows) + meta (codec · size)
 -        cells.push_back(sourceLabel(m.label, 15, textCol, true));
 -        if (!m.detail.empty()) cells.push_back(sourceLabel(m.detail, 13, greyCol));
@@ -71,4 +75,3 @@ diff --git a/app/src/tab/media_movie.cpp b/app/src/tab/media_movie.cpp
 +        std::string secondary = m.label;
 +        if (!m.detail.empty()) secondary += (secondary.empty() ? "" : " · ") + m.detail;
 +        if (!secondary.empty()) cells.push_back(sourceLabel(secondary, 13, greyCol));
-         // trailing download glyph: signals the line is downloadable (X button)
