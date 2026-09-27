@@ -109,6 +109,7 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
                 this->reportTimeline("playing", int64_t(mpv.video_progress) * 1000);
                 this->maybeScrobble(int64_t(mpv.video_progress) * 1000);
             }
+            this->updateUpNext(mpv.video_progress);
             break;
         default:;
         }
@@ -141,6 +142,7 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
 }
 
 PlayerView::~PlayerView() {
+    this->dismissUpNext();
     auto& mpv = MPVCore::instance();
     mpv.getEvent()->unsubscribe(eventSubscribeID);
     mpv.getCustomEvent()->unsubscribe(customEventSubscribeID);
@@ -174,6 +176,9 @@ void PlayerView::setSeries(const std::string& showRatingKey) {
             }
             view->setList(values, index);
             this->episodes = std::move(r.Items);
+            this->episodeIndex = index;
+            this->upNextDismissed = false;
+            view->setAutoNext(AppConfig::instance().getItem(AppConfig::PLAYER_AUTOPLAY_NEXT, true));
         },
         [ASYNC_TOKEN](const std::string& error) {
             ASYNC_RELEASE
@@ -197,6 +202,10 @@ bool PlayerView::playIndex(int index) {
     if (index < 0 || index >= (int)this->episodes.size()) {
         return VideoView::close();
     }
+    this->dismissUpNext();
+    this->episodeIndex = index;
+    this->upNextDismissed = false;
+    this->view->setAutoNext(AppConfig::instance().getItem(AppConfig::PLAYER_AUTOPLAY_NEXT, true));
     MPVCore::instance().reset();
 
     auto next = this->episodes.at(index);
@@ -210,6 +219,67 @@ bool PlayerView::playIndex(int index) {
                        : fmt::format("{} · S{}E{} — {}", next.grandparentTitle, next.parentIndex, next.index,
                              next.title));
     return true;
+}
+
+void PlayerView::dismissUpNext() {
+    if (!this->upNextDialog) return;
+    auto* dialog = this->upNextDialog;
+    this->upNextDialog = nullptr;
+    this->upNextLabel = nullptr;
+    dialog->close([]() {});
+}
+
+void PlayerView::updateUpNext(int64_t progressSeconds) {
+    const bool enabled = AppConfig::instance().getItem(AppConfig::PLAYER_AUTOPLAY_NEXT, true);
+    this->view->setAutoNext(enabled && !this->upNextDismissed);
+    if (!enabled || this->upNextDismissed || this->episodeIndex < 0 ||
+        this->episodeIndex + 1 >= (int)this->episodes.size())
+        return;
+
+    int64_t durationSeconds = this->item.duration > 0 ? this->item.duration / 1000
+                                                      : (int64_t)MPVCore::instance().duration;
+    if (durationSeconds <= 0) return;
+    int remaining = (int)std::max<int64_t>(0, durationSeconds - progressSeconds);
+    if (remaining > 10 || remaining <= 0) return;
+
+    const auto& next = this->episodes[(size_t)this->episodeIndex + 1];
+    std::string nextTitle = next.grandparentTitle.empty()
+                                ? fmt::format("S{}E{} — {}", next.parentIndex, next.index, next.title)
+                                : fmt::format("{} · S{}E{} — {}", next.grandparentTitle, next.parentIndex,
+                                      next.index, next.title);
+    std::string text = fmt::format("Next episode in {} s\n{}", remaining, nextTitle);
+
+    if (this->upNextLabel) {
+        this->upNextLabel->setText(text);
+        return;
+    }
+
+    auto* content = new brls::Box();
+    content->setAxis(brls::Axis::COLUMN);
+    content->setWidth(760);
+    content->setPadding(20, 20, 20, 20);
+    auto* label = new brls::Label();
+    label->setSingleLine(false);
+    label->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    label->setFontSize(22);
+    label->setText(text);
+    content->addView(label);
+
+    auto* dialog = new brls::Dialog(content);
+    this->upNextDialog = dialog;
+    this->upNextLabel = label;
+    dialog->addButton("Play next now", [this]() {
+        this->upNextDialog = nullptr;
+        this->upNextLabel = nullptr;
+        this->view->playNext(1);
+    });
+    dialog->addButton("Cancel autoplay", [this]() {
+        this->upNextDialog = nullptr;
+        this->upNextLabel = nullptr;
+        this->upNextDismissed = true;
+        this->view->setAutoNext(false);
+    });
+    dialog->open();
 }
 
 void PlayerView::playMedia(const int64_t seekMs) {
