@@ -416,7 +416,7 @@ void saveImdbTopCacheFile(bool series, const std::vector<media::Item>& items, in
 
 std::vector<media::Item> fetchImdbTop(media::MediaKind kind) {
     const bool series = kind == media::MediaKind::Show;
-    const std::string chartType = series ? "TOP_RATED_TV" : "TOP_RATED_MOVIES";
+    const std::string chartType = series ? "TOP_RATED_TV_SHOWS" : "TOP_RATED_MOVIES";
     const std::string query =
         "query GetChart($first: Int!) {"
         " chartTitles(first: $first, chart: {chartType: " + chartType + "}) {"
