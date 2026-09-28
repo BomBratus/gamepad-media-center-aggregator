@@ -167,6 +167,13 @@ int main(int argc, char* argv[]) {
 
     brls::Application::createWindow(fmt::format("{} for {}", AppVersion::getPackageName(), AppVersion::getPlatform()));
 
+    // init() runs before Borealis is ready, so damaged-config recovery is
+    // surfaced only after the window exists instead of silently terminating.
+    if (conf.getRecoveryState() == AppConfig::RecoveryState::RestoredBackup)
+        brls::Application::notify("Settings were damaged and restored from backup.");
+    else if (conf.getRecoveryState() == AppConfig::RecoveryState::ResetDefaults)
+        brls::Application::notify("Settings were damaged and reset to defaults.");
+
     // Have the application register an action on every activity that will quit when you press BUTTON_START
     brls::Application::setGlobalQuit(false);
 

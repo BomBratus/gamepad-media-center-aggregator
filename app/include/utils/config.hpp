@@ -176,10 +176,17 @@ public:
         KEY_VIDEO_PAUSE,    // 视频播放暂停快捷键
     };
 
+    enum class RecoveryState {
+        None,
+        RestoredBackup,
+        ResetDefaults,
+    };
+
     AppConfig() = default;
     ~AppConfig();  // out-of-line: activeBackend is a unique_ptr to an incomplete type
 
     bool init();
+    RecoveryState getRecoveryState() const { return this->recoveryState; }
     void initThemes();
     /// (Re)applies the accent surface for `type` onto BOTH borealis theme
     /// objects (dark + light). std::nullopt = the neutral pleNx DEFAULT theme
@@ -281,6 +288,7 @@ public:
 
 private:
     static std::unordered_map<Item, Option> settingMap;
+    RecoveryState recoveryState = RecoveryState::None;
 
     /// (Re)builds activeBackend from the active server's type on next backend().
     void resetBackend();

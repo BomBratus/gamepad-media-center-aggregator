@@ -40,6 +40,7 @@ constexpr uint32_t MINIMUM_WINDOW_HEIGHT = 360;
 #include <borealis.hpp>
 #include <borealis/core/cache_helper.hpp>
 #include <algorithm>
+#include <mutex>
 #include <borealis/views/edit_text_dialog.hpp>
 #include "api/plex/auth.hpp"
 #include "api/backend.hpp"
@@ -259,6 +260,99 @@ static bool migrateLegacyConfigDir(const std::string& legacy, const std::string&
     return false;
 }
 
+
+static fs::path configFsPath(const std::string& path) {
+#if !defined(USE_BOOST_FILESYSTEM) || defined(_WIN32)
+    return fs::u8path(path);
+#else
+    return fs::path(path);
+#endif
+}
+
+static bool configPathExists(const std::string& path) {
+    try {
+        return fs::exists(configFsPath(path));
+    } catch (...) {
+        return false;
+    }
+}
+
+/// Reads one complete config object. Missing files are not errors; malformed
+/// JSON/schema throws so init() can fall back to the last known-good backup.
+static bool readConfigObject(const std::string& path, nlohmann::json& out) {
+#if !defined(USE_BOOST_FILESYSTEM) || defined(_WIN32)
+    std::ifstream f(fs::u8path(path));
+#else
+    std::ifstream f(path);
+#endif
+    if (!f.is_open()) return false;
+    nlohmann::json parsed = nlohmann::json::parse(f);
+    if (!parsed.is_object()) throw std::runtime_error("config root is not an object");
+    out = std::move(parsed);
+    return true;
+}
+
+static bool validConfigObjectFile(const std::string& path) {
+    try {
+        nlohmann::json parsed;
+        return readConfigObject(path, parsed);
+    } catch (...) {
+        return false;
+    }
+}
+
+/// Commit config.json without ever truncating the last known-good file in place.
+/// The previous valid primary becomes .bak; a corrupt primary never replaces an
+/// existing backup. rename() keeps the final hand-off atomic on the same volume.
+static bool writeConfigAtomic(const std::string& path, const std::string& data) {
+    const std::string tmp = path + ".tmp";
+    const std::string bak = path + ".bak";
+
+    try {
+        fs::create_directories(configFsPath(path).parent_path());
+#if !defined(USE_BOOST_FILESYSTEM) || defined(_WIN32)
+        std::ofstream f(fs::u8path(tmp), std::ios::binary | std::ios::trunc);
+#else
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+#endif
+        if (!f.is_open()) return false;
+        f.write(data.data(), (std::streamsize)data.size());
+        f.flush();
+        const bool writeOk = f.good();
+        f.close();
+        if (!writeOk || !f.good()) {
+            fs::remove(configFsPath(tmp));
+            return false;
+        }
+
+        const bool keepCurrent = validConfigObjectFile(path);
+        if (keepCurrent) {
+            if (fs::exists(configFsPath(bak))) fs::remove(configFsPath(bak));
+            fs::rename(configFsPath(path), configFsPath(bak));
+        } else if (fs::exists(configFsPath(path))) {
+            // Do not poison a known-good .bak with a corrupt/truncated primary.
+            fs::remove(configFsPath(path));
+        }
+
+        try {
+            fs::rename(configFsPath(tmp), configFsPath(path));
+        } catch (...) {
+            if (keepCurrent && !fs::exists(configFsPath(path)) && fs::exists(configFsPath(bak)))
+                fs::rename(configFsPath(bak), configFsPath(path));
+            if (fs::exists(configFsPath(tmp))) fs::remove(configFsPath(tmp));
+            throw;
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        brls::Logger::warning("AppConfig atomic write {}: {}", path, ex.what());
+        try {
+            if (fs::exists(configFsPath(tmp))) fs::remove(configFsPath(tmp));
+        } catch (...) {
+        }
+        return false;
+    }
+}
+
 bool AppConfig::init() {
     // Chained most-recent-first; the !exists(to) guard means only the first
     // applicable source migrates. pleNx 0.2.0 already targets the GMCA folder
@@ -269,19 +363,73 @@ bool AppConfig::init() {
     this->migratedFromLegacy = migrateLegacyConfigDir(dataDir("pleNx"), this->configDir());
     this->migratedFromLegacy |= migrateLegacyConfigDir(dataDir("Switchlex"), this->configDir());
     const std::string path = this->configDir() + "/config.json";
-#if !defined(USE_BOOST_FILESYSTEM) || defined(_WIN32)
-    std::ifstream f(fs::u8path(path));
-#else
-    std::ifstream f(path);
-#endif
-    if (f.is_open()) {
+    const std::string backupPath = path + ".bak";
+    this->recoveryState = RecoveryState::None;
+
+    auto resetSerializedState = [this]() {
+        // get_to() can fail part-way through a schema mismatch; reset every
+        // serialized field before trying the backup or continuing with defaults.
+        this->user_id.clear();
+        this->device.clear();
+        this->users.clear();
+        this->servers.clear();
+        this->setting = nlohmann::json::object();
+        this->remotes.clear();
+        this->pins.clear();
+        this->server_url.clear();
+        this->server_token.clear();
+    };
+    auto applyConfig = [this, &resetSerializedState](const nlohmann::json& parsed) {
+        resetSerializedState();
         try {
-            nlohmann::json::parse(f).get_to(*this);
-            brls::Logger::info("Load config from: {}", path);
-        } catch (const std::exception& ex) {
-            brls::Logger::error("AppConfig::load: {}", ex.what());
-            return false;
+            parsed.get_to(*this);
+        } catch (...) {
+            resetSerializedState();
+            throw;
         }
+    };
+
+    const bool primaryExists = configPathExists(path);
+    const bool backupExists = configPathExists(backupPath);
+    bool loaded = false;
+    bool primaryDamaged = false;
+
+    if (primaryExists) {
+        try {
+            nlohmann::json parsed;
+            if (readConfigObject(path, parsed)) {
+                applyConfig(parsed);
+                loaded = true;
+                brls::Logger::info("Load config from: {}", path);
+            }
+        } catch (const std::exception& ex) {
+            primaryDamaged = true;
+            resetSerializedState();
+            brls::Logger::error("AppConfig::load primary {}: {}", path, ex.what());
+        }
+    }
+
+    if (!loaded && backupExists) {
+        try {
+            nlohmann::json parsed;
+            if (readConfigObject(backupPath, parsed)) {
+                applyConfig(parsed);
+                loaded = true;
+                this->recoveryState = RecoveryState::RestoredBackup;
+                brls::Logger::warning("AppConfig: recovered damaged/missing config from {}", backupPath);
+            }
+        } catch (const std::exception& ex) {
+            resetSerializedState();
+            brls::Logger::error("AppConfig::load backup {}: {}", backupPath, ex.what());
+        }
+    }
+
+    if (!loaded && (primaryDamaged || backupExists)) {
+        // First launch (neither file exists) is normal. Any existing-but-invalid
+        // state is instead repaired to defaults so the app can still start.
+        resetSerializedState();
+        this->recoveryState = RecoveryState::ResetDefaults;
+        brls::Logger::warning("AppConfig: damaged config could not be recovered; using defaults");
     }
 
 #if defined(_WIN32) && !defined(_WINRT_)
@@ -532,25 +680,24 @@ bool AppConfig::init() {
         brls::FontLoader::USER_EMOJI_PATH = BRLS_ASSET("font/emoji.ttf");
     }
 
+    // Repair the primary only after all init defaults (notably device id) have
+    // been established. Atomic save preserves a valid backup if the primary was
+    // the damaged file that brought us here.
+    if (this->recoveryState != RecoveryState::None) this->save();
+
     brls::Logger::info("init {} v{}-{} device {} from {}", AppVersion::getPlatform(), AppVersion::getVersion(),
         AppVersion::getCommit(), this->device, path);
     return true;
 }
 
 void AppConfig::save() {
+    static std::mutex saveMutex;
+    std::lock_guard<std::mutex> lock(saveMutex);
     try {
-        std::string dir = this->configDir();
-        fs::create_directories(dir);
-#if !defined(USE_BOOST_FILESYSTEM) || defined(_WIN32)
-        std::ofstream f(fs::u8path(dir + "/config.json"));
-#else
-        std::ofstream f(dir + "/config.json");
-#endif
-        if (f.is_open()) {
-            nlohmann::json j(*this);
-            f << j.dump(2);
-            f.close();
-        }
+        const std::string path = this->configDir() + "/config.json";
+        nlohmann::json j(*this);
+        if (!writeConfigAtomic(path, j.dump(2)))
+            brls::Logger::warning("AppConfig save: atomic write failed for {}", path);
     } catch (const std::exception& ex) {
         brls::Logger::warning("AppConfig save: {}", ex.what());
     }
