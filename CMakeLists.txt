@@ -371,13 +371,31 @@ elseif (PLATFORM_PS4)
     target_link_libraries(${PROJECT_NAME} PRIVATE SceSystemService)
 
     add_self(${PROJECT_NAME})
-    add_pkg(${PROJECT_NAME}
-            ${CMAKE_BINARY_DIR}/ps4
-            ${PSN_TITLE_ID}
-            ${PROJECT_NAME}
-            ${VITA_VERSION}
-            8388608
-    )
+    if (DEFINED PS4_CONTENT_ID)
+        # GMCA update builds keep a stable package identity across versions.
+        # Generic PS4 builds without the custom patch still use PacBrew add_pkg().
+        include(${CMAKE_SOURCE_DIR}/cmake/gmca_ps4_pkg.cmake)
+        set(_gmca_ps4_package_version "${VITA_VERSION}")
+        if (DEFINED PS4_VERSION)
+            set(_gmca_ps4_package_version "${PS4_VERSION}")
+        endif ()
+        gmca_add_pkg(${PROJECT_NAME}
+                ${CMAKE_BINARY_DIR}/ps4
+                ${PSN_TITLE_ID}
+                ${PROJECT_NAME}
+                ${_gmca_ps4_package_version}
+                ${PS4_CONTENT_ID}
+                8388608
+        )
+    else ()
+        add_pkg(${PROJECT_NAME}
+                ${CMAKE_BINARY_DIR}/ps4
+                ${PSN_TITLE_ID}
+                ${PROJECT_NAME}
+                ${VITA_VERSION}
+                8388608
+        )
+    endif ()
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_directory ${BOREALIS_DIR}/ps4/sce_module ${CMAKE_BINARY_DIR}/ps4/sce_module
         COMMAND "${CMAKE_COMMAND}" -E copy_directory ${CMAKE_SOURCE_DIR}/app/platform/ps4/sce_sys ${CMAKE_BINARY_DIR}/ps4/sce_sys
