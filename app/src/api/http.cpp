@@ -140,8 +140,20 @@ HTTP::HTTP() : chunk(nullptr) {
     // enable all supported built-in compressions
     curl_easy_setopt(this->easy, CURLOPT_ACCEPT_ENCODING, "");
     curl_easy_setopt(this->easy, CURLOPT_VERBOSE, 0L);
+#if defined(__PS4__) && defined(GMCA_STREMIO_ONLY)
+    // The PS4 libcurl package used by the Stremio-only workflow is built with
+    // mbedTLS and the console CA store at /system/common/cert/CA_LIST.cer.
+    // Verify both the certificate chain and hostname for account/addon/update
+    // requests instead of accepting any TLS peer.
+    curl_easy_setopt(this->easy, CURLOPT_CAINFO, "/system/common/cert/CA_LIST.cer");
+    curl_easy_setopt(this->easy, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(this->easy, CURLOPT_SSL_VERIFYHOST, 2L);
+#else
+    // Preserve legacy behavior outside the PS4 Stremio-only profile for now:
+    // local Plex/Jellyfin installations may intentionally use self-signed TLS.
     curl_easy_setopt(this->easy, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(this->easy, CURLOPT_SSL_VERIFYHOST, 0L);
+#endif
     // Every request runs from a background thread (ThreadPool / brls::async), so
     // libcurl must never reach for SIGALRM to time out a name resolve — signals
     // only work on the main thread and are unsafe multi-threaded (curl docs:
