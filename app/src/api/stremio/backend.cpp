@@ -326,6 +326,11 @@ bool isLatestRemoteProgressSync(
     return it != progressSyncGeneration.end() && it->second == generation;
 }
 
+void invalidateRemoteProgressSync(const std::string& account, const std::string& ratingKey) {
+    std::lock_guard<std::mutex> lock(progressSyncMutex);
+    ++progressSyncGeneration[account + "\n" + ratingKey];
+}
+
 void applyEpisodeProgress(media::Item& item, const EpisodeProgress& remote,
     const std::map<std::string, EpisodeProgress>& local, const std::set<std::string>& watched) {
     auto localIt = local.find(item.ratingKey);
@@ -1598,6 +1603,7 @@ void StremioBackend::markWatched(const std::string& id) {
     std::string rk = id;
     ParsedId pid = parseId(rk);
     bool episode = pid.stremioType == "series" && pid.episode >= 0;
+    invalidateRemoteProgressSync(key, rk);
     if (episode) setEpisodeWatched(rk, true);
     storeLocalProgress(rk, {pid.baseId, episode ? pid.stremioId : "", 0, 0, (int64_t)std::time(nullptr)});
 
@@ -1624,6 +1630,7 @@ void StremioBackend::markUnwatched(const std::string& id) {
     std::string rk = id;
     ParsedId pid = parseId(rk);
     bool episode = pid.stremioType == "series" && pid.episode >= 0;
+    invalidateRemoteProgressSync(key, rk);
     if (episode) setEpisodeWatched(rk, false);
 
     brls::async([this, rk, key]() {
