@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <cctype>
 #include <ctime>
+#include <cstdio>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -68,10 +69,10 @@ std::string accountKey() { return AppConfig::instance().getToken(); }
 
 /// Stremio's account library keeps playback state at the SERIES level. Its
 /// per-episode `state.watched` field is a compressed bitmap whose write format is
-/// not part of the addon protocol. Keep GMCA's episode history in a tiny local
-/// JSON file instead, scoped to the active Stremio server/account. This is only
-/// consulted for episode rows; movie watched state still comes from Stremio.
+/// not part of the addon protocol. Keep GMCA's episode history and fine-grained
+/// resume positions in small local JSON files, scoped to the active account.
 std::string watchedHistoryPath() { return AppConfig::instance().configDir() + "/stremio-watched.json"; }
+std::string progressHistoryPath() { return AppConfig::instance().configDir() + "/stremio-progress.json"; }
 
 std::string watchedHistoryScope() {
     const auto& user = AppConfig::instance().getUser();
@@ -79,24 +80,92 @@ std::string watchedHistoryScope() {
     return AppConfig::instance().getUserId();
 }
 
-nlohmann::json loadWatchedHistoryFile() {
-    std::ifstream in(watchedHistoryPath());
-    if (!in.is_open()) return nlohmann::json::object();
+bool readJsonObject(const std::string& path, nlohmann::json& out) {
+    std::ifstream in(path);
+    if (!in.is_open()) return false;
+    nlohmann::json j;
+    in >> j;
+    if (!j.is_object()) throw std::runtime_error("root is not an object");
+    out = std::move(j);
+    return true;
+}
+
+nlohmann::json loadJsonObjectWithBackup(const std::string& path) {
+    nlohmann::json root;
     try {
-        nlohmann::json j;
-        in >> j;
-        return j.is_object() ? j : nlohmann::json::object();
+        if (readJsonObject(path, root)) return root;
     } catch (const std::exception& ex) {
-        brls::Logger::warning("stremio watched history read: {}", ex.what());
-        return nlohmann::json::object();
+        brls::Logger::warning("stremio local state read {}: {}", path, ex.what());
+    }
+
+    try {
+        if (readJsonObject(path + ".bak", root)) {
+            brls::Logger::warning("stremio local state recovered from {}", path + ".bak");
+            return root;
+        }
+    } catch (const std::exception& ex) {
+        brls::Logger::warning("stremio local state backup read {}: {}", path, ex.what());
+    }
+    return nlohmann::json::object();
+}
+
+bool jsonObjectFileIsValid(const std::string& path) {
+    try {
+        nlohmann::json ignored;
+        return readJsonObject(path, ignored);
+    } catch (...) {
+        return false;
     }
 }
 
+bool writeJsonObjectAtomic(const std::string& path, const nlohmann::json& root) {
+    const std::string tmp = path + ".tmp";
+    const std::string bak = path + ".bak";
+    {
+        std::ofstream out(tmp, std::ios::trunc);
+        if (!out.is_open()) return false;
+        out << root.dump(2);
+        out.flush();
+        if (!out.good()) {
+            out.close();
+            std::remove(tmp.c_str());
+            return false;
+        }
+        out.close();
+        if (!out.good()) {
+            std::remove(tmp.c_str());
+            return false;
+        }
+    }
+
+    const bool keepCurrent = jsonObjectFileIsValid(path);
+    if (keepCurrent) {
+        std::remove(bak.c_str());
+        if (std::rename(path.c_str(), bak.c_str()) != 0) {
+            std::remove(tmp.c_str());
+            return false;
+        }
+    } else {
+        // Never replace a known-good backup with a corrupt/truncated primary.
+        std::remove(path.c_str());
+    }
+
+    if (std::rename(tmp.c_str(), path.c_str()) != 0) {
+        if (keepCurrent) std::rename(bak.c_str(), path.c_str());
+        std::remove(tmp.c_str());
+        return false;
+    }
+    return true;
+}
+
+std::mutex watchedHistoryMutex;
+
 std::set<std::string> loadWatchedEpisodes() {
+    std::lock_guard<std::mutex> lock(watchedHistoryMutex);
     std::set<std::string> out;
     std::string scope = watchedHistoryScope();
     if (scope.empty()) return out;
-    nlohmann::json root = loadWatchedHistoryFile();
+    nlohmann::json root = loadJsonObjectWithBackup(watchedHistoryPath());
     auto it = root.find(scope);
     if (it == root.end() || !it->is_array()) return out;
     for (auto& v : *it)
@@ -105,9 +174,10 @@ std::set<std::string> loadWatchedEpisodes() {
 }
 
 void setEpisodeWatched(const std::string& ratingKey, bool watched) {
+    std::lock_guard<std::mutex> lock(watchedHistoryMutex);
     std::string scope = watchedHistoryScope();
     if (scope.empty()) return;
-    nlohmann::json root = loadWatchedHistoryFile();
+    nlohmann::json root = loadJsonObjectWithBackup(watchedHistoryPath());
     std::set<std::string> items;
     auto current = root.find(scope);
     if (current != root.end() && current->is_array())
@@ -119,12 +189,8 @@ void setEpisodeWatched(const std::string& ratingKey, bool watched) {
         items.erase(ratingKey);
     root[scope] = nlohmann::json::array();
     for (auto& id : items) root[scope].push_back(id);
-    std::ofstream out(watchedHistoryPath(), std::ios::trunc);
-    if (!out.is_open()) {
-        brls::Logger::warning("stremio watched history: could not open {}", watchedHistoryPath());
-        return;
-    }
-    out << root.dump(2);
+    if (!writeJsonObjectAtomic(watchedHistoryPath(), root))
+        brls::Logger::warning("stremio watched history: atomic write failed");
 }
 
 void applyEpisodeWatched(media::Item& item, const std::set<std::string>& watched) {
@@ -135,14 +201,19 @@ void applyEpisodeWatched(media::Item& item, const std::set<std::string>& watched
 }
 
 struct EpisodeProgress {
+    std::string baseId;
     std::string videoId;
     int64_t timeOffset = 0;
     int64_t duration = 0;
+    int64_t updated = 0;
 };
 
 std::mutex episodeProgressMutex;
 std::string episodeProgressAccount;
 std::map<std::string, EpisodeProgress> episodeProgressCache;
+std::mutex localProgressMutex;
+std::mutex progressSyncMutex;
+std::map<std::string, int64_t> lastProgressSync;
 
 void cacheEpisodeProgresses(const std::string& account, const nlohmann::json& items) {
     std::lock_guard<std::mutex> lock(episodeProgressMutex);
@@ -155,21 +226,22 @@ void cacheEpisodeProgresses(const std::string& account, const nlohmann::json& it
         auto state = item.find("state");
         if (state == item.end() || !state->is_object()) continue;
         EpisodeProgress progress;
+        progress.baseId = jstr(item, "_id");
         progress.videoId = jstr(*state, "videoId");
         progress.timeOffset = jint(*state, "timeOffset");
         progress.duration = jint(*state, "duration");
-        episodeProgressCache[jstr(item, "_id")] = std::move(progress);
+        episodeProgressCache[progress.baseId] = std::move(progress);
     }
 }
 
-void setEpisodeProgress(const std::string& showId, EpisodeProgress progress) {
-    std::string account = accountKey();
+void setEpisodeProgress(const std::string& account, const std::string& showId, EpisodeProgress progress) {
     if (account.empty()) return;
     std::lock_guard<std::mutex> lock(episodeProgressMutex);
     if (episodeProgressAccount != account) {
         episodeProgressAccount = account;
         episodeProgressCache.clear();
     }
+    progress.baseId = showId;
     episodeProgressCache[showId] = std::move(progress);
 }
 
@@ -182,12 +254,83 @@ EpisodeProgress loadEpisodeProgress(const std::string& showId) {
     return it == episodeProgressCache.end() ? EpisodeProgress{} : it->second;
 }
 
-void applyEpisodeProgress(media::Item& item, const EpisodeProgress& progress, const std::set<std::string>& watched) {
-    if (item.guid != progress.videoId || progress.timeOffset <= 0 ||
-        (progress.duration > 0 && progress.timeOffset >= progress.duration) || watched.count(item.ratingKey) > 0)
+std::map<std::string, EpisodeProgress> loadLocalProgresses() {
+    std::lock_guard<std::mutex> lock(localProgressMutex);
+    std::map<std::string, EpisodeProgress> out;
+    std::string scope = watchedHistoryScope();
+    if (scope.empty()) return out;
+    nlohmann::json root = loadJsonObjectWithBackup(progressHistoryPath());
+    auto scoped = root.find(scope);
+    if (scoped == root.end() || !scoped->is_object()) return out;
+    for (auto it = scoped->begin(); it != scoped->end(); ++it) {
+        if (!it.value().is_object()) continue;
+        EpisodeProgress p;
+        p.baseId = jstr(it.value(), "baseId");
+        p.videoId = jstr(it.value(), "videoId");
+        p.timeOffset = jint(it.value(), "timeOffset");
+        p.duration = jint(it.value(), "duration");
+        p.updated = jint(it.value(), "updated");
+        if (!p.baseId.empty() && p.timeOffset > 0) out[it.key()] = std::move(p);
+    }
+    return out;
+}
+
+void storeLocalProgress(const std::string& ratingKey, const EpisodeProgress& progress) {
+    std::lock_guard<std::mutex> lock(localProgressMutex);
+    std::string scope = watchedHistoryScope();
+    if (scope.empty()) return;
+    nlohmann::json root = loadJsonObjectWithBackup(progressHistoryPath());
+    if (!root.contains(scope) || !root[scope].is_object()) root[scope] = nlohmann::json::object();
+    if (progress.timeOffset <= 0) {
+        root[scope].erase(ratingKey);
+    } else {
+        root[scope][ratingKey] = {{"baseId", progress.baseId}, {"videoId", progress.videoId},
+            {"timeOffset", progress.timeOffset}, {"duration", progress.duration}, {"updated", progress.updated}};
+    }
+    if (!writeJsonObjectAtomic(progressHistoryPath(), root))
+        brls::Logger::warning("stremio progress history: atomic write failed");
+}
+
+const EpisodeProgress* newestLocalProgress(
+    const std::map<std::string, EpisodeProgress>& local, const std::string& baseId, bool series) {
+    const EpisodeProgress* best = nullptr;
+    for (const auto& kv : local) {
+        const auto& p = kv.second;
+        if (p.baseId != baseId || (series && p.videoId.empty()) || (!series && !p.videoId.empty())) continue;
+        if (!best || p.updated > best->updated) best = &p;
+    }
+    return best;
+}
+
+bool shouldSyncRemoteProgress(
+    const std::string& account, const std::string& ratingKey, media::PlayState state, int64_t now) {
+    if (state == media::PlayState::Paused || state == media::PlayState::Stopped) return true;
+    if (state != media::PlayState::Playing) return false;
+    std::lock_guard<std::mutex> lock(progressSyncMutex);
+    std::string key = account + "\n" + ratingKey;
+    auto it = lastProgressSync.find(key);
+    if (it != lastProgressSync.end() && now - it->second < 60) return false;
+    lastProgressSync[key] = now;
+    return true;
+}
+
+void applyEpisodeProgress(media::Item& item, const EpisodeProgress& remote,
+    const std::map<std::string, EpisodeProgress>& local, const std::set<std::string>& watched) {
+    auto localIt = local.find(item.ratingKey);
+    if (localIt != local.end()) {
+        const auto& p = localIt->second;
+        if (p.timeOffset > 0 && (p.duration <= 0 || p.timeOffset < p.duration)) {
+            item.viewOffset = p.timeOffset;
+            if (p.duration > 0) item.duration = p.duration;
+            return;
+        }
+    }
+
+    if (item.guid != remote.videoId || remote.timeOffset <= 0 ||
+        (remote.duration > 0 && remote.timeOffset >= remote.duration) || watched.count(item.ratingKey) > 0)
         return;
-    item.viewOffset = progress.timeOffset;
-    if (progress.duration > 0) item.duration = progress.duration;
+    item.viewOffset = remote.timeOffset;
+    if (remote.duration > 0) item.duration = remote.duration;
 }
 
 /// A datastore libraryItem JSON -> media::Item (movie/show row). ratingKey is the
@@ -215,9 +358,8 @@ media::Item itemFromLibrary(const nlohmann::json& j) {
 /// apply `mutate` to its state, and PUT it back. A new entry is built from /meta
 /// (name/poster) and defaults to removed+temp (progress only, not in library).
 /// Synchronous — call inside a brls::async body. No-op without an account.
-void upsertLibrary(
-    AddonEngine& engine, const std::string& ratingKey, const std::function<void(nlohmann::json&)>& mutate) {
-    std::string key = accountKey();
+void upsertLibrary(AddonEngine& engine, const std::string& key, const std::string& ratingKey,
+    const std::function<void(nlohmann::json&)>& mutate) {
     if (key.empty()) return;
     ParsedId pid = parseId(ratingKey);
     std::string baseId = pid.baseId;
