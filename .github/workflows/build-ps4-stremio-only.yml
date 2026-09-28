@@ -15,6 +15,7 @@ on:
       - scripts/ps4/updater/**
       - scripts/ps4/libmpv/**
       - cmake/bundle_ps4_updater_pkg.cmake
+      - cmake/gmca_ps4_pkg.cmake
       - app/include/utils/config.hpp
       - app/src/utils/config.cpp
       - app/include/utils/image.hpp
@@ -78,12 +79,17 @@ jobs:
           version="$(sed -n 's/^+set(PS4_VERSION "\([0-9][0-9]\.[0-9][0-9]\)")$/\1/p' custom/ps4-safe-sources.patch | head -n1)"
           test -n "$version"
           [[ "$version" =~ ^[0-9]{2}\.[0-9]{2}$ ]]
+          content_id="$(sed -n 's/^+set(PS4_CONTENT_ID "\([^"]*\)")$/\1/p' custom/ps4-safe-sources.patch | head -n1)"
+          test -n "$content_id"
+          [[ "$content_id" =~ ^[A-Z0-9]{6}-[A-Z0-9]{9}_00-[A-Z0-9]{16}$ ]]
           digits="${version/.}"
           suffix="${digits}00"
           pkg="IV0001-GMCA00000_00-GMCA000000${suffix}.pkg"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "content_id=$content_id" >> "$GITHUB_OUTPUT"
           echo "pkg=$pkg" >> "$GITHUB_OUTPUT"
           echo "PS4 package version: $version"
+          echo "Stable PS4 content ID: $content_id"
           echo "Expected PKG: $pkg"
 
       - name: Apply PS4 recovery and safe-source UI
@@ -100,6 +106,8 @@ jobs:
           awk -f custom/apply-ps4-search-ui.awk app/src/tab/search_tab.cpp > /tmp/search_tab.cpp
           mv /tmp/search_tab.cpp app/src/tab/search_tab.cpp
           grep -q "set(PS4_VERSION \"${{ steps.ps4ver.outputs.version }}\")" CMakeLists.txt
+          grep -q "set(PS4_CONTENT_ID \"${{ steps.ps4ver.outputs.content_id }}\")" CMakeLists.txt
+          grep -Fq 'gmca_add_pkg(${PROJECT_NAME}' CMakeLists.txt
           grep -Fq 'GMCA_PS4_VERSION=${PS4_VERSION}' CMakeLists.txt
           grep -Fq 'setByteCapacity(128 * 1024 * 1024)' app/src/utils/config.cpp
           grep -Fq 'ps4_halve_rgba' app/src/utils/image.cpp
@@ -200,6 +208,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ steps.ps4ver.outputs.version }}"
+          content_id="${{ steps.ps4ver.outputs.content_id }}"
           pkg="build/${{ steps.ps4ver.outputs.pkg }}"
           stable_pkg="build/GMCA-PS4-Stremio-only.pkg"
           source_commit="$(git rev-parse HEAD)"
@@ -220,6 +229,8 @@ jobs:
           }
           magic="$(dd if="$pkg" bs=1 count=4 status=none | od -An -tx1 | tr -d ' \n')"
           test "$magic" = "7f434e54"
+          header_content_id="$(dd if="$pkg" bs=1 skip=$((0x40)) count=48 status=none | tr -d '\000')"
+          test "$header_content_id" = "$content_id"
           pfs_size="$(read_be64 $((0x418)) "$pkg")"
           header_pkg_size="$(read_be64 $((0x430)) "$pkg")"
 
@@ -236,6 +247,9 @@ jobs:
           stat -c '%n %s bytes' build/GMCA
           stat -c '%n %s bytes' build/ps4/resources/font/switch_font.ttf
           stat -c '%n %s bytes' "$pkg"
+          echo "PS4 package content ID: $header_content_id"
+          env DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 \
+            /opt/pacbrew/ps4/openorbis/bin/linux/PkgTool.Core pkg_validate --verbose "$pkg"
 
           (
             cd build
@@ -255,6 +269,7 @@ jobs:
           printf '  "schema": 1,\n' >> build/ps4-update.json
           printf '  "channel": "ps4-stremio-only",\n' >> build/ps4-update.json
           printf '  "title_id": "GMCA00000",\n' >> build/ps4-update.json
+          printf '  "content_id": "%s",\n' "$content_id" >> build/ps4-update.json
           printf '  "version": "%s",\n' "$version" >> build/ps4-update.json
           printf '  "pkg_name": "GMCA-PS4-Stremio-only.pkg",\n' >> build/ps4-update.json
           printf '  "size": %s,\n' "$size" >> build/ps4-update.json
@@ -263,6 +278,7 @@ jobs:
           printf '  "notes": "GMCA PS4 Stremio-only %s - commit %s"\n' "$version" "$source_commit" >> build/ps4-update.json
           printf '}\n' >> build/ps4-update.json
 
+          grep -q "\"content_id\": \"$content_id\"" build/ps4-update.json
           grep -q "\"version\": \"$version\"" build/ps4-update.json
           grep -q "\"sha256\": \"$sha\"" build/ps4-update.json
           cat build/ps4-update.json
