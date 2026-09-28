@@ -21,15 +21,15 @@
 #include "view/video_source.hpp"
 #include "view/context_menu.hpp"
 #include "view/auto_tab_frame.hpp"
+#include <algorithm>
 #include <unordered_set>
 
 using namespace brls::literals;  // for _i18n
 
 namespace {
 
-void showStremioResumeSourcePicker(const media::Item& card) {
+void showStremioResumeSourcePicker(const media::Item& card, int64_t seekMs) {
     const std::string episodeId = card.key;
-    const int64_t seekMs = card.viewOffset;
     AppConfig::instance().backend().getItemDetail(
         episodeId, true,
         [seekMs](const media::Item& detail) {
@@ -63,8 +63,20 @@ void showStremioResumeSourcePicker(const media::Item& card) {
 }
 
 void showStremioResumeDialog(brls::Box* recycler, const media::Item& card) {
-    auto* dialog = new brls::Dialog(card.title);
-    dialog->addButton("Resume episode", [card]() { showStremioResumeSourcePicker(card); });
+    stremio::ParsedId episode = stremio::parseId(card.key);
+    std::string meta;
+    if (episode.season >= 0 && episode.episode >= 0)
+        meta = fmt::format("S{}E{}", episode.season, episode.episode);
+    if (card.duration > 0 && card.viewOffset > 0) {
+        int percent = (int)std::min<int64_t>(99, card.viewOffset * 100 / card.duration);
+        int64_t remainingMs = std::max<int64_t>(0, card.duration - card.viewOffset);
+        int remainingMin = (int)((remainingMs + 59999) / 60000);
+        if (percent > 0) meta += fmt::format("{}{}%", meta.empty() ? "" : " · ", percent);
+        if (remainingMin > 0) meta += fmt::format("{}{} min left", meta.empty() ? "" : " · ", remainingMin);
+    }
+    auto* dialog = new brls::Dialog(meta.empty() ? card.title : card.title + "\n" + meta);
+    dialog->addButton("Resume episode", [card]() { showStremioResumeSourcePicker(card, card.viewOffset); });
+    dialog->addButton("Restart episode", [card]() { showStremioResumeSourcePicker(card, 0); });
     dialog->addButton("Go to series", [recycler, card]() { ui::presentDetail(recycler, new MediaSeries(card)); });
     dialog->open();
 }
@@ -165,6 +177,25 @@ RecyclingGridItem* VideoDataSource::cellForRow(RecyclingView* recycler, size_t i
             cell->labelExt->setVisibility(brls::Visibility::GONE);
         } else if (item.type == plex::mediaTypeClip) {
             cell->labelExt->setText(misc::sec2Time(item.duration / 1000));
+        } else if (this->stremioContinueWatching && item.type == plex::mediaTypeShow) {
+            stremio::ParsedId episode = stremio::parseId(item.key);
+            std::string progress;
+            if (episode.season >= 0 && episode.episode >= 0)
+                progress = fmt::format("S{}E{}", episode.season, episode.episode);
+            if (item.duration > 0 && item.viewOffset > 0) {
+                int64_t remainingMs = std::max<int64_t>(0, item.duration - item.viewOffset);
+                int remainingMin = (int)((remainingMs + 59999) / 60000);
+                if (remainingMin > 0)
+                    progress += fmt::format("{}{} min left", progress.empty() ? "" : " · ", remainingMin);
+            }
+            if (!progress.empty()) {
+                cell->labelExt->setText(progress);
+                cell->labelExt->setVisibility(brls::Visibility::VISIBLE);
+            } else if (item.year > 0) {
+                cell->labelExt->setText(std::to_string(item.year));
+            } else {
+                cell->labelExt->setVisibility(brls::Visibility::GONE);
+            }
         } else if (item.year > 0) {
             cell->labelExt->setText(std::to_string(item.year));
         }

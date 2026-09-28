@@ -10,6 +10,7 @@
 #include "api/plex.hpp"
 #include "api/plex/watchlist.hpp"
 #include "api/backend.hpp"
+#include "api/stremio/types.hpp"
 #include "utils/misc.hpp"
 #include "utils/dialog.hpp"
 #include "utils/download.hpp"
@@ -436,9 +437,24 @@ void MediaMovie::buildSources(const media::Item& item) {
                                      : sourcePill("main/stremio/source/uncached"_i18n, pillBg, greyCol));
         else
             cells.push_back(sourcePill("main/stremio/source/direct"_i18n, pillBg, textCol));
+#if defined(GMCA_PS4_SAFE_SOURCES)
+        std::string warning = stremio::ps4WarningLabel(m);
+        if (!warning.empty()) cells.push_back(sourcePill(warning, goldBg, goldFg));
+        if (stremio::ps4HasItalianAudio(m))
+            cells.push_back(sourcePill("ITA AUDIO", pillBg, textCol));
+        // Prefer the concrete release title on PS4; keep addon + parsed metadata
+        // as the secondary line so the user can identify both provider and file.
+        std::string primary = !m.sourceTitle.empty() ? m.sourceTitle :
+                              (!m.sourceName.empty() ? m.sourceName : m.label);
+        cells.push_back(sourceLabel(primary, 15, textCol, true));
+        std::string secondary = m.label;
+        if (!m.detail.empty()) secondary += (secondary.empty() ? "" : " · ") + m.detail;
+        if (!secondary.empty()) cells.push_back(sourceLabel(secondary, 13, greyCol));
+#else
         // source name (grows) + meta (codec · size)
         cells.push_back(sourceLabel(m.label, 15, textCol, true));
         if (!m.detail.empty()) cells.push_back(sourceLabel(m.detail, 13, greyCol));
+#endif
         // trailing download glyph: signals the line is downloadable (X button)
         auto* dl = new SVGImage();
         dl->setImageFromSVGRes("icon/ico-download-light.svg");

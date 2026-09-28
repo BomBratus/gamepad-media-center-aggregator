@@ -48,6 +48,7 @@ public:
     void setClipPoint(const std::vector<float>& clips);
 
     void playNext(int offset);
+    void setAutoNext(bool enabled) { this->autoNext = enabled; }
 
     brls::Event<int>* getPlayEvent() { return &this->playIndexEvent; }
 
@@ -139,6 +140,7 @@ private:
     static void disableDimming(bool disable);
 
     int playIndex = -1;
+    bool autoNext = true;
     brls::Event<int> playIndexEvent;
     brls::VoidEvent settingEvent;
     View* lastFocusedView = nullptr;

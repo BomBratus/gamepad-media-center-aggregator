@@ -174,6 +174,11 @@ void SettingTab::onCreate() {
             AppConfig::instance().setItem(AppConfig::PLAYER_SUBTITLE_LANG, subLangValues[selected]);
         });
 
+    btnAutoplayNext->init("Autoplay next episode",
+        conf.getItem(AppConfig::PLAYER_AUTOPLAY_NEXT, true), [&conf](bool value) {
+            conf.setItem(AppConfig::PLAYER_AUTOPLAY_NEXT, value);
+        });
+
     btnDirectPlay->init("main/setting/playback/force_directplay"_i18n, MPVCore::FORCE_DIRECTPLAY, [&conf](bool value) {
         if (MPVCore::FORCE_DIRECTPLAY == value) return;
         MPVCore::FORCE_DIRECTPLAY = value;

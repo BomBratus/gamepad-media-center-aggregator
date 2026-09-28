@@ -7,7 +7,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  set(VITA_VERSION "00.26")
 +# Custom PS4 package revision. Keep the upstream Title ID so this installs as an
 +# update over v1.1.0, but use a higher app version for an easy rollback path.
-+set(PS4_VERSION "00.67")
++set(PS4_VERSION "00.68")
  set(PROJECT_ICON ${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/icon.jpg)
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
@@ -58,7 +58,7 @@ diff --git a/app/include/api/stremio/types.hpp b/app/include/api/stremio/types.h
 diff --git a/app/include/api/stremio/types.hpp b/app/include/api/stremio/types.hpp
 --- a/app/include/api/stremio/types.hpp
 +++ b/app/include/api/stremio/types.hpp
-@@ -680,4 +682,55 @@
+@@ -680,4 +682,92 @@
      return m;
  }
  
@@ -113,6 +113,43 @@ diff --git a/app/include/api/stremio/types.hpp b/app/include/api/stremio/types.h
 +    return out.empty() ? out : "PS4 RISK: " + out;
 +}
 +
++inline bool ps4HasItalianAudio(const media::Media& m) {
++    std::string text = m.sourceName + " " + m.sourceTitle;
++    bool italianFlag = text.find(u8"🇮🇹") != std::string::npos;
++    std::vector<std::string> tokens;
++    std::string token;
++    auto flush = [&]() {
++        if (!token.empty()) {
++            tokens.push_back(token);
++            token.clear();
++        }
++    };
++    for (unsigned char c : text) {
++        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c - 'A' + 'a');
++        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) token.push_back((char)c);
++        else flush();
++    }
++    flush();
++    auto isSubtitle = [](const std::string& t) {
++        return t == "sub" || t == "subs" || t == "subtitle" || t == "subtitles" || t == "subbed";
++    };
++    auto isAudio = [](const std::string& t) {
++        return t == "audio" || t == "dub" || t == "dubbed" || t == "dual" || t == "multi";
++    };
++    bool hasSubtitleMarker = false;
++    for (size_t i = 0; i < tokens.size(); ++i) {
++        hasSubtitleMarker = hasSubtitleMarker || isSubtitle(tokens[i]);
++        bool nearSubtitle = (i > 0 && isSubtitle(tokens[i - 1])) ||
++                            (i + 1 < tokens.size() && isSubtitle(tokens[i + 1]));
++        if (tokens[i] == "ita" && !nearSubtitle) return true;
++        if ((tokens[i] == "italian" || tokens[i] == "italiano" || tokens[i] == "italiana") &&
++            !nearSubtitle &&
++            ((i > 0 && isAudio(tokens[i - 1])) || (i + 1 < tokens.size() && isAudio(tokens[i + 1]))))
++            return true;
++    }
++    return italianFlag && !hasSubtitleMarker;
++}
++
  /// ---- Subtitles (subtitles resource) ----------------------------------------
 diff --git a/app/src/api/stremio/backend.cpp b/app/src/api/stremio/backend.cpp
 --- a/app/src/api/stremio/backend.cpp
@@ -131,24 +168,6 @@ diff --git a/app/src/api/stremio/backend.cpp b/app/src/api/stremio/backend.cpp
  #else
          int qx = qualityRank(x.videoResolution), qy = qualityRank(y.videoResolution);
  #endif
-diff --git a/app/src/tab/media_movie.cpp b/app/src/tab/media_movie.cpp
---- a/app/src/tab/media_movie.cpp
-+++ b/app/src/tab/media_movie.cpp
-@@ -12,2 +12,3 @@
- #include "api/backend.hpp"
-+#include "api/stremio/types.hpp"
- #include "utils/misc.hpp"
-diff --git a/app/src/tab/media_movie.cpp b/app/src/tab/media_movie.cpp
---- a/app/src/tab/media_movie.cpp
-+++ b/app/src/tab/media_movie.cpp
-@@ -444,3 +445,7 @@
-+#if defined(GMCA_PS4_SAFE_SOURCES)
-+        std::string warning = stremio::ps4WarningLabel(m);
-+        if (!warning.empty()) cells.push_back(sourcePill(warning, goldBg, goldFg));
-+#endif
-         // source name (grows) + meta (codec · size)
-         cells.push_back(sourceLabel(m.label, 15, textCol, true));
-         if (!m.detail.empty()) cells.push_back(sourceLabel(m.detail, 13, greyCol));
 diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 --- a/app/src/tab/media_series.cpp
 +++ b/app/src/tab/media_series.cpp

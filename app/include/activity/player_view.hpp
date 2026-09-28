@@ -53,7 +53,10 @@ private:
     /// where the hardware decoder can choke on the transcoded stream). Returns
     /// true when a fallback was started (so the error dialog is suppressed).
     bool tryDirectPlayFallback();
+    bool trySourceRecovery(int64_t resumeMs = -1);
     bool playIndex(int index);
+    void updateUpNext(int64_t progressSeconds);
+    void dismissUpNext();
     /// Resolves external subtitle sidecars for the current item through the
     /// backend (Stremio addons), lazily and only when the played item changes.
     /// Plex/Jellyfin embed theirs in the Media streams, so this is a no-op there.
@@ -89,6 +92,10 @@ private:
     /// per (re)load; reset by playMedia on every deliberate (re)start
     bool directPlayFallback = false;
     std::vector<plex::Item> episodes;
+    int episodeIndex = -1;
+    bool upNextDismissed = false;
+    brls::Dialog* upNextDialog = nullptr;
+    brls::Label* upNextLabel = nullptr;
 
     /// External subtitle sidecars (Stremio addons) for the current item, resolved
     /// lazily at play time and sub-add'ed on each (re)load. `externalSubsItem` is

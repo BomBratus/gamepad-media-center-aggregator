@@ -5,11 +5,15 @@
     transcoder offset in whole seconds.
 */
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
+#include <cstring>
 
 #include "activity/player_view.hpp"
 #include "api/plex.hpp"
 #include "api/backend.hpp"
+#include "tab/media_series.hpp"
 #include "utils/dialog.hpp"
 #include "utils/misc.hpp"
 #include "view/mpv_core.hpp"
@@ -17,12 +21,31 @@
 #include "view/video_view.hpp"
 #include "view/video_profile.hpp"
 #include "view/audio_player.hpp"
+#include "view/auto_tab_frame.hpp"
 
 using namespace brls::literals;
 
 /// "Watched" threshold: default value of the server preference
 /// LibraryVideoPlayedThreshold
 static const double SCROBBLE_THRESHOLD = 0.90;
+
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+enum class Ps4SubtitleSidecarSafety { SafeText, Unknown, Risky };
+
+static Ps4SubtitleSidecarSafety ps4SubtitleSidecarSafety(const std::string& rawUrl) {
+    std::string url = rawUrl.substr(0, rawUrl.find_first_of("?#"));
+    for (auto& ch : url) ch = (char)std::tolower((unsigned char)ch);
+    auto endsWith = [&url](const char* suffix) {
+        size_t n = std::strlen(suffix);
+        return url.size() >= n && url.compare(url.size() - n, n, suffix) == 0;
+    };
+    if (endsWith(".srt") || endsWith(".vtt") || endsWith(".ass") || endsWith(".ssa"))
+        return Ps4SubtitleSidecarSafety::SafeText;
+    if (endsWith(".sup") || endsWith(".sub") || endsWith(".idx"))
+        return Ps4SubtitleSidecarSafety::Risky;
+    return Ps4SubtitleSidecarSafety::Unknown;
+}
+#endif
 
 PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int versionIndex)
     : itemId(item.ratingKey), item(item), preferredVersion(versionIndex) {
@@ -50,9 +73,13 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
         PlayerSetting::showAudioMenu(&this->stream);
         return true;
     });
-    // transcode stream failed to play -> retry once in direct play before the
-    // error dialog (Vita hardware decode can reject the transcoded stream)
-    view->registerError([this](...) { return this->tryDirectPlayFallback(); });
+    // Recovery stays backend-aware: Plex/Vita gets its direct-play retry first;
+    // Stremio then offers the already-resolved alternate sources without any
+    // hidden refetch or addon reordering.
+    view->registerError([this](...) {
+        if (this->tryDirectPlayFallback()) return true;
+        return this->trySourceRecovery();
+    });
 
     // stable session identifier (24 characters)
     this->sessionId = misc::randHex(12);
@@ -93,7 +120,19 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
                 for (auto& s : part.streams) {
                     if (s.streamType != media::streamTypeSubtitle || s.key.empty()) continue;
                     std::string url = AppConfig::instance().backend().subtitleSidecarUrl(s.key);
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+                    auto safety = ps4SubtitleSidecarSafety(url);
+                    if (safety == Ps4SubtitleSidecarSafety::Risky)
+                        brls::Logger::info("PS4 subtitle guard: bitmap sidecar is manual-select only {}", url);
+                    // Only known text formats may be selected automatically.
+                    // Bitmap and unknown sidecars stay available in the menu, but
+                    // cannot alter the renderer during video startup.
+                    const char* ps4Flag =
+                        safety == Ps4SubtitleSidecarSafety::SafeText ? flag : "auto";
+                    mpv.command("sub-add", url.c_str(), ps4Flag, s.displayTitle.c_str());
+#else
                     mpv.command("sub-add", url.c_str(), flag, s.displayTitle.c_str());
+#endif
                 }
             }
             // External subtitles resolved lazily by the backend (Stremio addons):
@@ -109,6 +148,7 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
                 this->reportTimeline("playing", int64_t(mpv.video_progress) * 1000);
                 this->maybeScrobble(int64_t(mpv.video_progress) * 1000);
             }
+            this->updateUpNext(mpv.video_progress);
             break;
         default:;
         }
@@ -141,6 +181,7 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
 }
 
 PlayerView::~PlayerView() {
+    this->dismissUpNext();
     auto& mpv = MPVCore::instance();
     mpv.getEvent()->unsubscribe(eventSubscribeID);
     mpv.getCustomEvent()->unsubscribe(customEventSubscribeID);
@@ -174,6 +215,9 @@ void PlayerView::setSeries(const std::string& showRatingKey) {
             }
             view->setList(values, index);
             this->episodes = std::move(r.Items);
+            this->episodeIndex = index;
+            this->upNextDismissed = false;
+            view->setAutoNext(AppConfig::instance().getItem(AppConfig::PLAYER_AUTOPLAY_NEXT, true));
         },
         [ASYNC_TOKEN](const std::string& error) {
             ASYNC_RELEASE
@@ -197,6 +241,10 @@ bool PlayerView::playIndex(int index) {
     if (index < 0 || index >= (int)this->episodes.size()) {
         return VideoView::close();
     }
+    this->dismissUpNext();
+    this->episodeIndex = index;
+    this->upNextDismissed = false;
+    this->view->setAutoNext(AppConfig::instance().getItem(AppConfig::PLAYER_AUTOPLAY_NEXT, true));
     MPVCore::instance().reset();
 
     auto next = this->episodes.at(index);
@@ -210,6 +258,81 @@ bool PlayerView::playIndex(int index) {
                        : fmt::format("{} · S{}E{} — {}", next.grandparentTitle, next.parentIndex, next.index,
                              next.title));
     return true;
+}
+
+void PlayerView::dismissUpNext() {
+    if (!this->upNextDialog) return;
+    auto* dialog = this->upNextDialog;
+    this->upNextDialog = nullptr;
+    this->upNextLabel = nullptr;
+    dialog->close([]() {});
+}
+
+void PlayerView::updateUpNext(int64_t progressSeconds) {
+    const bool enabled = AppConfig::instance().getItem(AppConfig::PLAYER_AUTOPLAY_NEXT, true);
+    this->view->setAutoNext(enabled && !this->upNextDismissed);
+    if (!enabled || this->upNextDismissed || this->episodeIndex < 0 ||
+        this->episodeIndex + 1 >= (int)this->episodes.size())
+        return;
+
+    int64_t durationSeconds = this->item.duration > 0 ? this->item.duration / 1000
+                                                      : (int64_t)MPVCore::instance().duration;
+    if (durationSeconds <= 0) return;
+    int remaining = (int)std::max<int64_t>(0, durationSeconds - progressSeconds);
+    if (remaining > 10 || remaining <= 0) return;
+
+    const auto& next = this->episodes[(size_t)this->episodeIndex + 1];
+    std::string nextTitle = next.grandparentTitle.empty()
+                                ? fmt::format("S{}E{} — {}", next.parentIndex, next.index, next.title)
+                                : fmt::format("{} · S{}E{} — {}", next.grandparentTitle, next.parentIndex,
+                                      next.index, next.title);
+    std::string text = fmt::format("Next episode in {} s\n{}", remaining, nextTitle);
+
+    if (this->upNextLabel) {
+        this->upNextLabel->setText(text);
+        return;
+    }
+
+    auto* content = new brls::Box();
+    content->setAxis(brls::Axis::COLUMN);
+    content->setWidth(760);
+    content->setPadding(20, 20, 20, 20);
+    auto* label = new brls::Label();
+    label->setSingleLine(false);
+    label->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    label->setFontSize(22);
+    label->setText(text);
+    content->addView(label);
+
+    auto* dialog = new brls::Dialog(content);
+    this->upNextDialog = dialog;
+    this->upNextLabel = label;
+    dialog->addButton("Play next now", [this]() {
+        this->upNextDialog = nullptr;
+        this->upNextLabel = nullptr;
+        this->view->playNext(1);
+    });
+    dialog->addButton("Cancel autoplay", [this]() {
+        this->upNextDialog = nullptr;
+        this->upNextLabel = nullptr;
+        this->upNextDismissed = true;
+        this->view->setAutoNext(false);
+    });
+    if (!this->item.grandparentRatingKey.empty()) {
+        dialog->addButton("Open series", [this]() {
+            this->upNextDialog = nullptr;
+            this->upNextLabel = nullptr;
+            plex::Item show;
+            show.ratingKey = this->item.grandparentRatingKey;
+            show.type = plex::mediaTypeShow;
+            show.title = this->item.grandparentTitle;
+            brls::Application::popActivity(brls::TransitionAnimation::NONE, [show]() {
+                if (auto* focus = brls::Application::getCurrentFocus())
+                    ui::presentDetail(focus, new MediaSeries(show));
+            });
+        });
+    }
+    dialog->open();
 }
 
 void PlayerView::playMedia(const int64_t seekMs) {
@@ -257,6 +380,7 @@ void PlayerView::playMedia(const int64_t seekMs) {
             // caller-chosen source (Stremio picker) if it still resolves to an
             // accessible file; otherwise the first accessible version.
             const plex::Media* chosen = nullptr;
+            int chosenIndex = -1;
             auto accessible = [](const plex::Media& m) {
                 for (auto& p : m.parts)
                     if (p.accessible && p.exists && !p.key.empty()) return true;
@@ -264,16 +388,19 @@ void PlayerView::playMedia(const int64_t seekMs) {
             };
             if (this->preferredVersion >= 0 && this->preferredVersion < (int)this->item.media.size() &&
                 accessible(this->item.media[this->preferredVersion])) {
-                chosen = &this->item.media[this->preferredVersion];
+                chosenIndex = this->preferredVersion;
+                chosen = &this->item.media[(size_t)chosenIndex];
             }
-            for (auto& m : this->item.media) {
-                if (chosen) break;
-                if (accessible(m)) chosen = &m;
+            for (size_t i = 0; i < this->item.media.size() && !chosen; ++i) {
+                if (!accessible(this->item.media[i])) continue;
+                chosenIndex = (int)i;
+                chosen = &this->item.media[i];
             }
             if (!chosen) {
                 Dialog::show("main/player/error"_i18n, []() { VideoView::close(); });
                 return;
             }
+            this->preferredVersion = chosenIndex;
             this->stream = *chosen;
             this->setChapters(this->item.chapters, this->item.duration);
             this->startPlayback(seekMs);
@@ -324,6 +451,7 @@ void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
                 // (e.g. Stremio with no direct/debrid stream) instead of throwing
                 // across the async/TU boundary; surface it as a player error.
                 if (src.url.empty()) {
+                    if (this->trySourceRecovery()) return;
                     Dialog::show("main/player/error"_i18n, []() { VideoView::close(); });
                     return;
                 }
@@ -334,25 +462,21 @@ void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
                 // transcode session, leaving stopTranscode a safe no-op.
                 this->transcodeSession = src.transcodeSession;
                 MPVCore::instance().setUrl(src.url, src.mpvExtra);
+                // Resolve subtitles only after a playable URL has actually been
+                // accepted. This preserves the single-worker playback-first order
+                // while avoiding an addon subtitle request for a failed source.
+                this->resolveExternalSubtitles();
             });
         } catch (const std::exception& ex) {
             std::string msg = ex.what();
             brls::sync([ASYNC_TOKEN, msg]() {
                 ASYNC_RELEASE
+                if (this->trySourceRecovery()) return;
                 Dialog::show(msg, []() { VideoView::close(); });
             });
         }
     });
 
-    // Resolve external subtitles AFTER queuing the playback task above. brls::async
-    // is a single FIFO worker thread (not a pool): the Stremio subtitle fan-out
-    // (ensureLoaded + one getSync per subtitles addon, up to a 15 s timeout each)
-    // would otherwise run to completion BEFORE the fast resolvePlayback task and
-    // stall the video start behind it. Queuing playback first lets mpv start
-    // loading while subtitles resolve; the mpvLoaded/addExternalSubtitles handoff
-    // adds them whenever the fetch lands. (No-op for Plex/Jellyfin: getSubtitles
-    // returns synchronously.)
-    this->resolveExternalSubtitles();
 }
 
 void PlayerView::resolveExternalSubtitles() {
@@ -405,6 +529,14 @@ void PlayerView::addExternalSubtitles() {
         // "auto" so they stay pickable in the subtitle menu without stealing it.
         bool preferred = !pref.empty() && s.languageTag == pref;
         const char* flag = preferred ? "select" : "auto";
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+        auto safety = ps4SubtitleSidecarSafety(url);
+        if (safety == Ps4SubtitleSidecarSafety::Risky)
+            brls::Logger::info("PS4 subtitle guard: bitmap external sidecar is manual-select only {}", url);
+        // Preserve preferred-language auto-selection for known-safe text formats
+        // only. Bitmap/unknown URLs stay available but require explicit selection.
+        if (safety != Ps4SubtitleSidecarSafety::SafeText) flag = "auto";
+#endif
         mpv.command("sub-add", url.c_str(), flag, s.displayTitle.c_str(), s.languageTag.c_str());
     }
 }
@@ -424,6 +556,65 @@ bool PlayerView::tryDirectPlayFallback() {
     // surface the reason to the user too, so bug reports carry the mpv code
     brls::Application::notify(fmt::format("{} ({})", "main/player/direct_fallback"_i18n, mpv.getError()));
     return true;  // handled: no error dialog
+}
+
+bool PlayerView::trySourceRecovery(int64_t resumeMs) {
+    if (AppConfig::instance().backend().type() != media::BackendType::Stremio || this->item.media.size() < 2)
+        return false;
+
+    auto accessible = [](const media::Media& m) {
+        for (const auto& p : m.parts)
+            if (p.accessible && p.exists && !p.key.empty()) return true;
+        return false;
+    };
+    auto mediaKey = [](const media::Media& m) -> std::string {
+        return m.parts.empty() ? std::string() : m.parts.front().key;
+    };
+
+    int current = this->preferredVersion;
+    if (current < 0 || current >= (int)this->item.media.size()) {
+        std::string key = mediaKey(this->stream);
+        for (size_t i = 0; i < this->item.media.size(); ++i)
+            if (!key.empty() && mediaKey(this->item.media[i]) == key) {
+                current = (int)i;
+                break;
+            }
+    }
+
+    std::vector<int> alternatives;
+    std::vector<std::string> labels;
+    for (size_t i = 0; i < this->item.media.size(); ++i) {
+        if ((int)i == current || !accessible(this->item.media[i])) continue;
+        const auto& m = this->item.media[i];
+        std::string label;
+        if (!m.videoResolution.empty()) label += m.videoResolution;
+        if (!m.videoCodec.empty()) label += (label.empty() ? "" : " · ") + m.videoCodec;
+        if (!m.label.empty()) label += (label.empty() ? "" : " · ") + m.label;
+        if (!m.detail.empty()) label += (label.empty() ? "" : " · ") + m.detail;
+        if (label.empty()) label = fmt::format("Source {}", i + 1);
+        alternatives.push_back((int)i);
+        labels.push_back(std::move(label));
+    }
+    if (alternatives.empty()) return false;
+
+    if (resumeMs < 0) {
+        resumeMs = int64_t(MPVCore::instance().playback_time) * 1000;
+        if (resumeMs <= 0) resumeMs = this->item.viewOffset;
+    }
+    const int64_t resume = resumeMs;
+    auto* picker = new brls::Dropdown("Choose another source", labels,
+        [this, alternatives, resume](int selected) {
+            if (selected < 0 || selected >= (int)alternatives.size()) return;
+            int index = alternatives[(size_t)selected];
+            MPVCore::instance().reset();
+            this->preferredVersion = index;
+            this->stream = this->item.media[(size_t)index];
+            this->externalSubsItem.clear();
+            this->externalSubs.clear();
+            this->startPlayback(resume);
+        });
+    brls::Application::pushActivity(new brls::Activity(picker));
+    return true;
 }
 
 void PlayerView::stopTranscode() {
