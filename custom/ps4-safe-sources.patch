@@ -1,18 +1,21 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -62,4 +62,7 @@
+@@ -62,4 +62,10 @@
  # regresses; 00.23 shipped with the broken v1.0.3 VPK, 00.24 is the first that
  # actually installs.
  set(VITA_VERSION "00.26")
 +# Custom PS4 package revision. Keep the upstream Title ID so this installs as an
 +# update over v1.1.0, but use a higher app version for an easy rollback path.
-+set(PS4_VERSION "00.68")
++set(PS4_VERSION "00.69")
++# Keep the package/license identity equal to the last hardware-verified build.
++# Only APP_VER/VERSION advances; the transport filename stays versioned.
++set(PS4_CONTENT_ID "IV0001-GMCA00000_00-GMCA000000006700")
  set(PROJECT_ICON ${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/icon.jpg)
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -250,5 +253,10 @@
+@@ -250,5 +256,10 @@
      BUILD_TAG_SHORT=${GIT_TAG_SHORT}
      BUILD_PACKAGE_NAME=${PROJECT_NAME}
  )
@@ -23,17 +26,6 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 +endif ()
  
  # building release file
-diff --git a/CMakeLists.txt b/CMakeLists.txt
---- a/CMakeLists.txt
-+++ b/CMakeLists.txt
-@@ -357,6 +365,6 @@
-             ${CMAKE_BINARY_DIR}/ps4
-             ${PSN_TITLE_ID}
-             ${PROJECT_NAME}
--            ${VITA_VERSION}
-+            ${PS4_VERSION}
-             8388608
-     )
 diff --git a/app/include/api/media/types.hpp b/app/include/api/media/types.hpp
 --- a/app/include/api/media/types.hpp
 +++ b/app/include/api/media/types.hpp
