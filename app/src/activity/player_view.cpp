@@ -112,6 +112,13 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
             this->mpvLoaded = false;
             this->reportStop();
             break;
+        case MpvEventEnum::END_OF_FILE:
+            // VideoView defers autoplay to the next UI tick, so the current item
+            // is still active here. Persist a final, unambiguous EOF checkpoint.
+            this->mpvLoaded = false;
+            this->reportStop(this->item.duration > 0 ? this->item.duration
+                                                     : int64_t(mpv.playback_time) * 1000);
+            break;
         case MpvEventEnum::MPV_LOADED: {
             const char* flag = MPVCore::SUBS_FALLBACK ? "select" : "auto";
             // External (sidecar) subtitles embedded in the Media streams at detail
@@ -634,8 +641,8 @@ void PlayerView::reportTimeline(const std::string& state, int64_t timeMs) {
     AppConfig::instance().backend().reportProgress(this->itemId, st, timeMs, this->item.duration, this->sessionId);
 }
 
-void PlayerView::reportStop() {
-    int64_t timeMs = int64_t(MPVCore::instance().playback_time) * 1000;
+void PlayerView::reportStop(int64_t timeMs) {
+    if (timeMs < 0) timeMs = int64_t(MPVCore::instance().playback_time) * 1000;
     this->reportTimeline("stopped", timeMs);
     this->maybeScrobble(timeMs);
     brls::Logger::debug("PlayerView reportStop {}", this->sessionId);
