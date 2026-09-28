@@ -14,7 +14,8 @@ function(gmca_add_pkg project pkgdir title_id title version content_id)
         message(FATAL_ERROR "Invalid GMCA PS4 version '${version}'")
     endif()
 
-    if(NOT "${content_id}" MATCHES "^[A-Z0-9]{6}-[A-Z0-9]{9}_00-[A-Z0-9]{16}$")
+    string(LENGTH "${content_id}" content_id_length)
+    if(NOT content_id_length EQUAL 36 OR NOT "${content_id}" MATCHES "^[A-Z0-9_-]+$")
         message(FATAL_ERROR "Invalid GMCA PS4 content id '${content_id}'")
     endif()
 
