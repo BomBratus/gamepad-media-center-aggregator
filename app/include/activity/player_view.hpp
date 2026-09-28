@@ -67,7 +67,7 @@ private:
     void addExternalSubtitles();
     /// POST /:/timeline report (time/duration in ms)
     void reportTimeline(const std::string& state, int64_t timeMs);
-    void reportStop();
+    void reportStop(int64_t timeMs = -1);
     /// Marks as watched via /:/scrobble beyond the threshold (90%)
     void maybeScrobble(int64_t timeMs);
     bool toggleQuality();

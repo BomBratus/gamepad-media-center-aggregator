@@ -642,7 +642,12 @@ void VideoView::registerMpvEvent() {
             // preserves the legacy immediate advance only when autoplay remains enabled.
             disableDimming(false);
             this->toggleIcon->setImageFromSVGRes("icon/ico-play.svg");
-            if (this->autoNext) this->playIndexEvent.fire(++this->playIndex);
+            if (this->autoNext) {
+                // Defer episode switching until every mpv END_OF_FILE subscriber
+                // has observed the item that actually ended (PlayerView persists
+                // its final progress in its own subscriber).
+                brls::sync([this]() { this->playIndexEvent.fire(++this->playIndex); });
+            }
             break;
         case MpvEventEnum::CACHE_SPEED_CHANGE:
             // 仅当加载圈已经开始转起的情况显示缓存
