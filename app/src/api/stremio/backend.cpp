@@ -23,6 +23,7 @@
 #include "api/stremio/auth.hpp"
 #include "api/media/langs.hpp"
 #include "utils/config.hpp"
+#include "utils/misc.hpp"
 #include <borealis/core/logger.hpp>
 #include <borealis/core/thread.hpp>
 #include <borealis/core/i18n.hpp>
@@ -1449,7 +1450,7 @@ void StremioBackend::markUnwatched(const std::string& id) {
 // ---- playback (étape 2) --------------------------------------------------------
 
 media::PlaybackSource StremioBackend::resolvePlayback(
-    const media::Item&, const media::Media& version, const media::PlaybackOptions&) {
+    const media::Item&, const media::Media& version, const media::PlaybackOptions& opts) {
     // getItemDetail already fanned out /stream and stored the chosen playback URL
     // in version.parts[0].key (Stremio has no per-request transcode decision). An
     // empty url means no playable source -> the player shows a "playback failed"
@@ -1457,6 +1458,10 @@ media::PlaybackSource StremioBackend::resolvePlayback(
     // (which does not wrap tasks in try/catch) would abort the app.
     if (version.parts.empty() || version.parts.front().key.empty()) return {};
     std::string extra = "network-timeout=" + std::to_string(HTTP::TIMEOUT / 100);
+    // Match Plex/Jellyfin direct play: the Continue Watching offset is an mpv
+    // file-local option, so it survives the Stremio source picker without any
+    // extra seek/refetch after load.
+    if (opts.seekMs > 0) extra += ",start=" + misc::sec2Time(opts.seekMs / 1000);
     if (HTTP::PROXY_STATUS) extra += ",http-proxy=\"" + HTTP::PROXY + "\"";
     return {version.parts.front().key, extra, false, "directplay"};
 }
