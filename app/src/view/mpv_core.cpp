@@ -564,15 +564,10 @@ void MPVCore::init() {
     mpv_set_option_string(mpv, "watch-later-dir", fmt::format("{}/watch-later", confDir).c_str());
     mpv_set_option_string(mpv, "gpu-shader-cache-dir", fmt::format("{}/cache", confDir).c_str());
     mpv_set_option_string(mpv, "ytdl", "no");
-#if defined(__PS4__) && defined(GMCA_STREMIO_ONLY)
-    // FFmpeg 7.1.5 in the OpenOrbis workflow is built with mbedTLS. Use the
-    // PS4 system CA store and require peer verification for HTTPS playback and
-    // subtitle sidecars. Do not send the backend/config URL as a blanket Referer.
-    mpv_set_option_string(mpv, "tls-ca-file", "/system/common/cert/CA_LIST.cer");
-    mpv_set_option_string(mpv, "tls-verify", "yes");
-#else
+    // Keep the hardware-tested pre-00.73 network behavior on PS4. The system
+    // CA store used by the OpenOrbis mbedTLS stack is not yet validated for
+    // GMCA HTTPS playback/subtitle traffic.
     mpv_set_option_string(mpv, "referrer", conf.getUrl().c_str());
-#endif
     mpv_set_option_string(mpv, "osd-level", "0");
     mpv_set_option_string(mpv, "video-timing-offset", "0");  // 60fps
     mpv_set_option_string(mpv, "reset-on-next-file", "speed,pause");

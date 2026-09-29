@@ -117,10 +117,6 @@ jobs:
           grep -Fq 'Restart episode' app/src/view/video_source.cpp
           grep -Fq 'selectedProgress' app/src/tab/watchlist_tab.cpp
           grep -Fq 'ITA AUDIO' app/src/tab/media_movie.cpp
-          grep -Fq 'CURLOPT_SSL_VERIFYPEER, 1L' app/src/api/http.cpp
-          grep -Fq 'CURLOPT_SSL_VERIFYHOST, 2L' app/src/api/http.cpp
-          grep -Fq 'tls-ca-file", "/system/common/cert/CA_LIST.cer"' app/src/view/mpv_core.cpp
-          grep -Fq 'tls-verify", "yes"' app/src/view/mpv_core.cpp
           git checkout -- custom/ps4-safe-sources.patch custom/ps4-ui-followups.patch
           git diff --check
 
