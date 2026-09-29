@@ -683,7 +683,7 @@ std::vector<media::Media> resolveAllStreams(
         try {
             streams = parseStreams(getSync(url, streamRequestTimeout()));
         } catch (const std::exception& ex) {
-            brls::Logger::warning("stremio stream {}: {}", url, ex.what());
+            brls::Logger::warning("stremio stream {}: {}", redactUrlForLog(url), ex.what());
             continue;
         }
         for (auto& s : streams) {
@@ -767,7 +767,7 @@ std::vector<media::Stream> resolveAllSubtitles(AddonEngine& engine, const std::s
         try {
             subs = parseSubtitles(getSync(url, subtitleRequestTimeout()));
         } catch (const std::exception& ex) {
-            brls::Logger::warning("stremio subtitles {}: {}", url, ex.what());
+            brls::Logger::warning("stremio subtitles {}: {}", redactUrlForLog(url), ex.what());
             continue;
         }
         for (auto& s : subs) {
@@ -880,7 +880,7 @@ void StremioBackend::getHomeHubs(
                 try {
                     res = parseCatalog(getSync(url));
                 } catch (const std::exception& ex) {
-                    brls::Logger::warning("stremio home catalog {}: {}", url, ex.what());
+                    brls::Logger::warning("stremio home catalog {}: {}", redactUrlForLog(url), ex.what());
                     continue;
                 }
                 if (res.items.empty()) continue;
@@ -920,7 +920,7 @@ void StremioBackend::getSectionHubs(
                 try {
                     res = parseCatalog(getSync(url));
                 } catch (const std::exception& ex) {
-                    brls::Logger::warning("stremio section hub {}: {}", url, ex.what());
+                    brls::Logger::warning("stremio section hub {}: {}", redactUrlForLog(url), ex.what());
                     continue;
                 }
                 if (res.items.empty()) continue;
@@ -1230,7 +1230,7 @@ void StremioBackend::getItemDetail(
                 try {
                     j = getSync(url);
                 } catch (const std::exception& ex) {
-                    brls::Logger::warning("stremio meta {}: {}", url, ex.what());
+                    brls::Logger::warning("stremio meta {}: {}", redactUrlForLog(url), ex.what());
                     continue;
                 }
                 auto meta = j.find("meta");
@@ -1311,7 +1311,7 @@ void StremioBackend::getChildren(
                 try {
                     j = getSync(url);
                 } catch (const std::exception& ex) {
-                    brls::Logger::warning("stremio meta {}: {}", url, ex.what());
+                    brls::Logger::warning("stremio meta {}: {}", redactUrlForLog(url), ex.what());
                     continue;
                 }
                 auto meta = j.find("meta");
@@ -1391,7 +1391,7 @@ void StremioBackend::getAllEpisodes(const std::string& showId, bool,
                 try {
                     j = getSync(url);
                 } catch (const std::exception& ex) {
-                    brls::Logger::warning("stremio meta {}: {}", url, ex.what());
+                    brls::Logger::warning("stremio meta {}: {}", redactUrlForLog(url), ex.what());
                     continue;
                 }
                 auto meta = j.find("meta");
@@ -1440,7 +1440,7 @@ void StremioBackend::getNextUp(
                 try {
                     j = getSync(url);
                 } catch (const std::exception& ex) {
-                    brls::Logger::warning("stremio getNextUp meta {}: {}", url, ex.what());
+                    brls::Logger::warning("stremio getNextUp meta {}: {}", redactUrlForLog(url), ex.what());
                     continue;
                 }
                 auto meta = j.find("meta");
@@ -1515,7 +1515,7 @@ void StremioBackend::search(const std::string& query, media::MediaKind kind, int
                 try {
                     res = parseCatalog(getSync(url));
                 } catch (const std::exception& ex) {
-                    brls::Logger::warning("stremio search {}: {}", url, ex.what());
+                    brls::Logger::warning("stremio search {}: {}", redactUrlForLog(url), ex.what());
                     continue;
                 }
                 for (auto& it : res.items) {
@@ -1848,6 +1848,10 @@ void StremioBackend::setWatchlisted(
     bool addCopy = add;
     brls::async([key, baseId, libType, title, poster, dur, addCopy, then, error]() {
         try {
+            // Serialize every read-modify-write of the Stremio library. Without
+            // this, a concurrent progress/watched update can land between this
+            // GET and PUT and be overwritten by a stale watchlist snapshot.
+            std::lock_guard<std::mutex> lock(libraryWriteMutex);
             // Reuse an existing entry (preserve its playback state); else build one.
             nlohmann::json items = stremio::datastoreGet(key);
             nlohmann::json found;
