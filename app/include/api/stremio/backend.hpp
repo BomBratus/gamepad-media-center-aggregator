@@ -18,6 +18,7 @@
 
 #include "api/backend.hpp"
 #include "api/stremio/addons.hpp"
+#include <memory>
 
 namespace stremio {
 
@@ -98,7 +99,7 @@ public:
 
 private:
     media::Capabilities caps_;
-    AddonEngine engine;
+    std::shared_ptr<AddonEngine> engine;
 };
 
 }  // namespace stremio
