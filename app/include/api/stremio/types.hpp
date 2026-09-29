@@ -68,6 +68,25 @@ inline std::string encodeURIComponent(const std::string& s) {
     return out;
 }
 
+/// Keep logs useful without exposing addon configuration, debrid API keys,
+/// auth-bearing paths, query parameters, or URL userinfo. Stremio transport
+/// URLs commonly embed configuration in the path, so only scheme + host/port
+/// are retained.
+inline std::string redactUrlForLog(const std::string& url) {
+    const size_t schemeEnd = url.find("://");
+    if (schemeEnd == std::string::npos || schemeEnd == 0) return "<redacted-url>";
+
+    const size_t authorityStart = schemeEnd + 3;
+    const size_t authorityEnd = url.find_first_of("/?#", authorityStart);
+    std::string authority = url.substr(authorityStart,
+        authorityEnd == std::string::npos ? std::string::npos : authorityEnd - authorityStart);
+    const size_t userInfo = authority.rfind('@');
+    if (userInfo != std::string::npos) authority.erase(0, userInfo + 1);
+    if (authority.empty()) authority = "<redacted-host>";
+
+    return url.substr(0, schemeEnd + 3) + authority + "/<redacted>";
+}
+
 /// transportUrl -> base (strips a trailing `/manifest.json`).
 inline std::string baseFromTransport(const std::string& transportUrl) {
     static const std::string suffix = "/manifest.json";
