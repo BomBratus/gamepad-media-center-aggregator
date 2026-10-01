@@ -23,7 +23,7 @@ rc=0
 for src in "$ROOT"/tests/test_*.cpp; do
     name="$(basename "$src" .cpp)"
     bin="$OUT/$name"
-    if ! "$CXX" -std=gnu++17 "${ARCH_FLAGS[@]}" -Wall -I"$INC_TEST" -I"$INC_APP" -I"$INC_JSON" "$src" -o "$bin"; then
+    if ! "$CXX" -std=gnu++17 -pthread "${ARCH_FLAGS[@]}" -Wall -I"$INC_TEST" -I"$INC_APP" -I"$INC_JSON" "$src" -o "$bin"; then
         echo "COMPILE FAIL: $name"
         rc=1
         continue
