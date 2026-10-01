@@ -21,7 +21,7 @@
 #include "api/stremio/backend.hpp"
 #include "api/stremio/types.hpp"
 #include "api/stremio/catalog_navigation.hpp"
-#include "api/stremio/playback_history.hpp"
+#include "api/stremio/async_playback_history.hpp"
 #include "api/stremio/auth.hpp"
 #include "api/media/langs.hpp"
 #include "utils/config.hpp"
@@ -77,8 +77,10 @@ std::string watchedHistoryPath() { return AppConfig::instance().configDir() + "/
 std::string progressHistoryPath() { return AppConfig::instance().configDir() + "/stremio-progress.json"; }
 std::string playbackHistoryPath() { return AppConfig::instance().configDir() + "/stremio-playback.json"; }
 
-PlaybackHistory& playbackHistory() {
-    static PlaybackHistory history(playbackHistoryPath());
+AsyncPlaybackHistory& playbackHistory() {
+    static AsyncPlaybackHistory history(playbackHistoryPath(), [] {
+        brls::Logger::warning("stremio playback checkpoint write failed");
+    });
     return history;
 }
 
@@ -938,6 +940,8 @@ std::vector<media::Stream> resolveAllSubtitles(AddonEngine& engine, const std::s
 
 }  // namespace
 
+void flushPlaybackHistory() { playbackHistory().flush(); }
+
 nlohmann::json savedPlayback(const std::string& id) {
     const std::string scope = playbackScope();
     return scope.empty() ? nlohmann::json::object() : playbackHistory().load(scope, id);
@@ -946,8 +950,7 @@ nlohmann::json savedPlayback(const std::string& id) {
 void rememberPlayback(const media::Item& item, const media::Media& source, int64_t position, int64_t duration) {
     const std::string scope = playbackScope();
     if (scope.empty()) return;
-    if (!playbackHistory().save(scope, item, source, position, duration))
-        brls::Logger::warning("stremio playback history: save failed for {}", item.ratingKey);
+    playbackHistory().save(scope, item, source, position, duration);
 }
 
 int savedPlaybackSource(const media::Item& item) {
