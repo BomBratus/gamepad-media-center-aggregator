@@ -444,6 +444,11 @@
     },
     "movies": "Phim",
     "series": "Phim bộ",
+    "anime": {
+      "title": "Anime",
+      "empty_title": "Không tìm thấy danh mục anime",
+      "empty_sub": "Cài đặt hoặc đồng bộ tiện ích danh mục anime trong Stremio để xem anime tại đây."
+    },
     "popular": "Phổ biến",
     "new": "Mới",
     "featured": "Nổi bật",

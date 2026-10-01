@@ -554,10 +554,31 @@ private:
     size_t pageSize = 60;
 };
 
+class AnimeEmptyGrid : public RecyclingGrid {
+public:
+    AnimeEmptyGrid() {
+        this->setGrow(1.f);
+        float side = brls::getStyle()["main/content_padding_sides"];
+        this->setPadding(70, side, brls::getStyle()["main/content_padding_top_bottom"], side);
+        this->setEmpty("main/stremio/anime/empty_title"_i18n, "main/stremio/anime/empty_sub"_i18n,
+            "icon/ico-media.svg");
+    }
+};
+
 StremioCatalogs::StremioCatalogs(const std::string& sectionKey, const std::string& sectionType)
     : sectionKey(sectionKey), sectionType(sectionType) {
     brls::Logger::debug("StremioCatalogs: create {} type {}", sectionKey, sectionType);
     this->inflateFromXMLRes("xml/tabs/stremio_catalogs.xml");
+
+    if (sectionKey == "anime" && AppConfig::instance().backend().sectionTabs(sectionKey).empty()) {
+        auto* item = new AutoSidebarItem();
+        item->setTabStyle(AutoTabBarStyle::ACCENT);
+        item->setFontSize(18);
+        item->setLabel("main/stremio/anime/title"_i18n);
+        this->tabFrame->addTab(item, []() { return new AnimeEmptyGrid(); });
+        this->tabFrame->registerTabAction(this);
+        return;
+    }
 
     // Stremio discovery is easier to scan as vertical shelves than as one
     // top-level tab per addon catalog. Reuse the existing section-hub views:
@@ -577,8 +598,8 @@ StremioCatalogs::StremioCatalogs(const std::string& sectionKey, const std::strin
     }
 
     // IMDb Top is a true all-time chart, intentionally separate from Cinemeta's
-    // Featured/imdbRating shelf. It is fetched lazily only when this tab opens.
-    {
+    // Featured/imdbRating shelf. Anime has its own addon catalogs instead.
+    if (sectionKey != "anime") {
         std::string type = sectionType;
         auto* item = new AutoSidebarItem();
         item->setTabStyle(AutoTabBarStyle::ACCENT);
@@ -589,7 +610,7 @@ StremioCatalogs::StremioCatalogs(const std::string& sectionKey, const std::strin
 
     // Genres remains a separate browsing mode instead of competing with every
     // addon catalog in the top bar.
-    if (AppConfig::instance().backend().caps().genres) {
+    if (sectionKey != "anime" && AppConfig::instance().backend().caps().genres) {
         std::string key = sectionKey, type = sectionType;
         auto* item = new AutoSidebarItem();
         item->setTabStyle(AutoTabBarStyle::ACCENT);

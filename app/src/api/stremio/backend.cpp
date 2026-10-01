@@ -20,6 +20,7 @@
 
 #include "api/stremio/backend.hpp"
 #include "api/stremio/types.hpp"
+#include "api/stremio/catalog_navigation.hpp"
 #include "api/stremio/auth.hpp"
 #include "api/media/langs.hpp"
 #include "utils/config.hpp"
@@ -427,11 +428,11 @@ void upsertLibrary(AddonEngine& engine, const std::string& key, const std::strin
 /// Pre-resolved UI strings (i18n lookups must happen on the UI thread, so a verb
 /// loads these before going async and captures them into the worker lambda).
 struct L10n {
-    std::string movies, series, popular, news, featured;
+    std::string movies, series, anime, popular, news, featured;
 };
 inline L10n loadL10n() {
-    return {"main/stremio/movies"_i18n, "main/stremio/series"_i18n, "main/stremio/popular"_i18n,
-        "main/stremio/new"_i18n, "main/stremio/featured"_i18n};
+    return {"main/stremio/movies"_i18n, "main/stremio/series"_i18n, "main/stremio/anime/title"_i18n,
+        "main/stremio/popular"_i18n, "main/stremio/new"_i18n, "main/stremio/featured"_i18n};
 }
 
 /// Localized label for a Stremio content type and for a catalog. Cinemeta's
@@ -456,21 +457,41 @@ std::string bestCatalogLabel(const L10n& l, const Addon& a, const Catalog& c) {
     return lbl;
 }
 
-/// A section/hub key is either a bare Stremio type ("movie"/"series") or a fully
-/// routed catalog key "base\ttype\tcatalogId" (built by getSectionHubs/getGenres).
+/// A section/hub key is a bare Stremio type ("movie"/"series"), the synthetic
+/// "anime" category, or a routed catalog key "base\ttype\tcatalogId[\tgenre]".
 bool isCatalogKey(const std::string& s) { return s.find('\t') != std::string::npos; }
-std::string catalogKey(const std::string& base, const std::string& type, const std::string& id) {
-    return base + "\t" + type + "\t" + id;
+std::string catalogKey(
+    const std::string& base, const std::string& type, const std::string& id, const std::string& genre = "") {
+    return makeCatalogRouteKey({base, type, id, genre});
 }
-bool splitCatalogKey(const std::string& key, std::string& base, std::string& type, std::string& id) {
-    auto t1 = key.find('\t');
-    if (t1 == std::string::npos) return false;
-    auto t2 = key.find('\t', t1 + 1);
-    if (t2 == std::string::npos) return false;
-    base = key.substr(0, t1);
-    type = key.substr(t1 + 1, t2 - t1 - 1);
-    id = key.substr(t2 + 1);
+bool splitCatalogKey(const std::string& key, std::string& base, std::string& type, std::string& id,
+    std::string* genre = nullptr) {
+    CatalogRoute route;
+    if (!parseCatalogRouteKey(key, route)) return false;
+    base = std::move(route.base);
+    type = std::move(route.type);
+    id = std::move(route.id);
+    if (genre) *genre = std::move(route.genre);
     return true;
+}
+
+struct AnimeCatalog {
+    Addon addon;
+    Catalog catalog;
+    std::string genreFilter;
+};
+
+std::vector<AnimeCatalog> animeCatalogs(AddonEngine& engine) {
+    std::vector<AnimeCatalog> out;
+    for (const char* type : {"movie", "series", "anime"}) {
+        for (const auto& pc : engine.catalogsForType(type)) {
+            AnimeCatalogKind kind = classifyAnimeCatalog(pc.second.type, pc.second.id, pc.second.name,
+                pc.second.genres, pc.second.hasGenre());
+            if (kind == AnimeCatalogKind::None) continue;
+            out.push_back({pc.first, pc.second, kind == AnimeCatalogKind::GenreFiltered ? "Anime" : ""});
+        }
+    }
+    return out;
 }
 
 /// Build a catalog resource URL from a base (no Addon object needed).
@@ -487,6 +508,13 @@ std::string buildCatalogUrl(const std::string& base, const std::string& type, co
     }
     url += ".json";
     return url;
+}
+
+std::string animeCatalogUrl(const AnimeCatalog& entry, size_t skip = 0) {
+    std::vector<std::pair<std::string, std::string>> extra;
+    if (skip > 0) extra.emplace_back("skip", std::to_string(skip));
+    if (!entry.genreFilter.empty()) extra.emplace_back("genre", entry.genreFilter);
+    return buildCatalogUrl(entry.addon.base, entry.catalog.type, entry.catalog.id, extra);
 }
 
 // ---- IMDb all-time Top 250 ----------------------------------------------------
@@ -820,9 +848,8 @@ StremioBackend::StremioBackend() : engine(std::make_shared<AddonEngine>()) {
 // ---- navigation ----------------------------------------------------------------
 
 void StremioBackend::listSections(media::Then<media::Container<media::Section>> then, media::OnError error) {
-    // ONE sidebar section per content type (Films, Séries) — not one per catalog
-    // (which produced a wall of near-identical icons). The type's catalogs become
-    // the section's sub-tabs / rows. Labels localized on the UI thread.
+    // ONE sidebar section per content type (Films, Séries), plus an Anime
+    // category that aggregates catalogs explicitly identified as anime.
     L10n loc = loadL10n();
     brls::async([engine = this->engine, loc, then, error]() {
         try {
@@ -836,6 +863,14 @@ void StremioBackend::listSections(media::Then<media::Container<media::Section>> 
                 s.title = typeLabel(loc, stype);
                 c.Items.push_back(std::move(s));
             }
+            media::Section anime;
+            anime.key = "anime";
+            // The UI represents Anime with its show view. Each catalog route
+            // retains its original Stremio type for catalog requests, and meta
+            // item identities continue to come from each returned item.
+            anime.type = media::mediaTypeShow;
+            anime.title = loc.anime;
+            c.Items.push_back(std::move(anime));
             c.TotalRecordCount = (long)c.Items.size();
             brls::sync(std::bind(then, std::move(c)));
         } catch (const std::exception& ex) {
@@ -850,6 +885,12 @@ std::vector<std::pair<std::string, std::string>> StremioBackend::sectionTabs(con
     // loaded engine; labels localized on the UI thread.
     L10n loc = loadL10n();
     std::vector<std::pair<std::string, std::string>> out;
+    if (sectionId == "anime") {
+        for (const auto& entry : animeCatalogs(*engine))
+            out.emplace_back(catalogKey(entry.addon.base, entry.catalog.type, entry.catalog.id, entry.genreFilter),
+                bestCatalogLabel(loc, entry.addon, entry.catalog));
+        return out;
+    }
     for (auto& pc : engine->catalogsForType(sectionId))
         out.emplace_back(
             catalogKey(pc.first.base, pc.second.type, pc.second.id), bestCatalogLabel(loc, pc.first, pc.second));
@@ -903,16 +944,40 @@ void StremioBackend::getHomeHubs(
 
 void StremioBackend::getSectionHubs(
     const std::string& sectionId, int count, media::Then<media::Container<media::Hub>> then, media::OnError error) {
-    // The "Suggestions" sub-tab of a Films/Séries section: one row per browsable
-    // catalog of that type (Populaires, Nouveautés, À la une, Public Domain…),
-    // each expandable to its full grid.
-    std::string stype = sectionId;  // "movie" | "series"
+    // The "Suggestions" sub-tab: one row per browsable catalog, each
+    // expandable to its full grid. Anime routes keep their optional genre filter.
+    std::string stype = sectionId;  // "movie" | "series" | synthetic "anime"
     int cnt = count;
     L10n loc = loadL10n();
     brls::async([engine = this->engine, stype, cnt, loc, then, error]() {
         try {
             engine->ensureLoaded();
             media::Container<media::Hub> out;
+            if (stype == "anime") {
+                for (const auto& entry : animeCatalogs(*engine)) {
+                    std::string url = animeCatalogUrl(entry);
+                    CatalogResult res;
+                    try {
+                        res = parseCatalog(getSync(url));
+                    } catch (const std::exception& ex) {
+                        brls::Logger::warning("stremio anime section hub {}: {}", redactUrlForLog(url), ex.what());
+                        continue;
+                    }
+                    if (res.items.empty()) continue;
+                    media::Hub h;
+                    h.title = bestCatalogLabel(loc, entry.addon, entry.catalog);
+                    h.hubIdentifier = "section.anime." + std::to_string(out.Items.size());
+                    h.key = catalogKey(
+                        entry.addon.base, entry.catalog.type, entry.catalog.id, entry.genreFilter);
+                    h.more = true;
+                    if (static_cast<int>(res.items.size()) > cnt) res.items.resize(cnt);
+                    h.items = std::move(res.items);
+                    out.Items.push_back(std::move(h));
+                }
+                out.TotalRecordCount = static_cast<long>(out.Items.size());
+                brls::sync(std::bind(then, std::move(out)));
+                return;
+            }
             for (auto& pc : engine->catalogsForType(stype)) {
                 const Catalog& cat = pc.second;
                 std::string url = buildCatalogUrl(pc.first.base, cat.type, cat.id);
@@ -1087,24 +1152,38 @@ void StremioBackend::getContinueWatching(
 
 void StremioBackend::getLibraryGrid(const std::string& sectionId, const media::GridQuery& q, size_t start,
     size_t size, media::Then<media::Container<media::Item>> then, media::OnError error) {
-    // sectionId is either a bare type ("movie"/"series") -> the type's primary
-    // (first) browsable catalog, or a routed catalog key "base\ttype\tcatId"
-    // (from a genre drill-down or a "see all" hub).
+    // sectionId is a bare type ("movie"/"series") -> that type's primary
+    // catalog, bare "anime" -> its first anime catalog, or a routed key
+    // "base\ttype\tcatId[\tgenre]" from a hub or genre-filtered catalog.
     std::string sid = sectionId, genreId = q.genreId;
     size_t startCopy = start;
     brls::async([engine = this->engine, sid, genreId, startCopy, then, error]() {
         try {
             engine->ensureLoaded();
-            std::string base, ctype, catId;
+            std::string base, ctype, catId, routeGenre;
             bool supportsSkip = true;
             if (isCatalogKey(sid)) {
-                if (!splitCatalogKey(sid, base, ctype, catId))
+                if (!splitCatalogKey(sid, base, ctype, catId, &routeGenre))
                     throw std::runtime_error("stremio: malformed section id");
 
                 // Routed keys originate from a manifest catalog. Recover its
                 // pagination capability from the already-loaded metadata; if a
                 // stale key cannot be found, preserve the old behavior.
                 for (auto& pc : engine->catalogsForType(ctype)) {
+                    if (pc.first.base == base && pc.second.id == catId) {
+                        supportsSkip = pc.second.hasSkip();
+                        break;
+                    }
+                }
+            } else if (sid == "anime") {
+                auto cats = animeCatalogs(*engine);
+                if (cats.empty()) throw std::runtime_error("stremio: no anime catalog");
+                const auto& entry = cats.front();
+                base = entry.addon.base;
+                ctype = entry.catalog.type;
+                catId = entry.catalog.id;
+                routeGenre = entry.genreFilter;
+                for (const auto& pc : engine->catalogsForType(ctype)) {
                     if (pc.first.base == base && pc.second.id == catId) {
                         supportsSkip = pc.second.hasSkip();
                         break;
@@ -1147,7 +1226,10 @@ void StremioBackend::getLibraryGrid(const std::string& sectionId, const media::G
 
             std::vector<std::pair<std::string, std::string>> extra;
             if (startCopy > 0) extra.emplace_back("skip", std::to_string(startCopy));
-            if (!genreId.empty()) extra.emplace_back("genre", genreId);
+            if (!routeGenre.empty())
+                extra.emplace_back("genre", routeGenre);
+            else if (!genreId.empty())
+                extra.emplace_back("genre", genreId);
             CatalogResult res = parseCatalog(getSync(buildCatalogUrl(base, ctype, catId, extra)));
             c.Items = std::move(res.items);
             // Stremio gives no total; report a running count (UI paginates via skip).
@@ -1167,14 +1249,16 @@ void StremioBackend::getCollectionChildren(
 void StremioBackend::getHubPage(
     const std::string& hubKey, size_t start, size_t size, media::Then<media::Container<media::Item>> then,
     media::OnError error) {
-    // hubKey = "base\ttype\tcatId" (set on home/section hubs). Page via skip.
+    // hubKey = "base\ttype\tcatId[\tgenre]" (set on home/section hubs).
+    // Page via skip while preserving an optional catalog genre filter.
     std::string key = hubKey;
     size_t startCopy = start;
     brls::async([engine = this->engine, key, startCopy, then, error]() {
         try {
             engine->ensureLoaded();
-            std::string base, ctype, catId;
-            if (!splitCatalogKey(key, base, ctype, catId)) throw std::runtime_error("stremio: bad hub key");
+            std::string base, ctype, catId, genre;
+            if (!splitCatalogKey(key, base, ctype, catId, &genre))
+                throw std::runtime_error("stremio: bad hub key");
 
             bool supportsSkip = true;
             for (auto& pc : engine->catalogsForType(ctype)) {
@@ -1194,6 +1278,7 @@ void StremioBackend::getHubPage(
 
             std::vector<std::pair<std::string, std::string>> extra;
             if (startCopy > 0) extra.emplace_back("skip", std::to_string(startCopy));
+            if (!genre.empty()) extra.emplace_back("genre", genre);
             CatalogResult res = parseCatalog(getSync(buildCatalogUrl(base, ctype, catId, extra)));
             c.Items = std::move(res.items);
             c.TotalRecordCount = (long)(startCopy + c.Items.size());
@@ -1541,7 +1626,11 @@ void StremioBackend::getGenres(const std::string& sectionId, media::MediaKind,
     // Genres declared by the type's primary catalog (Cinemeta exposes a genre
     // extra with options). Each becomes a directory; selecting it drills into the
     // catalog filtered by genre (MediaCollection -> getLibraryGrid with genreId).
-    std::string stype = sectionId;  // "movie" | "series"
+    std::string stype = sectionId;  // "movie" | "series" | "anime"
+    if (stype == "anime") {
+        emptyContainer<media::Section>(then);
+        return;
+    }
     // English genre -> localized label, resolved on the UI thread. The Section
     // KEY stays the raw English value (sent to the addon as genre=); only the
     // displayed title is localized. Unknown genres fall back to their raw name.

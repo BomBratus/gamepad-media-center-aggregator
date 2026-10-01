@@ -444,6 +444,11 @@
     },
     "movies": "Filmy",
     "series": "Seriály",
+    "anime": {
+      "title": "Anime",
+      "empty_title": "Anime katalogy nebyly nalezeny",
+      "empty_sub": "Nainstalujte nebo synchronizujte v aplikaci Stremio addon s katalogem anime, aby se zde anime zobrazovalo."
+    },
     "popular": "Populární",
     "new": "Novinky",
     "featured": "Vybrané",
