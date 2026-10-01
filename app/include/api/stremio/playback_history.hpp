@@ -10,6 +10,9 @@
 #include <ctime>
 #include <mutex>
 #include <string>
+#ifdef _WIN32
+#include <io.h>
+#endif
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -17,6 +20,14 @@
 namespace stremio {
 
 namespace playback_history_detail {
+
+inline int syncFileDescriptor(int fd) {
+#ifdef _WIN32
+    return ::_commit(fd);
+#else
+    return ::fsync(fd);
+#endif
+}
 
 inline std::string sourceUrl(const media::Media& source) {
     if (source.parts.empty()) return {};
@@ -313,7 +324,7 @@ private:
 
         bool ok = std::fwrite(contents.data(), 1, contents.size(), file) == contents.size();
         if (ok && std::fflush(file) != 0) ok = false;
-        if (ok && ::fsync(::fileno(file)) != 0) ok = false;
+        if (ok && playback_history_detail::syncFileDescriptor(::fileno(file)) != 0) ok = false;
         if (std::fclose(file) != 0) ok = false;
         if (!ok) {
             ::unlink(temporaryPath.c_str());
