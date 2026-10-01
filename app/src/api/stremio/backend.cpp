@@ -21,6 +21,10 @@
 #include "api/stremio/backend.hpp"
 #include "api/stremio/types.hpp"
 #include "api/stremio/catalog_navigation.hpp"
+#include "api/stremio/episode_continuation.hpp"
+#include "api/stremio/playback_completion.hpp"
+#include "api/stremio/playback_resume.hpp"
+#include "api/stremio/subtitle_identity.hpp"
 #include "api/stremio/async_playback_history.hpp"
 #include "api/stremio/auth.hpp"
 #include "api/media/langs.hpp"
@@ -51,7 +55,7 @@ std::set<std::string> kindToStremioTypes(media::MediaKind k) {
         case media::MediaKind::Movie:
             return {"movie"};
         case media::MediaKind::Show:
-            return {"series"};
+            return {"series", "anime"};
         default:
             return {};  // Any
     }
@@ -94,9 +98,7 @@ std::string playbackScope() {
 void clearSavedPlayback(const std::string& id) {
     const std::string scope = playbackScope();
     if (scope.empty()) return;
-    if (playbackHistory().load(scope, id).empty()) return;
-    if (!playbackHistory().clear(scope, id))
-        brls::Logger::warning("stremio playback history: clear failed for {}", id);
+    playbackHistory().clearAsync(scope, id);
 }
 
 std::string watchedHistoryScope() {
@@ -184,8 +186,11 @@ bool writeJsonObjectAtomic(const std::string& path, const nlohmann::json& root) 
 }
 
 std::mutex watchedHistoryMutex;
+std::mutex completionMutex;
+PlaybackCompletion completion;
 
 std::set<std::string> loadWatchedEpisodes() {
+    playbackHistory().flush();
     std::lock_guard<std::mutex> lock(watchedHistoryMutex);
     std::set<std::string> out;
     std::string scope = watchedHistoryScope();
@@ -199,23 +204,25 @@ std::set<std::string> loadWatchedEpisodes() {
 }
 
 void setEpisodeWatched(const std::string& ratingKey, bool watched) {
-    std::lock_guard<std::mutex> lock(watchedHistoryMutex);
-    std::string scope = watchedHistoryScope();
+    const std::string scope = watchedHistoryScope(), path = watchedHistoryPath();
     if (scope.empty()) return;
-    nlohmann::json root = loadJsonObjectWithBackup(watchedHistoryPath());
-    std::set<std::string> items;
-    auto current = root.find(scope);
-    if (current != root.end() && current->is_array())
-        for (auto& v : *current)
-            if (v.is_string()) items.insert(v.get<std::string>());
-    if (watched)
-        items.insert(ratingKey);
-    else
-        items.erase(ratingKey);
-    root[scope] = nlohmann::json::array();
-    for (auto& id : items) root[scope].push_back(id);
-    if (!writeJsonObjectAtomic(watchedHistoryPath(), root))
-        brls::Logger::warning("stremio watched history: atomic write failed");
+    playbackHistory().enqueue([scope, path, ratingKey, watched]() {
+        std::lock_guard<std::mutex> lock(watchedHistoryMutex);
+        nlohmann::json root = loadJsonObjectWithBackup(path);
+        std::set<std::string> items;
+        auto current = root.find(scope);
+        if (current != root.end() && current->is_array())
+            for (auto& v : *current)
+                if (v.is_string()) items.insert(v.get<std::string>());
+        if (watched)
+            items.insert(ratingKey);
+        else
+            items.erase(ratingKey);
+        root[scope] = nlohmann::json::array();
+        for (auto& id : items) root[scope].push_back(id);
+        if (!writeJsonObjectAtomic(path, root))
+            brls::Logger::warning("stremio watched history: atomic write failed");
+    });
 }
 
 void applyEpisodeWatched(media::Item& item, const std::set<std::string>& watched) {
@@ -250,7 +257,7 @@ void cacheEpisodeProgresses(const std::string& account, const nlohmann::json& it
     }
     episodeProgressCache.clear();  // datastoreGet returns the complete account library
     for (auto& item : items) {
-        if (jstr(item, "type") != "series") continue;
+        if (jstr(item, "type") != "series" && jstr(item, "type") != "anime") continue;
         auto state = item.find("state");
         if (state == item.end() || !state->is_object()) continue;
         EpisodeProgress progress;
@@ -284,28 +291,31 @@ EpisodeProgress loadEpisodeProgress(const std::string& showId) {
 }
 
 std::map<std::string, EpisodeProgress> loadLocalProgresses() {
-    std::lock_guard<std::mutex> lock(localProgressMutex);
+    playbackHistory().flush();
     std::map<std::string, EpisodeProgress> out;
     std::string scope = watchedHistoryScope();
     if (scope.empty()) return out;
-    nlohmann::json root = loadJsonObjectWithBackup(progressHistoryPath());
-    auto scoped = root.find(scope);
-    if (scoped != root.end() && scoped->is_object()) {
-        for (auto it = scoped->begin(); it != scoped->end(); ++it) {
-            if (!it.value().is_object()) continue;
-            EpisodeProgress p;
-            p.baseId = jstr(it.value(), "baseId");
-            p.videoId = jstr(it.value(), "videoId");
-            p.timeOffset = jint(it.value(), "timeOffset");
-            p.duration = jint(it.value(), "duration");
-            p.updated = jint(it.value(), "updated");
-            if (!p.baseId.empty() && p.timeOffset > 0) {
-                p.updatedIso = PlaybackHistory::timestampIso(p.updated * 1000);
-                out[it.key()] = std::move(p);
+    {
+        std::lock_guard<std::mutex> lock(localProgressMutex);
+        nlohmann::json root = loadJsonObjectWithBackup(progressHistoryPath());
+        auto scoped = root.find(scope);
+        if (scoped != root.end() && scoped->is_object()) {
+            for (auto it = scoped->begin(); it != scoped->end(); ++it) {
+                if (!it.value().is_object()) continue;
+                EpisodeProgress p;
+                p.baseId = jstr(it.value(), "baseId");
+                p.videoId = jstr(it.value(), "videoId");
+                p.timeOffset = jint(it.value(), "timeOffset");
+                p.duration = jint(it.value(), "duration");
+                p.updated = jint(it.value(), "updated");
+                if (!p.baseId.empty() && p.timeOffset > 0) {
+                    p.updatedIso = PlaybackHistory::timestampIso(p.updated * 1000);
+                    out[it.key()] = std::move(p);
+                }
             }
         }
-    }
 
+    } // Release the legacy mutex before waiting on the history writer.
     const std::string localScope = playbackScope();
     if (!localScope.empty()) {
         const nlohmann::json records = playbackHistory().records(localScope);
@@ -314,7 +324,7 @@ std::map<std::string, EpisodeProgress> loadLocalProgresses() {
             ParsedId pid = parseId(it.key());
             EpisodeProgress p;
             p.baseId = pid.baseId;
-            p.videoId = pid.stremioType == "series" && pid.episode >= 0 ? pid.stremioId : "";
+            p.videoId = (pid.stremioType == "series" || pid.stremioType == "anime") && pid.episode >= 0 ? pid.stremioId : "";
             p.timeOffset = jint(it.value(), "position");
             p.duration = jint(it.value(), "duration");
             const int64_t updatedMs = jint(it.value(), "updated");
@@ -327,19 +337,29 @@ std::map<std::string, EpisodeProgress> loadLocalProgresses() {
 }
 
 void storeLocalProgress(const std::string& ratingKey, const EpisodeProgress& progress) {
-    std::lock_guard<std::mutex> lock(localProgressMutex);
-    std::string scope = watchedHistoryScope();
+    const std::string scope = watchedHistoryScope(), path = progressHistoryPath();
     if (scope.empty()) return;
-    nlohmann::json root = loadJsonObjectWithBackup(progressHistoryPath());
-    if (!root.contains(scope) || !root[scope].is_object()) root[scope] = nlohmann::json::object();
-    if (progress.timeOffset <= 0) {
-        root[scope].erase(ratingKey);
-    } else {
-        root[scope][ratingKey] = {{"baseId", progress.baseId}, {"videoId", progress.videoId},
-            {"timeOffset", progress.timeOffset}, {"duration", progress.duration}, {"updated", progress.updated}};
-    }
-    if (!writeJsonObjectAtomic(progressHistoryPath(), root))
-        brls::Logger::warning("stremio progress history: atomic write failed");
+    playbackHistory().enqueue([scope, path, ratingKey, progress]() {
+        std::lock_guard<std::mutex> lock(localProgressMutex);
+        nlohmann::json root = loadJsonObjectWithBackup(path);
+        if (!root.contains(scope) || !root[scope].is_object()) root[scope] = nlohmann::json::object();
+        if (progress.timeOffset <= 0) {
+            root[scope].erase(ratingKey);
+        } else {
+            root[scope][ratingKey] = {{"baseId", progress.baseId}, {"videoId", progress.videoId},
+                {"timeOffset", progress.timeOffset}, {"duration", progress.duration}, {"updated", progress.updated}};
+        }
+        if (!writeJsonObjectAtomic(path, root))
+            brls::Logger::warning("stremio progress history: atomic write failed");
+    });
+}
+
+// The caller serializes this transition with checkpoint enqueueing.
+void queueLocalCompletion(const std::string& ratingKey, const ParsedId& id, int64_t duration, int64_t now) {
+    const bool episode = (id.stremioType == "series" || id.stremioType == "anime") && id.episode >= 0;
+    storeLocalProgress(ratingKey, {id.baseId, episode ? id.stremioId : "", 0, duration, now});
+    if (episode) setEpisodeWatched(ratingKey, true);
+    clearSavedPlayback(ratingKey);
 }
 
 const EpisodeProgress* newestLocalProgress(
@@ -378,20 +398,16 @@ int64_t reserveRemoteProgressSync(
     } else if (state != media::PlayState::Paused && state != media::PlayState::Stopped) {
         return 0;
     }
-    return ++progressSyncGeneration[key];
+    const std::string resource = nlohmann::json::array({account, playbackResourceKey(ratingKey)}).dump();
+    return ++progressSyncGeneration[resource];
 }
 
 bool isLatestRemoteProgressSync(
     const std::string& account, const std::string& ratingKey, int64_t generation) {
     std::lock_guard<std::mutex> lock(progressSyncMutex);
-    const std::string key = account + "\n" + ratingKey;
+    const std::string key = nlohmann::json::array({account, playbackResourceKey(ratingKey)}).dump();
     auto it = progressSyncGeneration.find(key);
     return it != progressSyncGeneration.end() && it->second == generation;
-}
-
-void invalidateRemoteProgressSync(const std::string& account, const std::string& ratingKey) {
-    std::lock_guard<std::mutex> lock(progressSyncMutex);
-    ++progressSyncGeneration[account + "\n" + ratingKey];
 }
 
 void applyEpisodeProgress(media::Item& item, const EpisodeProgress& remote,
@@ -459,7 +475,7 @@ void appendHistoryOnlyLibraryRows(nlohmann::json& items, const nlohmann::json& r
         const std::string ratingKey = jstr(*metadataIt, "ratingKey", it.key());
         const ParsedId pid = parseId(ratingKey);
         const bool movie = pid.stremioType == "movie";
-        const bool episode = pid.stremioType == "series" && pid.episode >= 0;
+        const bool episode = (pid.stremioType == "series" || pid.stremioType == "anime") && pid.episode >= 0;
         if ((!movie && !episode) || pid.baseId.empty() || !knownBases.insert(pid.baseId).second) continue;
 
         std::string name = movie ? jstr(*metadataIt, "title") : jstr(*metadataIt, "grandparentTitle");
@@ -487,7 +503,7 @@ void appendHistoryOnlyLibraryRows(nlohmann::json& items, const nlohmann::json& r
         items.push_back({
             {"_id", pid.baseId},
             {"name", name},
-            {"type", movie ? "movie" : "series"},
+            {"type", pid.stremioType},
             {"poster", poster},
             {"state", std::move(state)},
         });
@@ -503,7 +519,7 @@ void upsertLibrary(AddonEngine& engine, const std::string& key, const std::strin
     if (key.empty()) return;
     ParsedId pid = parseId(ratingKey);
     std::string baseId = pid.baseId;
-    std::string libType = (pid.stremioType == "movie") ? "movie" : "series";
+    std::string libType = pid.stremioType == "anime" ? "anime" : (pid.stremioType == "movie" ? "movie" : "series");
 
     nlohmann::json items = stremio::datastoreGet(key);
     nlohmann::json found;
@@ -564,6 +580,7 @@ inline L10n loadL10n() {
 std::string typeLabel(const L10n& l, const std::string& stremioType) {
     if (stremioType == "movie") return l.movies;
     if (stremioType == "series") return l.series;
+    if (stremioType == "anime") return l.anime;
     return stremioType;
 }
 std::string catalogLabel(const L10n& l, const Catalog& c) {
@@ -826,10 +843,28 @@ media::Stream subtitleOptionToStream(const SubtitleOption& sub) {
 /// here as a playable Direct/Debrid row; infoHash-only/ytId/externalUrl stay
 /// non-playable (no local torrent client / browser on console).
 std::vector<media::Media> resolveAllStreams(
-    AddonEngine& engine, const std::string& stremioType, const std::string& stremioId) {
-    std::vector<media::Media> all;
-    for (auto& a : engine.addonsFor("stream", stremioType, stremioId)) {
+    AddonEngine& engine, const std::string& stremioType, const std::string& stremioId,
+    const std::string& savedIdentity = "", bool* complete = nullptr,
+    std::vector<media::Media> known = {}) {
+    std::vector<media::Media> all = std::move(known);
+    std::set<std::string> knownRequests;
+    for (const auto& source : all) {
+        try {
+            const auto request = savedProviderRequest(source.sourceIdentity);
+            if (!request.empty()) knownRequests.insert(request);
+        } catch (...) {}
+    }
+    if (complete) *complete = true;
+    auto providers = engine.addonsFor("stream", stremioType, stremioId);
+    const std::string preferredRequest = savedProviderRequest(savedIdentity);
+    if (!preferredRequest.empty()) {
+        std::stable_partition(providers.begin(), providers.end(), [&](const Addon& addon) {
+            return engine.resourceUrl(addon, "stream", stremioType, stremioId) == preferredRequest;
+        });
+    }
+    for (auto& a : providers) {
         std::string url = engine.resourceUrl(a, "stream", stremioType, stremioId);
+        if (knownRequests.count(url)) continue;
         std::vector<StreamOption> streams;
         try {
             streams = parseStreams(getSync(url, streamRequestTimeout()));
@@ -853,6 +888,25 @@ std::vector<media::Media> resolveAllStreams(
                 }
             }
             all.push_back(std::move(media));
+        }
+        if (url == preferredRequest) {
+#if defined(__PSV__)
+            all.erase(std::remove_if(all.begin(), all.end(), [](const media::Media& source) {
+                return source.videoResolution == "4K" || source.videoResolution == "1440p" ||
+                    (source.playable() && codecRankVita(source.videoCodec) == 0);
+            }), all.end());
+#endif
+            const auto matches = std::count_if(all.begin(), all.end(), [&](const media::Media& source) {
+                return source.playable() && source.sourceIdentity == savedIdentity;
+            });
+            auto match = std::find_if(all.begin(), all.end(), [&](const media::Media& source) {
+                return source.playable() && source.sourceIdentity == savedIdentity;
+            });
+            if (matches == 1 && match != all.end()) {
+                std::rotate(all.begin(), match, match + 1);
+                if (complete) *complete = providers.size() == 1;
+                return all;
+            }
         }
     }
 #if defined(__PSV__)
@@ -904,13 +958,12 @@ struct SubtitleRequestHints {
 /// as neutral subtitle Streams (streamType 3, key = absolute SRT/VTT url).
 /// Stremio's player forwards behaviorHints.videoHash/videoSize/filename from the
 /// exact selected stream; do the same when the addon supplied them. We never
-/// manufacture missing hashes with remote range reads. Deduped to ONE track per
-/// language (first wins, addons in collection order) to keep the player's menu
-/// readable.
+/// manufacture missing hashes with remote range reads. Deduplicate only identical
+/// language/URL tracks; alternate releases in the same language remain available.
 std::vector<media::Stream> resolveAllSubtitles(AddonEngine& engine, const std::string& stremioType,
     const std::string& stremioId, const SubtitleRequestHints& hints) {
     std::vector<media::Stream> out;
-    std::set<std::string> seenLangs;
+    std::set<std::string> seenTracks;
     std::vector<std::pair<std::string, std::string>> extra;
     if (!hints.videoHash.empty()) extra.emplace_back("videoHash", hints.videoHash);
     if (hints.videoSize > 0) extra.emplace_back("videoSize", std::to_string(hints.videoSize));
@@ -928,8 +981,8 @@ std::vector<media::Stream> resolveAllSubtitles(AddonEngine& engine, const std::s
         for (auto& s : subs) {
             std::string code = media::subtitleLangCode(s.lang);
             // dedup key: canonical code when known, else the raw lang verbatim
-            std::string key = code.empty() ? s.lang : code;
-            if (key.empty() || !seenLangs.insert(key).second) continue;
+            std::string key = subtitleIdentity(code.empty() ? s.lang : code, s.id, s.url);
+            if (s.url.empty() || !seenTracks.insert(key).second) continue;
             media::Stream st = subtitleOptionToStream(s);
             st.languageTag = code;  // already normalized above; keep dedupe/matching aligned
             out.push_back(std::move(st));
@@ -942,14 +995,27 @@ std::vector<media::Stream> resolveAllSubtitles(AddonEngine& engine, const std::s
 
 void flushPlaybackHistory() { playbackHistory().flush(); }
 
+void beginPlayback(const std::string& id, const std::string& sessionId) {
+    std::lock_guard<std::mutex> lock(completionMutex);
+    const std::string key = playbackScope() + "\n" + id;
+    completion.begin(key, sessionId);
+}
+
+bool playbackCompleted(const std::string& id) {
+    std::lock_guard<std::mutex> lock(completionMutex);
+    return !completion.canSave(playbackScope() + "\n" + id);
+}
+
 nlohmann::json savedPlayback(const std::string& id) {
     const std::string scope = playbackScope();
-    return scope.empty() ? nlohmann::json::object() : playbackHistory().load(scope, id);
+    return scope.empty() ? nlohmann::json::object() : playbackHistory().cachedLoad(scope, id);
 }
 
 void rememberPlayback(const media::Item& item, const media::Media& source, int64_t position, int64_t duration) {
     const std::string scope = playbackScope();
     if (scope.empty()) return;
+    std::lock_guard<std::mutex> lock(completionMutex);
+    if (!completion.canSave(scope + "\n" + item.ratingKey)) return;
     playbackHistory().save(scope, item, source, position, duration);
 }
 
@@ -1091,7 +1157,7 @@ void StremioBackend::getSectionHubs(
     // The "Suggestions" sub-tab: one row per browsable catalog, each
     // expandable to its full grid. Anime routes keep their optional genre filter.
     std::string stype = sectionId;  // "movie" | "series" | synthetic "anime"
-    int cnt = count;
+    int cnt = std::max(0, count);
     L10n loc = loadL10n();
     brls::async([engine = this->engine, stype, cnt, loc, then, error]() {
         try {
@@ -1222,9 +1288,9 @@ void StremioBackend::getContinueWatching(
         emptyContainer<media::Hub>(then);
         return;
     }
-    int cnt = count;
+    int cnt = std::max(0, count);
     std::string title = "main/home/resume"_i18n;  // resolved on the UI thread
-    brls::async([key, cnt, title, then, error]() {
+    brls::async([engine = this->engine, key, cnt, title, then, error]() {
         try {
             nlohmann::json items = nlohmann::json::array();
             try {
@@ -1234,6 +1300,7 @@ void StremioBackend::getContinueWatching(
                 brls::Logger::warning("stremio continue watching datastore: {}", ex.what());
             }
             if (accountKey() != key) return;
+            engine->ensureLoaded();
             cacheEpisodeProgresses(key, items);
             auto localProgress = loadLocalProgresses();
             const std::string historyScope = playbackScope();
@@ -1251,7 +1318,7 @@ void StremioBackend::getContinueWatching(
                 nlohmann::json candidate = it;
                 const std::string type = jstr(candidate, "type");
                 const std::string baseId = jstr(candidate, "_id");
-                const bool series = type == "series";
+                const bool series = type == "series" || type == "anime";
                 const EpisodeProgress* local = newestLocalProgress(localProgress, baseId, series);
                 const auto remoteState = candidate.find("state");
                 const std::string remoteTimestamp = remoteState != candidate.end() && remoteState->is_object()
@@ -1288,7 +1355,8 @@ void StremioBackend::getContinueWatching(
 
                 auto st = candidate.find("state");
                 if (st == candidate.end() || !st->is_object()) continue;
-                if (jint(*st, "timeOffset") <= 0 || jint(*st, "flaggedWatched") > 0) continue;
+                if ((!series && jint(*st, "timeOffset") <= 0) || jint(*st, "flaggedWatched") > 0) continue;
+                if (series && jstr(*st, "videoId").empty()) continue;
                 std::string sortKey = jstr(*st, "lastWatched");
                 prog.emplace_back(std::move(sortKey), std::move(candidate));
             }
@@ -1299,22 +1367,42 @@ void StremioBackend::getContinueWatching(
             h.title = title;
             h.hubIdentifier = "home.continue";
             auto watched = loadWatchedEpisodes();
-            for (size_t i = 0; i < prog.size() && (int)i < cnt; i++) {
+            for (size_t i = 0; i < prog.size() && static_cast<int>(h.items.size()) < cnt; i++) {
                 const auto& libraryItem = prog[i].second;
                 media::Item item = itemFromLibrary(libraryItem);
                 auto state = libraryItem.find("state");
                 std::string videoId = state == libraryItem.end() ? "" : jstr(*state, "videoId");
-                std::string episodeKey = episodeId(item.guid, videoId);
-                ParsedId episode = parseId(episodeKey);
-                const bool localEpisodeResume = localProgress.find(episodeKey) != localProgress.end();
-                const bool validEpisode = item.type == media::mediaTypeShow && episode.episode >= 0 &&
-                                          episode.baseId == item.guid &&
-                                          (watched.count(episodeKey) == 0 || localEpisodeResume) &&
-                                          (item.duration <= 0 || item.viewOffset < item.duration);
-                if (validEpisode) {
-                    // Keep the show card, but carry the actual episode key for the
-                    // resume action. This avoids a meta request while loading Home.
-                    item.key = episodeKey;
+                std::string episodeKey = episodeId(item.guid, videoId, parseId(item.ratingKey).stremioType);
+                if (item.type == media::mediaTypeShow) {
+                    media::Item selected;
+                    const auto resourceType = parseId(item.ratingKey).stremioType;
+                    for (const auto& addon : engine->addonsFor("meta", resourceType, item.guid)) {
+                        try {
+                            auto result = getSync(engine->resourceUrl(addon, "meta", resourceType, item.guid));
+                            auto meta = result.find("meta");
+                            if (meta == result.end() || !meta->is_object()) continue;
+                            auto episodes = parseEpisodes(*meta, parseMeta(*meta));
+                            auto remote = loadEpisodeProgress(item.guid);
+                            for (auto& episode : episodes) {
+                                applyEpisodeWatched(episode, watched);
+                                applyEpisodeProgress(episode, remote, localProgress, watched);
+                            }
+                            const bool completed = watched.count(episodeKey) ||
+                                completedPosition(item.viewOffset, item.duration);
+                            const bool partial = std::any_of(episodes.begin(), episodes.end(), episodePartial);
+                            const int next = episodeContinuationIndex(episodes, completed && !partial ? episodeKey : "");
+                            if (next >= 0) selected = episodes[next];
+                            break;
+                        } catch (const std::exception& ex) {
+                            brls::Logger::warning("stremio continuation: {}", ex.what());
+                        }
+                    }
+                    if (selected.ratingKey.empty()) continue;
+                    item.key = selected.ratingKey;
+                    item.viewOffset = selected.viewOffset;
+                    item.duration = selected.duration;
+                } else if (item.duration > 0 && item.viewOffset >= item.duration) {
+                    continue;
                 }
                 h.items.push_back(std::move(item));
             }
@@ -1471,16 +1559,41 @@ void StremioBackend::getHubPage(
 
 void StremioBackend::getItemDetail(
     const std::string& id, bool full, media::Then<media::Item> then, media::OnError error) {
+    getDetail(id, full, false, std::move(then), std::move(error));
+}
+
+void StremioBackend::completePlaybackSources(media::Item item,
+    media::Then<media::Item> then, media::OnError error) {
+    brls::async([engine = this->engine, item = std::move(item), then, error]() mutable {
+        try {
+            engine->ensureLoaded();
+            const auto id = parseId(item.ratingKey);
+            item.media = resolveAllStreams(*engine, id.stremioType, id.stremioId, "", nullptr, std::move(item.media));
+            item.sourcesComplete = true;
+            brls::sync([then, item = std::move(item)]() mutable { then(std::move(item)); });
+        } catch (const std::exception& ex) {
+            if (error) brls::sync(std::bind(error, std::string(ex.what())));
+        }
+    });
+}
+
+void StremioBackend::getResumeDetail(const std::string& id, bool reuseSource,
+    media::Then<media::Item> then, media::OnError error) {
+    getDetail(id, true, reuseSource, std::move(then), std::move(error));
+}
+
+void StremioBackend::getDetail(
+    const std::string& id, bool full, bool reuseSource, media::Then<media::Item> then, media::OnError error) {
     ParsedId pid = parseId(id);
     // Meta is only addressable on a movie or a whole series; episodes/seasons
     // resolve through the parent series meta (the object carrying videos[]).
-    bool isEpisode = (pid.stremioType == "series" && pid.episode >= 0);
+    bool isEpisode = ((pid.stremioType == "series" || pid.stremioType == "anime") && pid.episode >= 0);
     bool playable = (pid.stremioType == "movie") || isEpisode;
-    std::string metaType = (pid.stremioType == "movie") ? "movie" : "series";
+    std::string metaType = pid.stremioType == "anime" ? "anime" : (pid.stremioType == "movie" ? "movie" : "series");
     std::string metaId = pid.baseId;  // movie/show id without any season:episode suffix
     std::string ratingKey = id;
 
-    brls::async([engine = this->engine, ratingKey, full, isEpisode, playable, metaType, metaId, then, error]() {
+    brls::async([engine = this->engine, ratingKey, full, reuseSource, isEpisode, playable, metaType, metaId, then, error]() {
         try {
             engine->ensureLoaded();
             auto addons = engine->addonsFor("meta", metaType, metaId);
@@ -1526,16 +1639,21 @@ void StremioBackend::getItemDetail(
                 out = parseMeta(metaObj);
             }
 
-            // Resolve ALL sources up front (the detail page shows them as a
-            // picker, the player reuses the chosen index). resolvePlayback just
-            // returns the chosen source's url. Each Media carries its kind/label/
-            // quality; non-playable rows (torrent/external) are kept too so the UI
-            // can explain them. Only movies and episodes are directly playable (a
-            // show plays via its episodes).
+            // Detail and Choose another source resolve all providers. Resume first
+            // refreshes the saved provider/release, and requests the remaining
+            // providers only when that release is unavailable. Movie and episode
+            // sources retain non-playable rows so the picker can explain them.
             if (full && playable) {
                 ParsedId sp = parseId(ratingKey);
-                std::string streamType = (sp.stremioType == "movie") ? "movie" : "series";
-                out.media = resolveAllStreams(*engine, streamType, sp.stremioId);
+                std::string streamType = sp.stremioType;
+                std::string savedIdentity;
+                if (reuseSource) {
+                    const auto scope = playbackScope();
+                    auto record = scope.empty() ? nlohmann::json::object() : playbackHistory().load(scope, ratingKey);
+                    auto source = record.find("source");
+                    if (source != record.end() && source->is_object()) savedIdentity = jstr(*source, "identity");
+                }
+                out.media = resolveAllStreams(*engine, streamType, sp.stremioId, savedIdentity, &out.sourcesComplete);
             }
             if (playable) {
                 const ParsedId progressId = parseId(ratingKey);
@@ -1568,15 +1686,16 @@ void StremioBackend::getChildren(
             // Both "series" (show -> seasons) and "season" (-> episodes) resolve
             // through the series meta (the only object carrying videos[]).
             ParsedId pid = parseId(ratingKeyCopy);
-            std::string showId = (stremioType == "season") ? pid.baseId : stremioId;
+            std::string showId = pid.season >= 0 ? pid.baseId : stremioId;
 
-            auto addons = engine->addonsFor("meta", "series", showId);
+            std::string metaType = pid.stremioType == "anime" ? "anime" : "series";
+            auto addons = engine->addonsFor("meta", metaType, showId);
             if (addons.empty()) throw std::runtime_error("stremio: no meta addon for series");
 
             nlohmann::json metaObj;
             bool found = false;
             for (auto& a : addons) {
-                std::string url = engine->resourceUrl(a, "meta", "series", showId);
+                std::string url = engine->resourceUrl(a, "meta", metaType, showId);
                 nlohmann::json j;
                 try {
                     j = getSync(url);
@@ -1598,7 +1717,7 @@ void StremioBackend::getChildren(
             // parseMeta sets type=show + ratingKey="series:{id}" from meta.id.
 
             media::Container<media::Item> c;
-            if (stremioType == "series") {
+            if ((stremioType == "series" || stremioType == "anime") && pid.season < 0) {
                 // Show -> synthesize one Season per distinct video.season.
                 std::map<int64_t, int64_t> episodeCounts;  // season -> #episodes
                 auto vids = metaObj.find("videos");
@@ -1608,7 +1727,7 @@ void StremioBackend::getChildren(
                 for (auto& kv : episodeCounts) {  // std::map iterates ascending
                     int64_t n = kv.first;
                     media::Item s;
-                    s.ratingKey = seasonId(show.guid, n);  // "season:{showId}:{n}"
+                    s.ratingKey = seasonId(show.guid, n, stremio::stremioType(show));  // "season:{showId}:{n}"
                     s.key = s.ratingKey;
                     s.type = media::mediaTypeSeason;
                     s.index = n;
@@ -1647,16 +1766,17 @@ void StremioBackend::getAllEpisodes(const std::string& showId, bool,
     ParsedId pid = parseId(showId);
     std::string baseId = (pid.episode >= 0 || pid.season >= 0) ? pid.baseId : pid.stremioId;
     std::string idCopy = showId;
-    brls::async([engine = this->engine, idCopy, baseId, then, error]() {
+    std::string metaType = pid.stremioType == "anime" ? "anime" : "series";
+    brls::async([engine = this->engine, idCopy, baseId, metaType, then, error]() {
         try {
             engine->ensureLoaded();
-            auto addons = engine->addonsFor("meta", "series", baseId);
+            auto addons = engine->addonsFor("meta", metaType, baseId);
             if (addons.empty()) throw std::runtime_error("stremio: no meta addon for series");
 
             nlohmann::json metaObj;
             bool found = false;
             for (auto& a : addons) {
-                std::string url = engine->resourceUrl(a, "meta", "series", baseId);
+                std::string url = engine->resourceUrl(a, "meta", metaType, baseId);
                 nlohmann::json j;
                 try {
                     j = getSync(url);
@@ -1679,6 +1799,12 @@ void StremioBackend::getAllEpisodes(const std::string& showId, bool,
             auto watched = loadWatchedEpisodes();
             auto progress = loadEpisodeProgress(baseId);
             auto localProgress = loadLocalProgresses();
+            if (const auto* latest = newestLocalProgress(localProgress, baseId, true)) {
+                if (localAtLeastAsNew(*latest, progress.updatedIso)) {
+                    progress = *latest;
+                    setEpisodeProgress(accountKey(), baseId, progress);
+                }
+            }
             for (auto& e : c.Items) {
                 applyEpisodeWatched(e, watched);
                 applyEpisodeProgress(e, progress, localProgress, watched);
@@ -1693,58 +1819,19 @@ void StremioBackend::getAllEpisodes(const std::string& showId, bool,
 
 void StremioBackend::getNextUp(
     const std::string& showId, std::function<void(media::Item, bool)> then, media::OnError) {
-    ParsedId pid = parseId(showId);
-    std::string baseId = (pid.episode >= 0 || pid.season >= 0) ? pid.baseId : pid.stremioId;
-    brls::async([engine = this->engine, baseId, then]() {
-        media::Item item;
-        bool fromStart = false;
-        try {
-            engine->ensureLoaded();
-            auto watched = loadWatchedEpisodes();
-            auto progress = loadEpisodeProgress(baseId);
-            auto localProgress = loadLocalProgresses();
-            auto addons = engine->addonsFor("meta", "series", baseId);
-            for (auto& a : addons) {
-                std::string url = engine->resourceUrl(a, "meta", "series", baseId);
-                nlohmann::json j;
-                try {
-                    j = getSync(url);
-                } catch (const std::exception& ex) {
-                    brls::Logger::warning("stremio getNextUp meta {}: {}", redactUrlForLog(url), ex.what());
-                    continue;
-                }
-                auto meta = j.find("meta");
-                if (meta == j.end() || !meta->is_object()) continue;
-                media::Item show = parseMeta(*meta);
-                auto eps = parseEpisodes(*meta, show);
-                if (!eps.empty()) {
-                    for (auto& e : eps) {
-                        applyEpisodeWatched(e, watched);
-                        applyEpisodeProgress(e, progress, localProgress, watched);
-                    }
-                    auto resumed = std::find_if(eps.begin(), eps.end(), [](const media::Item& e) {
-                        return e.viewOffset > 0 && (e.duration <= 0 || e.viewOffset < e.duration);
-                    });
-                    auto next = std::find_if(eps.begin(), eps.end(), [&watched](const media::Item& e) {
-                        return watched.count(e.ratingKey) == 0;
-                    });
-                    if (resumed != eps.end()) {
-                        item = *resumed;
-                    } else if (next != eps.end()) {
-                        item = *next;
-                    } else {
-                        item = eps.front();
-                        fromStart = true;
-                    }
-                }
-                break;
-            }
-        } catch (const std::exception& ex) {
-            brls::Logger::warning("stremio getNextUp: {}", ex.what());
-        }
-        // Contract: never surface a hard error; then(Item{}, false) on no episode.
-        brls::sync([item, fromStart, then]() { then(item, fromStart); });
-    });
+    const auto show = parseId(showId);
+    getAllEpisodes(showId, false, [then, show](media::Container<media::Item> episodes) {
+        const auto progress = loadEpisodeProgress(show.baseId);
+        std::string completedKey;
+        const std::string lastKey = episodeId(show.baseId, progress.videoId, show.stremioType);
+        for (const auto& episode : episodes.Items)
+            if (episode.ratingKey == lastKey && episodeCompleted(episode)) completedKey = lastKey;
+        const bool partial = std::any_of(episodes.Items.begin(), episodes.Items.end(), [](const media::Item& e) {
+            return episodePartial(e);
+        });
+        const int index = episodeContinuationIndex(episodes.Items, partial ? "" : completedKey);
+        then(index >= 0 ? episodes.Items[index] : media::Item{}, false);
+    }, [then](const std::string&) { then(media::Item{}, false); });
 }
 
 void StremioBackend::getExtras(
@@ -1876,15 +1963,16 @@ void StremioBackend::markWatched(const std::string& id) {
     if (key.empty()) return;
     std::string rk = id;
     ParsedId pid = parseId(rk);
-    bool episode = pid.stremioType == "series" && pid.episode >= 0;
-    invalidateRemoteProgressSync(key, rk);
-    clearSavedPlayback(rk);
-    if (episode) setEpisodeWatched(rk, true);
-    storeLocalProgress(rk, {pid.baseId, episode ? pid.stremioId : "", 0, 0, (int64_t)std::time(nullptr)});
+    bool episode = (pid.stremioType == "series" || pid.stremioType == "anime") && pid.episode >= 0;
+    std::lock_guard<std::mutex> completionLock(completionMutex);
+    if (!completion.accept(playbackScope() + "\n" + rk, true)) return;
+    const auto generation = reserveRemoteProgressSync(key, rk, media::PlayState::Stopped, (int64_t)std::time(nullptr));
+    queueLocalCompletion(rk, pid, 0, (int64_t)std::time(nullptr));
 
-    brls::async([engine = this->engine, rk, key, pid, episode]() {
+    brls::async([engine = this->engine, rk, key, pid, episode, generation]() {
         try {
             std::lock_guard<std::mutex> lock(libraryWriteMutex);
+            if (!isLatestRemoteProgressSync(key, rk, generation)) return;
             upsertLibrary(*engine, key, rk, [episode, videoId = pid.stremioId](nlohmann::json& st) {
                 // An episode must not mark the whole series watched. The local
                 // episode history drives the checkmark/next-up state instead.
@@ -1904,13 +1992,16 @@ void StremioBackend::markUnwatched(const std::string& id) {
     if (key.empty()) return;
     std::string rk = id;
     ParsedId pid = parseId(rk);
-    bool episode = pid.stremioType == "series" && pid.episode >= 0;
-    invalidateRemoteProgressSync(key, rk);
+    bool episode = (pid.stremioType == "series" || pid.stremioType == "anime") && pid.episode >= 0;
+    std::lock_guard<std::mutex> completionLock(completionMutex);
+    completion.unwatch(playbackScope() + "\n" + rk);
+    const auto generation = reserveRemoteProgressSync(key, rk, media::PlayState::Stopped, (int64_t)std::time(nullptr));
     if (episode) setEpisodeWatched(rk, false);
 
-    brls::async([engine = this->engine, rk, key]() {
+    brls::async([engine = this->engine, rk, key, generation]() {
         try {
             std::lock_guard<std::mutex> lock(libraryWriteMutex);
+            if (!isLatestRemoteProgressSync(key, rk, generation)) return;
             upsertLibrary(*engine, key, rk, [](nlohmann::json& st) { st["flaggedWatched"] = 0; });
         } catch (const std::exception& ex) {
             brls::Logger::warning("stremio markUnwatched: {}", ex.what());
@@ -1949,7 +2040,7 @@ void StremioBackend::getSubtitles(const media::Item& item, const media::Media& v
     // Subtitles are addressable only on a playable video (a whole movie, or an
     // episode — its id carries the season:episode suffix). Shows/seasons play via
     // their episodes, so they never reach here with a subtitle request.
-    bool isEpisode = (pid.stremioType == "series" && pid.episode >= 0);
+    bool isEpisode = ((pid.stremioType == "series" || pid.stremioType == "anime") && pid.episode >= 0);
     if (pid.stremioType != "movie" && !isEpisode) {
         if (then) then({});
         return;
@@ -1963,7 +2054,7 @@ void StremioBackend::getSubtitles(const media::Item& item, const media::Media& v
         hints.filename = part.filename;
     }
 
-    std::string type = (pid.stremioType == "movie") ? "movie" : "series";
+    std::string type = pid.stremioType;
     std::string id = pid.stremioId;  // movie tt-id, or episode "tt…:S:E"
     brls::async([engine = this->engine, type, id, hints, then, error]() {
         try {
@@ -1989,26 +2080,29 @@ std::string StremioBackend::subtitleMenuHint() const {
 void StremioBackend::reportProgress(
     const std::string& id, media::PlayState state, int64_t posMs, int64_t durMs, const std::string&) {
     std::string key = accountKey();
-    if (key.empty() || posMs <= 0) return;
+    if (posMs < 0) return;
 
     ParsedId pid = parseId(id);
-    const bool episode = pid.stremioType == "series" && pid.episode >= 0;
-    const bool watched = durMs > 0 && double(posMs) / double(durMs) >= 0.90;
+    const bool episode = (pid.stremioType == "series" || pid.stremioType == "anime") && pid.episode >= 0;
+    const bool watched = completedPosition(posMs, durMs);
+    std::lock_guard<std::mutex> completionLock(completionMutex);
+    const std::string completionKey = playbackScope() + "\n" + id;
+    if (!completion.accept(completionKey, watched)) return;
+    if (key.empty()) return;
     const int64_t now = (int64_t)std::time(nullptr);
     const std::string reportedAt = stremio::nowIso();
     const std::string videoId = episode ? pid.stremioId : "";
 
-    // Cheap local checkpoint on every player tick (10 s). It is atomic and
-    // per-item, so switching episodes no longer overwrites the previous offset.
+    // Queue legacy checkpoints on the existing history writer; player ticks
+    // never open or rewrite local JSON files.
     // A completed item clears its local resume point.
-    storeLocalProgress(id, {pid.baseId, videoId, watched ? 0 : posMs, durMs, now});
-    if (episode && watched) setEpisodeWatched(id, true);
-    if (watched) clearSavedPlayback(id);
+    if (watched) queueLocalCompletion(id, pid, durMs, now);
+    else storeLocalProgress(id, {pid.baseId, videoId, posMs, durMs, now});
 
     // Keep account traffic bounded: sync the first Playing checkpoint, then at
     // most once per minute, plus every pause/stop. A generation ticket prevents
     // an older queued tick from overwriting a newer final state.
-    const int64_t generation = reserveRemoteProgressSync(key, id, state, now);
+    const int64_t generation = reserveRemoteProgressSync(key, id, watched ? media::PlayState::Stopped : state, now);
     if (generation == 0) return;
 
     std::string rk = id;
@@ -2023,8 +2117,8 @@ void StremioBackend::reportProgress(
                 if (episode) {
                     st["flaggedWatched"] = 0;
                     st["videoId"] = videoId;
-                } else if (watched) {
-                    st["flaggedWatched"] = 1;
+                } else {
+                    st["flaggedWatched"] = watched ? 1 : 0;
                 }
             }, reportedAt);
             if (episode) {
@@ -2121,7 +2215,7 @@ void StremioBackend::setWatchlisted(
     }
     ParsedId pid = parseId(item.ratingKey);
     std::string baseId = pid.baseId;
-    std::string libType = (pid.stremioType == "movie") ? "movie" : "series";
+    std::string libType = pid.stremioType == "anime" ? "anime" : (pid.stremioType == "movie" ? "movie" : "series");
     std::string title = item.title, poster = item.thumb;
     int64_t dur = item.duration;
     bool addCopy = add;

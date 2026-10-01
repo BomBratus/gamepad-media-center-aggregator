@@ -205,6 +205,8 @@ struct Media {
     // ---- source presentation (Stremio picker; empty/default on Plex/Jellyfin) ----
     std::string label;   // primary line: source/addon name (+ release group)
     std::string detail;  // secondary line: codec · size · seeders (our own re-render)
+    std::string sourceName;   // original addon language/compatibility hints
+    std::string sourceTitle;  // release identity/presentation
     SourceKind kind = SourceKind::Direct;
     std::string sourceIdentity;  // stable addon/release identity for saved playback
     bool cached = true;  // debrid cache hint (best-effort; ⚡ vs pending). false = uncached
@@ -319,6 +321,8 @@ struct Item {
     std::vector<Role> roles;
     std::vector<Role> directors;  // Director: same shape as Role (id/tag/thumb)
     std::vector<Media> media;
+    // False only for a Stremio saved-provider fast path; alternatives remain lazy.
+    bool sourcesComplete = true;
     std::vector<Chapter> chapters;
     std::vector<Marker> markers;
 

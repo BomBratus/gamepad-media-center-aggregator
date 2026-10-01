@@ -152,7 +152,7 @@ inline int64_t parseYear(const std::string& releaseInfo) {
 /// not produced here.
 inline std::string mapType(const std::string& t) {
     if (t == "movie") return media::mediaTypeMovie;
-    if (t == "series") return media::mediaTypeShow;
+    if (t == "series" || t == "anime") return media::mediaTypeShow;
     if (t == "channel" || t == "tv") return media::mediaTypeClip;
     return t;
 }
@@ -160,6 +160,8 @@ inline std::string mapType(const std::string& t) {
 /// Neutral media:: item -> the Stremio resource type used to route requests.
 /// Seasons/episodes belong to a series; clips map to a channel.
 inline std::string stremioType(const media::Item& item) {
+    if (item.ratingKey.rfind("anime:", 0) == 0 || item.ratingKey.rfind("anime-episode:", 0) == 0 ||
+        item.ratingKey.rfind("anime-season:", 0) == 0) return "anime";
     if (item.type == media::mediaTypeMovie) return "movie";
     if (item.type == media::mediaTypeShow || item.type == media::mediaTypeSeason ||
         item.type == media::mediaTypeEpisode)
@@ -196,14 +198,14 @@ inline ParsedId parseId(const std::string& ratingKey) {
     std::string kind = ratingKey.substr(0, colon);
     std::string payload = ratingKey.substr(colon + 1);
 
-    if (kind == "episode") {
+    if (kind == "episode" || kind == "anime-episode") {
         auto lengthEnd = payload.find(':');
         if (lengthEnd == std::string::npos) return p;
         try {
             size_t parentLen = (size_t)std::stoull(payload.substr(0, lengthEnd));
             size_t parentStart = lengthEnd + 1;
             if (parentLen > payload.size() - parentStart) return p;
-            p.stremioType = "series";
+            p.stremioType = kind == "anime-episode" ? "anime" : "series";
             p.baseId = payload.substr(parentStart, parentLen);
             p.stremioId = payload.substr(parentStart + parentLen);
             if (p.baseId.empty() || p.stremioId.empty()) return ParsedId{};
@@ -218,13 +220,14 @@ inline ParsedId parseId(const std::string& ratingKey) {
     p.stremioId = payload;
     p.baseId = p.stremioId;
 
-    if (p.stremioType == "season") {
+    if (p.stremioType == "season" || p.stremioType == "anime-season") {
         // "season:{showId}:{n}" -> split only the synthetic trailing season.
         auto last = p.stremioId.rfind(':');
         if (last != std::string::npos) {
             p.baseId = p.stremioId.substr(0, last);
             try {
                 p.season = std::stoll(p.stremioId.substr(last + 1));
+                if (kind == "anime-season") p.stremioType = "anime";
             } catch (...) {
             }
         }
@@ -254,9 +257,16 @@ inline ParsedId parseId(const std::string& ratingKey) {
     return p;
 }
 
+// Account playback progress is stored on the parent series, even when the
+// local checkpoint is keyed by episode. Fence remote mutations at that scope.
+inline std::string playbackResourceKey(const std::string& ratingKey) {
+    const auto id = parseId(ratingKey);
+    return (id.stremioType == "season" ? "series" : id.stremioType) + ":" + id.baseId;
+}
+
 /// Build the synthetic ratingKey for a season row of a show.
-inline std::string seasonId(const std::string& showId, int64_t n) {
-    return "season:" + showId + ":" + std::to_string(n);
+inline std::string seasonId(const std::string& showId, int64_t n, const std::string& type = "series") {
+    return (type == "anime" ? "anime-season:" : "season:") + showId + ":" + std::to_string(n);
 }
 
 inline bool isDecimalIdPart(const std::string& value) {
@@ -280,10 +290,10 @@ inline bool canUseLegacyEpisodeId(const std::string& showId, const std::string& 
 /// Build a ratingKey that round-trips BOTH the parent series id and raw video id.
 /// Kitsu-style ids ("kitsu:419" / "kitsu:419:1") therefore remain untouched when
 /// routed to /meta, /stream and /subtitles.
-inline std::string episodeId(const std::string& showId, const std::string& videoId) {
+inline std::string episodeId(const std::string& showId, const std::string& videoId, const std::string& type = "series") {
     if (showId.empty() || videoId.empty()) return "";
-    if (canUseLegacyEpisodeId(showId, videoId)) return "series:" + videoId;
-    return "episode:" + std::to_string(showId.size()) + ":" + showId + videoId;
+    if (type != "anime" && canUseLegacyEpisodeId(showId, videoId)) return "series:" + videoId;
+    return (type == "anime" ? "anime-episode:" : "episode:") + std::to_string(showId.size()) + ":" + showId + videoId;
 }
 
 /// ---- Manifest / catalog descriptors ----------------------------------------
@@ -498,7 +508,7 @@ inline std::vector<media::Item> parseEpisodes(const nlohmann::json& metaJson, co
     for (auto& v : *vids) {
         media::Item e;
         std::string vid = jstr(v, "id");
-        e.ratingKey = episodeId(show.guid, vid);
+        e.ratingKey = episodeId(show.guid, vid, stremioType(show));
         e.key = e.ratingKey;
         e.guid = vid;
         e.type = media::mediaTypeEpisode;
@@ -780,6 +790,8 @@ inline media::Media streamToMedia(const StreamOption& s, const std::string& addo
     std::string blob = s.name + " " + s.title;
     m.videoResolution = qualityLabel(blob);
     m.label = addonName;
+    m.sourceName = s.name;
+    m.sourceTitle = s.title;
 
     if (!s.url.empty()) {
         bool cached = true;
