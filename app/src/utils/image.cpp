@@ -248,7 +248,7 @@ void Image::with(brls::Image* view, const std::string& url, int width, int heigh
 
     if (shouldSubmit) ThreadPool::instance().submit([item](HTTP& s) { item->doRequest(s); });
 }
-#ifdef BOREALIS_USE_GXM
+#if defined(__PS4__) || defined(BOREALIS_USE_GXM)
 void Image::withLocal(brls::Image* view, const std::string& localPath, int width, int height) {
     // Mirrors with(): the cache is keyed by the local path (as setImageFromFile
     // did), so repeat loads of a cached asset hit the TextureCache directly.
@@ -260,24 +260,50 @@ void Image::withLocal(brls::Image* view, const std::string& localPath, int width
     }
 
     Ref item = std::make_shared<Image>();
+    bool shouldSubmit = true;
+    {
+        std::lock_guard<std::mutex> lock(requestMutex);
 
-    std::lock_guard<std::mutex> lock(requestMutex);
+        auto it = requests.insert(std::make_pair(view, item));
+        if (!it.second) {
+            brls::Logger::warning("insert Image {} failed", fmt::ptr(view));
+            return;
+        }
 
-    auto it = requests.insert(std::make_pair(view, item));
-    if (!it.second) {
-        brls::Logger::warning("insert Image {} failed", fmt::ptr(view));
-        return;
+        item->image = view;
+        item->url = localPath;  // doubles as the disk path (this->local == true)
+        item->local = true;
+        item->targetW = width;
+        item->targetH = height;
+        view->ptrLock();
+        view->setFreeTexture(false);
+
+#if defined(__PS4__)
+        // Local requests use their cache path as a stable key, just as network
+        // requests use the URL. Repeated cached rows share decode/upload work.
+        std::shared_ptr<ImageRequestGroup> group;
+        auto git = requestGroups.find(localPath);
+        if (git != requestGroups.end()) {
+            group = git->second.lock();
+            if (!group || group->cancel->load()) {
+                requestGroups.erase(git);
+                group.reset();
+            }
+        }
+        if (!group) {
+            group = std::make_shared<ImageRequestGroup>();
+            requestGroups[localPath] = group;
+        } else {
+            shouldSubmit = false;
+        }
+
+        item->group = group;
+        item->groupKey = localPath;
+        group->members.emplace_back(item);
+#endif
     }
 
-    item->image = view;
-    item->url = localPath;  // doubles as the disk path (this->local == true)
-    item->local = true;
-    item->targetW = width;
-    item->targetH = height;
-    view->ptrLock();
-    view->setFreeTexture(false);
-
-    ThreadPool::instance().submit([item](HTTP& s) { item->doRequest(s); });
+    if (shouldSubmit) ThreadPool::instance().submit([item](HTTP& s) { item->doRequest(s); });
 }
 #endif
 
