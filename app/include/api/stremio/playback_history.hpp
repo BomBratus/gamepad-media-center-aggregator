@@ -83,7 +83,7 @@ inline bool normalizeIsoUtc(const std::string& value, std::string& normalized) {
 /// dependency on application configuration or authentication state.
 class PlaybackHistory {
 public:
-    explicit PlaybackHistory(std::string path) : path_(std::move(path)) {}
+    explicit PlaybackHistory(std::string path) : path_(std::move(path)) { (void)processMutex(); }
 
     /// Save a playback snapshot. The media ratingKey is the item id in the
     /// JSON document. A position of zero is stored as supplied.
