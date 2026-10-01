@@ -7,7 +7,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  set(VITA_VERSION "00.26")
 +# Custom PS4 package revision. Keep the upstream Title ID so this installs as an
 +# update over v1.1.0, but use a higher app version for an easy rollback path.
-+set(PS4_VERSION "00.77")
++set(PS4_VERSION "00.78")
 +# Keep the package/license identity equal to the last hardware-verified build.
 +# Only APP_VER/VERSION advances; the transport filename stays versioned.
 +set(PS4_CONTENT_ID "IV0001-GMCA00000_00-GMCA000000006700")
@@ -170,7 +170,7 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 --- a/app/src/tab/media_series.cpp
 +++ b/app/src/tab/media_series.cpp
-@@ -27,6 +28,169 @@
+@@ -27,6 +28,171 @@
  #include "tab/remote_view.hpp"
 +#include <borealis/views/dialog.hpp>
 +#include <borealis/views/label.hpp>
@@ -241,7 +241,9 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 +}
 +
 +void playResolvedEpisode(const plex::Item& item, int64_t seekMs, int mediaIndex) {
-+    PlayerView* view = new PlayerView(item, seekMs, mediaIndex);
++    plex::Item episode = item;
++    episode.viewOffset = seekMs;
++    PlayerView* view = new PlayerView(episode, seekMs, mediaIndex);
 +    view->setTitie(episodeDisplayTitle(item));
 +    if (!item.grandparentRatingKey.empty()) view->setSeries(item.grandparentRatingKey);
 +    brls::sync([view]() { brls::Application::giveFocus(view); });

@@ -1,7 +1,7 @@
 diff --git a/app/src/api/stremio/backend.cpp b/app/src/api/stremio/backend.cpp
 --- a/app/src/api/stremio/backend.cpp
 +++ b/app/src/api/stremio/backend.cpp
-@@ -239,2 +239,6 @@
+@@ -239,2 +239,7 @@
  #endif
 +#if defined(GMCA_PS4_SAFE_SOURCES)
 +    // Preserve the addon's own ordering (Torrentio quality/seeders/language rules).
@@ -9,7 +9,7 @@ diff --git a/app/src/api/stremio/backend.cpp b/app/src/api/stremio/backend.cpp
 +    std::stable_partition(all.begin(), all.end(), [](const media::Media& m) { return m.playable(); });
 +#else
      std::stable_sort(all.begin(), all.end(), [](const media::Media& x, const media::Media& y) {
-@@ -269,3 +273,4 @@
+@@ -269,4 +273,5 @@
          return false;
      });
 +#endif
@@ -23,7 +23,7 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
  #include "view/video_source.hpp"
 +#include "view/recycling_grid.hpp"
  #include "view/recyling_video.hpp"
-@@ -39,3 +40,8 @@
+@@ -39,5 +40,12 @@
      label->setTextColor(color);
      label->setSingleLine(true);
 -    if (grow) label->setGrow(1);
@@ -45,7 +45,7 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 -        this->setHeight(78);
 +        this->setHeight(96);
          this->setCornerRadius(8);
-@@ -78,2 +85,8 @@
+@@ -78,3 +85,53 @@
  };
  
 +// Best-effort audio-language hint from the Stremio stream metadata. Standalone
@@ -99,13 +99,13 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 +};
 +
  std::string episodeDisplayTitle(const plex::Item& item) {
-@@ -92,3 +105,3 @@
+@@ -92,4 +105,4 @@
  }
  
 -void showEpisodeSourcePicker(const plex::Item& item, int64_t seekMs) {
 +void showEpisodeSourcePicker(const plex::Item& item, int64_t seekMs, EpisodePickerOrigin origin = {}) {
      std::vector<int> playable;
-@@ -113,3 +126,3 @@
+@@ -113,4 +126,4 @@
      auto* content = new brls::Box();
      content->setAxis(brls::Axis::COLUMN);
 -    content->setWidth(940);
@@ -131,7 +131,7 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 +#endif
          if (!m.videoCodec.empty())
              top->addView(episodeSourcePill(m.videoCodec, pillBg, textCol));
-@@ -142,15 +162,23 @@
+@@ -142,15 +162,22 @@
  #if defined(GMCA_PS4_SAFE_SOURCES)
          std::string warning = stremio::ps4WarningLabel(m);
          if (!warning.empty()) top->addView(episodeSourcePill(warning, warningBg, warningFg));
@@ -157,7 +157,7 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 +        sub->setHeight(24);
 +        sub->setAutoAnimate(true);
          row->addView(sub);
-@@ -174,3 +188,8 @@
+@@ -174,13 +188,66 @@
      }
  
 +    if (origin.grid) {
@@ -210,7 +210,15 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 +        [seekMs, origin](const media::Item& resolved) {
 +            brls::Application::unblockInputs();
 +            brls::Application::popActivity(brls::TransitionAnimation::NONE);
-+            showEpisodeSourcePicker(resolved, seekMs, origin);
++            const auto checkpoint = stremio::savedPlayback(resolved.ratingKey);
++            const int64_t resumeMs = seekMs == 0 ? 0
++                : (!checkpoint.empty() || resolved.viewOffset > 0 ? resolved.viewOffset : seekMs);
++            const int saved = seekMs > 0 ? stremio::savedPlaybackSource(resolved) : -1;
++            if (saved >= 0) {
++                playResolvedEpisode(resolved, resumeMs, saved);
++                return;
++            }
++            showEpisodeSourcePicker(resolved, resumeMs, origin);
 +        },
 -        [](const std::string& error) { Dialog::show(error); });
 +        [](const std::string& error) {
@@ -219,7 +227,7 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 +            Dialog::show(error);
 +        });
  }
-@@ -367,3 +393,3 @@
+@@ -367,4 +393,4 @@
          if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
 -            resolveAndShowEpisodeSourcePicker(item);
 +            resolveAndShowEpisodeSourcePicker(item, recycler, index);

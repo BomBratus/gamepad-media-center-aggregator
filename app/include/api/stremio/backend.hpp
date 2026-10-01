@@ -22,6 +22,11 @@
 
 namespace stremio {
 
+// Local playback checkpoints are written synchronously, independently of account sync.
+nlohmann::json savedPlayback(const std::string& id);
+void rememberPlayback(const media::Item& item, const media::Media& source, int64_t position, int64_t duration);
+int savedPlaybackSource(const media::Item& item);
+
 class StremioBackend : public media::Backend {
 public:
     StremioBackend();

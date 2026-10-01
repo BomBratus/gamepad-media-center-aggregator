@@ -3,6 +3,7 @@
 #include "api/plex.hpp"
 #include "api/backend.hpp"
 #include "api/stremio/types.hpp"
+#include "api/stremio/backend.hpp"
 #include "tab/media_collection.hpp"
 #include "tab/media_series.hpp"
 #include "tab/media_movie.hpp"
@@ -28,11 +29,31 @@ using namespace brls::literals;  // for _i18n
 
 namespace {
 
-void showStremioResumeSourcePicker(const media::Item& card, int64_t seekMs) {
+void showStremioResumeSourcePicker(const media::Item& card, int64_t seekMs, bool reuseSource = true) {
     const std::string episodeId = card.key;
     AppConfig::instance().backend().getItemDetail(
         episodeId, true,
-        [seekMs](const media::Item& detail) {
+        [seekMs, reuseSource](const media::Item& detail) {
+            // Zero is an explicit Restart request. For Resume, fresh local/detail
+            // progress takes precedence over a stale Home card.
+            const auto checkpoint = stremio::savedPlayback(detail.ratingKey);
+            const int64_t resumeMs = seekMs == 0 ? 0
+                : (!checkpoint.empty() || detail.viewOffset > 0 ? detail.viewOffset : seekMs);
+            auto play = [detail, resumeMs](int source) {
+                media::Item episode = detail;
+                episode.viewOffset = resumeMs;
+                auto* view = new PlayerView(episode, resumeMs, source);
+                view->setTitie(episode.grandparentTitle.empty()
+                    ? fmt::format("S{}E{} - {}", episode.parentIndex, episode.index, episode.title)
+                    : fmt::format("{} - S{}E{} - {}", episode.grandparentTitle,
+                        episode.parentIndex, episode.index, episode.title));
+                if (!episode.grandparentRatingKey.empty()) view->setSeries(episode.grandparentRatingKey);
+            };
+            const int saved = reuseSource ? stremio::savedPlaybackSource(detail) : -1;
+            if (saved >= 0) {
+                play(saved);
+                return;
+            }
             std::vector<std::string> choices;
             std::vector<int> playable;
             for (size_t i = 0; i < detail.media.size(); ++i) {
@@ -46,16 +67,9 @@ void showStremioResumeSourcePicker(const media::Item& card, int64_t seekMs) {
                 return;
             }
             auto* picker = new brls::Dropdown("Choose source", choices,
-                [detail, playable, seekMs](int selected) {
+                [play, playable](int selected) {
                     if (selected < 0 || selected >= (int)playable.size()) return;
-                    media::Item episode = detail;
-                    episode.viewOffset = seekMs;
-                    auto* view = new PlayerView(episode, seekMs, playable[(size_t)selected]);
-                    view->setTitie(episode.grandparentTitle.empty()
-                                       ? fmt::format("S{}E{} - {}", episode.parentIndex, episode.index, episode.title)
-                                       : fmt::format("{} - S{}E{} - {}", episode.grandparentTitle,
-                                             episode.parentIndex, episode.index, episode.title));
-                    if (!episode.grandparentRatingKey.empty()) view->setSeries(episode.grandparentRatingKey);
+                    play(playable[(size_t)selected]);
                 });
             brls::Application::pushActivity(new brls::Activity(picker));
         },
@@ -76,6 +90,7 @@ void showStremioResumeDialog(brls::Box* recycler, const media::Item& card) {
     }
     auto* dialog = new brls::Dialog(meta.empty() ? card.title : card.title + "\n" + meta);
     dialog->addButton("Resume episode", [card]() { showStremioResumeSourcePicker(card, card.viewOffset); });
+    dialog->addButton("Choose another source", [card]() { showStremioResumeSourcePicker(card, card.viewOffset, false); });
     dialog->addButton("Restart episode", [card]() { showStremioResumeSourcePicker(card, 0); });
     dialog->addButton("Go to series", [recycler, card]() { ui::presentDetail(recycler, new MediaSeries(card)); });
     dialog->open();

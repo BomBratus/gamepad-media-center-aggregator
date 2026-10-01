@@ -7,6 +7,7 @@
 
 #include <borealis.hpp>
 #include <utils/event.hpp>
+#include <utils/playback_checkpoint.hpp>
 #include <api/plex/types.hpp>
 
 class VideoView;
@@ -88,9 +89,12 @@ private:
     /// Reset to -1 on episode switch so binge auto-picks the best source.
     int preferredVersion = -1;
     bool scrobbled = false;
+    utils::PlaybackCheckpoint playbackCheckpoint;
+    void checkpointPlayback(int64_t timeMs);
     /// guards tryDirectPlayFallback so a failing stream falls back at most once
     /// per (re)load; reset by playMedia on every deliberate (re)start
     bool directPlayFallback = false;
+    uint64_t playbackGeneration = 0; // reject results from superseded loads
     std::vector<plex::Item> episodes;
     int episodeIndex = -1;
     bool upNextDismissed = false;

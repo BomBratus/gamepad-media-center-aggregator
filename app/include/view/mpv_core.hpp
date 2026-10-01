@@ -64,7 +64,7 @@ public:
 
     std::string getString(const std::string &key);
 
-    double getDouble(const std::string &key);
+    double getDouble(const std::string &key, double fallback = 0);
     void setDouble(const std::string &key, double value);
 
     int64_t getInt(const std::string &key, int64_t default_value = 0);

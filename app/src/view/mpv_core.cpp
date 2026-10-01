@@ -1171,6 +1171,9 @@ void MPVCore::eventMainLoop() {
             mpvCoreEvent.fire(MpvEventEnum::START_FILE);
             mpvCoreEvent.fire(MpvEventEnum::LOADING_START);
             break;
+        case MPV_EVENT_SEEK:
+            mpvCoreEvent.fire(MpvEventEnum::SEEK_START);
+            break;
         case MPV_EVENT_PLAYBACK_RESTART:
             // event 21: 开始播放文件（一般是播放或调整进度结束之后触发）
             brls::Logger::info("MPVCore => EVENT_PLAYBACK_RESTART");
@@ -1178,6 +1181,7 @@ void MPVCore::eventMainLoop() {
             ps4diag::write("event playback-restart");
 #endif
             this->video_stopped = false;
+            mpvCoreEvent.fire(MpvEventEnum::PLAYBACK_RESTART);
             if (this->isPaused())
                 mpvCoreEvent.fire(MpvEventEnum::MPV_PAUSE);
             else
@@ -1405,9 +1409,9 @@ std::string MPVCore::getString(const std::string &key) {
     return result;
 }
 
-double MPVCore::getDouble(const std::string &key) {
+double MPVCore::getDouble(const std::string &key, double fallback) {
     double value = 0;
-    mpv_get_property(mpv, key.c_str(), MPV_FORMAT_DOUBLE, &value);
+    if (!mpv || mpv_get_property(mpv, key.c_str(), MPV_FORMAT_DOUBLE, &value) < 0) return fallback;
     return value;
 }
 

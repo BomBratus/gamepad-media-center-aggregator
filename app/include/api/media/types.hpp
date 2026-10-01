@@ -206,6 +206,7 @@ struct Media {
     std::string label;   // primary line: source/addon name (+ release group)
     std::string detail;  // secondary line: codec · size · seeders (our own re-render)
     SourceKind kind = SourceKind::Direct;
+    std::string sourceIdentity;  // stable addon/release identity for saved playback
     bool cached = true;  // debrid cache hint (best-effort; ⚡ vs pending). false = uncached
     // A source is directly playable iff it carries a real URL (parts[0].key).
     bool playable() const { return !parts.empty() && !parts.front().key.empty(); }
