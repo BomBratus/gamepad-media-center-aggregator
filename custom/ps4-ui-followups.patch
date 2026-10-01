@@ -1,29 +1,26 @@
-diff --git a/app/src/api/stremio/backend.cpp b/app/src/api/stremio/backend.cpp
---- a/app/src/api/stremio/backend.cpp
-+++ b/app/src/api/stremio/backend.cpp
-@@ -239,2 +239,7 @@
- #endif
-+#if defined(GMCA_PS4_SAFE_SOURCES)
-+    // Preserve the addon's own ordering (Torrentio quality/seeders/language rules).
-+    // Only keep unplayable placeholders after playable rows, without re-ranking either group.
-+    std::stable_partition(all.begin(), all.end(), [](const media::Media& m) { return m.playable(); });
-+#else
-     std::stable_sort(all.begin(), all.end(), [](const media::Media& x, const media::Media& y) {
-@@ -269,4 +273,5 @@
-         return false;
-     });
-+#endif
-     return all;
- }
-
 diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 --- a/app/src/tab/media_series.cpp
 +++ b/app/src/tab/media_series.cpp
-@@ -18,2 +19,3 @@
+@@ -8,6 +8,9 @@
+ #include "api/plex/watchlist.hpp"
+ #include "api/backend.hpp"
+ #include "api/stremio/types.hpp"
++#include "api/stremio/backend.hpp"
++#include "api/stremio/source_audio.hpp"
++#include "api/stremio/source_safety.hpp"
+ #include "tab/media_series.hpp"
+ #include "view/h_recycling.hpp"
+ #include "view/auto_tab_frame.hpp"
+@@ -17,6 +20,7 @@
+ #include "view/video_card.hpp"
+ #include "view/people_source.hpp"
  #include "view/video_source.hpp"
 +#include "view/recycling_grid.hpp"
  #include "view/recyling_video.hpp"
-@@ -39,5 +40,12 @@
+ #include "view/presenter.hpp"
+ #include "view/context_menu.hpp"
+@@ -44,7 +48,14 @@
+     label->setFontSize(size);
      label->setTextColor(color);
      label->setSingleLine(true);
 -    if (grow) label->setGrow(1);
@@ -37,61 +34,21 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 +    }
      return label;
  }
-@@ -52,5 +58,6 @@
+
+@@ -66,7 +77,8 @@
  public:
      EpisodeSourceRow() {
          this->setAxis(brls::Axis::COLUMN);
-+        this->setWidthPercentage(100);
 -        this->setHeight(78);
++        this->setWidthPercentage(100);
 +        this->setHeight(96);
          this->setCornerRadius(8);
-@@ -78,3 +85,53 @@
+         this->setHighlightCornerRadius(8);
+         this->setFocusable(true);
+@@ -91,6 +103,12 @@
+     }
  };
- 
-+// Best-effort audio-language hint from the Stremio stream metadata. Standalone
-+// ITA is treated as Italian audio unless it is explicitly attached to a subtitle
-+// marker. "Italian" alone is not enough because it can be part of the title.
-+bool episodeSourceHasItalianAudio(const media::Media& m) {
-+    std::string text = m.sourceName + " " + m.sourceTitle;
-+    bool italianFlag = text.find(u8"🇮🇹") != std::string::npos;
-+
-+    std::vector<std::string> tokens;
-+    std::string token;
-+    auto flush = [&]() {
-+        if (!token.empty()) {
-+            tokens.push_back(token);
-+            token.clear();
-+        }
-+    };
-+    for (unsigned char c : text) {
-+        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c - 'A' + 'a');
-+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
-+            token.push_back((char)c);
-+        else
-+            flush();
-+    }
-+    flush();
-+
-+    auto isSubtitle = [](const std::string& t) {
-+        return t == "sub" || t == "subs" || t == "subtitle" || t == "subtitles" || t == "subbed";
-+    };
-+    auto isAudio = [](const std::string& t) {
-+        return t == "audio" || t == "dub" || t == "dubbed" || t == "dual" || t == "multi";
-+    };
-+    bool hasSubtitleMarker = false;
-+    for (size_t i = 0; i < tokens.size(); ++i) {
-+        hasSubtitleMarker = hasSubtitleMarker || isSubtitle(tokens[i]);
-+        bool nearSubtitle = (i > 0 && isSubtitle(tokens[i - 1])) ||
-+                            (i + 1 < tokens.size() && isSubtitle(tokens[i + 1]));
-+        if (tokens[i] == "ita" && !nearSubtitle) return true;
-+        if ((tokens[i] == "italian" || tokens[i] == "italiano" || tokens[i] == "italiana") &&
-+            !nearSubtitle &&
-+            ((i > 0 && isAudio(tokens[i - 1])) || (i + 1 < tokens.size() && isAudio(tokens[i + 1]))))
-+            return true;
-+    }
-+    return italianFlag && !hasSubtitleMarker;
-+}
-+
+
 +struct EpisodePickerOrigin {
 +    RecyclingGrid* grid = nullptr;
 +    size_t index = 0;
@@ -99,67 +56,94 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 +};
 +
  std::string episodeDisplayTitle(const plex::Item& item) {
-@@ -92,4 +105,4 @@
+     return item.grandparentTitle.empty()
+                ? fmt::format("S{}E{} — {}", item.parentIndex, item.index, item.title)
+@@ -106,7 +124,7 @@
+     brls::sync([view]() { brls::Application::giveFocus(view); });
  }
- 
+
 -void showEpisodeSourcePicker(const plex::Item& item, int64_t seekMs) {
 +void showEpisodeSourcePicker(const plex::Item& item, int64_t seekMs, EpisodePickerOrigin origin = {}) {
      std::vector<int> playable;
-@@ -113,4 +126,4 @@
+     for (size_t i = 0; i < item.media.size(); ++i)
+         if (item.media[i].playable()) playable.push_back((int)i);
+@@ -125,14 +143,14 @@
+
      auto* content = new brls::Box();
      content->setAxis(brls::Axis::COLUMN);
 -    content->setWidth(940);
 +    content->setWidthPercentage(100);
      content->setHeight(610);
-@@ -130,2 +143,3 @@
+     content->setPaddingTop(18);
+     content->setPaddingBottom(10);
+     content->setPaddingLeft(20);
+     content->setPaddingRight(20);
+
+-    auto* heading = episodeSourceLabel("Scegli il flusso · " + episodeDisplayTitle(item), 22, textCol);
++    auto* heading = episodeSourceLabel("main/stremio/playback/choose_source"_i18n + " · " + episodeDisplayTitle(item), 22, textCol);
+     heading->setHeight(42);
+     content->addView(heading);
+
+@@ -146,35 +164,49 @@
+     content->addView(scroll);
+
+     auto* dialog = new brls::Dialog(content);
+-    dialog->addButton("Annulla", []() {});
++    dialog->addButton("hints/cancel"_i18n, []() {});
      dialog->setCancelable(true);
 +    EpisodeSourceRow* firstRow = nullptr;
- 
-@@ -134,2 +148,3 @@
+
+     for (int mediaIndex : playable) {
+         const media::Media& m = item.media[(size_t)mediaIndex];
          auto* row = new EpisodeSourceRow();
 +        if (!firstRow) firstRow = row;
- 
-@@ -136,6 +151,11 @@
+
+         auto* top = new brls::Box();
+         top->setAxis(brls::Axis::ROW);
          top->setAlignItems(brls::AlignItems::CENTER);
          top->setHeight(28);
 +        top->setWidthPercentage(100);
          if (!m.videoResolution.empty())
              top->addView(episodeSourcePill(m.videoResolution, pillBg, textCol));
 +#if defined(GMCA_PS4_SAFE_SOURCES)
-+        if (episodeSourceHasItalianAudio(m))
-+            top->addView(episodeSourcePill("ITA AUDIO", pillBg, textCol));
++        if (stremio::hasItalianAudio(m.sourceName + " " + m.sourceTitle))
++            top->addView(episodeSourcePill("main/stremio/source/italian_audio"_i18n, pillBg, textCol));
 +#endif
          if (!m.videoCodec.empty())
              top->addView(episodeSourcePill(m.videoCodec, pillBg, textCol));
-@@ -142,15 +162,22 @@
  #if defined(GMCA_PS4_SAFE_SOURCES)
          std::string warning = stremio::ps4WarningLabel(m);
-         if (!warning.empty()) top->addView(episodeSourcePill(warning, warningBg, warningFg));
+-        if (!warning.empty()) top->addView(episodeSourcePill(warning, warningBg, warningFg));
++        if (!warning.empty()) top->addView(episodeSourcePill(fmt::format("main/stremio/source/ps4_risk"_i18n, warning), warningBg, warningFg));
  #endif
--        std::string primary = !m.sourceTitle.empty() ? m.sourceTitle : (!m.sourceName.empty() ? m.sourceName : m.label);
--        top->addView(episodeSourceLabel(primary, 16, textCol, true));
-         row->addView(top);
- 
++        row->addView(top);
++
 +        // Give the release title the full row width instead of squeezing it
 +        // between quality/codec badges. Focused rows marquee long text.
-+        std::string primary = !m.sourceTitle.empty() ? m.sourceTitle : (!m.sourceName.empty() ? m.sourceName : m.label);
+         std::string primary = !m.sourceTitle.empty() ? m.sourceTitle : (!m.sourceName.empty() ? m.sourceName : m.label);
+-        top->addView(episodeSourceLabel(primary, 16, textCol, true));
+-        row->addView(top);
 +        auto* title = episodeSourceLabel(primary, 16, textCol, true);
 +        title->setHeight(26);
 +        title->setAutoAnimate(true);
 +        row->addView(title);
-+
+
          std::string secondary = m.label;
          if (!m.detail.empty()) secondary += (secondary.empty() ? "" : " · ") + m.detail;
          if (m.kind == media::SourceKind::Debrid)
-             secondary += (secondary.empty() ? "" : " · ") + std::string(m.cached ? "Debrid cached" : "Debrid");
+-            secondary += (secondary.empty() ? "" : " · ") + std::string(m.cached ? "Debrid cached" : "Debrid");
++            secondary += (secondary.empty() ? "" : " · ") + (m.cached ? "main/stremio/source/debrid_cached"_i18n : "main/stremio/source/debrid"_i18n);
          auto* sub = episodeSourceLabel(secondary, 13, greyCol);
 -        sub->setHeight(26);
 +        sub->setHeight(24);
 +        sub->setAutoAnimate(true);
          row->addView(sub);
-@@ -174,13 +188,66 @@
+
+         row->registerClickAction([dialog, item, seekMs, mediaIndex](...) {
+@@ -184,16 +216,68 @@
+         list->addView(row);
      }
- 
+
 +    if (origin.grid) {
 +        // Returning focus to the CENTERED season grid can start a new scroll
 +        // animation. Freeze the saved pixel offset before the dialog takes focus.
@@ -171,6 +155,9 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 +    // on a source row instead of Cancel without any post-open focus race.
 +    if (firstRow) dialog->setLastFocusedView(firstRow);
      dialog->open();
+-}
+-
+-void resolveAndShowEpisodeSourcePicker(const plex::Item& item) {
 +    // The underlying CENTERED grid can still recompute during the dialog's
 +    // layout transition; restore its exact position on the next UI tick.
 +    brls::sync([origin]() {
@@ -179,13 +166,16 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 +            origin.grid->setDefaultCellFocus(origin.index);
 +        }
 +    });
- }
- 
--void resolveAndShowEpisodeSourcePicker(const plex::Item& item) {
++}
++
 +void resolveAndShowEpisodeSourcePicker(
 +    const plex::Item& item, brls::Box* recycler = nullptr, size_t index = 0) {
      const std::string id = item.ratingKey;
      const int64_t seekMs = item.viewOffset;
+-    AppConfig::instance().backend().getItemDetail(
+-        id, true,
+-        [seekMs](const media::Item& resolved) { showEpisodeSourcePicker(resolved, seekMs); },
+-        [](const std::string& error) { Dialog::show(error); });
 +    EpisodePickerOrigin origin;
 +    if (auto* grid = dynamic_cast<RecyclingGrid*>(recycler)) {
 +        origin.grid = grid;
@@ -200,19 +190,17 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 +    }
 +    brls::Application::blockInputs();
 +    brls::Application::pushActivity(
-+        new LoadingOverlay("Fetching sources..."), brls::TransitionAnimation::NONE);
++        new LoadingOverlay("main/stremio/playback/fetching_sources"_i18n), brls::TransitionAnimation::NONE);
 +    // pushActivity temporarily removes focus from the episode cell. Reassert
 +    // the frozen offset synchronously so no frame can expose a recentered list.
 +    if (origin.grid) origin.grid->setContentOffsetY(origin.offset, false);
-     AppConfig::instance().backend().getItemDetail(
-         id, true,
--        [seekMs](const media::Item& resolved) { showEpisodeSourcePicker(resolved, seekMs); },
++    auto* backend = dynamic_cast<stremio::StremioBackend*>(&AppConfig::instance().backend());
++    backend->getResumeDetail(
++        id, seekMs > 0,
 +        [seekMs, origin](const media::Item& resolved) {
 +            brls::Application::unblockInputs();
 +            brls::Application::popActivity(brls::TransitionAnimation::NONE);
-+            const auto checkpoint = stremio::savedPlayback(resolved.ratingKey);
-+            const int64_t resumeMs = seekMs == 0 ? 0
-+                : (!checkpoint.empty() || resolved.viewOffset > 0 ? resolved.viewOffset : seekMs);
++            const int64_t resumeMs = seekMs == 0 ? 0 : resolved.viewOffset;
 +            const int saved = seekMs > 0 ? stremio::savedPlaybackSource(resolved) : -1;
 +            if (saved >= 0) {
 +                playResolvedEpisode(resolved, resumeMs, saved);
@@ -220,16 +208,48 @@ diff --git a/app/src/tab/media_series.cpp b/app/src/tab/media_series.cpp
 +            }
 +            showEpisodeSourcePicker(resolved, resumeMs, origin);
 +        },
--        [](const std::string& error) { Dialog::show(error); });
 +        [](const std::string& error) {
 +            brls::Application::unblockInputs();
 +            brls::Application::popActivity(brls::TransitionAnimation::NONE);
 +            Dialog::show(error);
 +        });
  }
-@@ -367,4 +393,4 @@
+
+ }  // namespace
+@@ -380,7 +464,7 @@
+         }
+
          if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
 -            resolveAndShowEpisodeSourcePicker(item);
 +            resolveAndShowEpisodeSourcePicker(item, recycler, index);
              return;
          }
+
+diff --git a/app/src/api/stremio/backend.cpp b/app/src/api/stremio/backend.cpp
+--- a/app/src/api/stremio/backend.cpp
++++ b/app/src/api/stremio/backend.cpp
+@@ -20,6 +20,7 @@
+
+ #include "api/stremio/backend.hpp"
+ #include "api/stremio/types.hpp"
++#include "api/stremio/source_safety.hpp"
+ #include "api/stremio/catalog_navigation.hpp"
+ #include "api/stremio/catalog_aggregation.hpp"
+ #include "api/stremio/episode_continuation.hpp"
+@@ -915,6 +916,9 @@
+                   }),
+         all.end());
+ #endif
++#if defined(GMCA_PS4_SAFE_SOURCES)
++    orderPs4Sources(all);
++#else
+     std::stable_sort(all.begin(), all.end(), [](const media::Media& x, const media::Media& y) {
+         if (x.playable() != y.playable()) return x.playable();  // playable first
+ #if defined(__PSV__)
+@@ -934,6 +938,7 @@
+         if (x.playable() && x.cached != y.cached) return x.cached;  // then cached debrid first
+         return false;
+     });
++#endif
+     return all;
+ }

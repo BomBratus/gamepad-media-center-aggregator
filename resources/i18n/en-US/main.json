@@ -484,7 +484,27 @@
       "links": "{} external link(s) — not playable here",
       "more": "+{} more playable source(s)",
       "torrents_help": "These sources are raw torrents. This platform has no torrent client: install a debrid-enabled addon (Torrentio + Real-Debrid, Comet, MediaFusion…) in your Stremio account to get playable links.",
-      "links_help": "These sources are external links (browser or third-party service) that cannot be played directly in the app on this platform."
+      "links_help": "These sources are external links (browser or third-party service) that cannot be played directly in the app on this platform.",
+      "italian_audio": "ITA AUDIO",
+      "debrid": "Debrid",
+      "debrid_cached": "Debrid cached",
+      "ps4_risk": "PS4 RISK: {}"
+    },
+    "playback": {
+      "resume_episode": "Resume episode",
+      "restart_episode": "Restart episode",
+      "resume_movie": "Resume movie",
+      "restart_movie": "Restart movie",
+      "choose_another": "Choose another source",
+      "choose_source": "Choose source",
+      "go_series": "Go to series",
+      "play_next": "Play next now",
+      "cancel_autoplay": "Cancel autoplay",
+      "open_series": "Open series",
+      "next_in": "Next episode in {} s\n{}",
+      "min_left": "{}{} min left",
+      "source_number": "Source {}",
+      "fetching_sources": "Fetching sources…"
     }
   }
 }

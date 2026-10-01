@@ -57,6 +57,7 @@ private:
     bool trySourceRecovery(int64_t resumeMs = -1);
     bool playIndex(int index);
     void updateUpNext(int64_t progressSeconds);
+    int nextEpisodeIndex() const;
     void dismissUpNext();
     /// Resolves external subtitle sidecars for the current item through the
     /// backend (Stremio addons), lazily and only when the played item changes.
@@ -94,6 +95,7 @@ private:
     /// guards tryDirectPlayFallback so a failing stream falls back at most once
     /// per (re)load; reset by playMedia on every deliberate (re)start
     bool directPlayFallback = false;
+    bool resolvingRecoverySources = false;
     uint64_t playbackGeneration = 0; // reject results from superseded loads
     std::vector<plex::Item> episodes;
     int episodeIndex = -1;

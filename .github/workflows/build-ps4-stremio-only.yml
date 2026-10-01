@@ -112,11 +112,12 @@ jobs:
           grep -Fq 'setByteCapacity(128 * 1024 * 1024)' app/src/utils/config.cpp
           grep -Fq 'ps4_halve_rgba' app/src/utils/image.cpp
           grep -Fq 'PLAYER_AUTOPLAY_NEXT' app/include/utils/config.hpp
-          grep -Fq 'Choose another source' app/src/activity/player_view.cpp
+          grep -Fq 'main/stremio/playback/choose_another' app/src/activity/player_view.cpp
           grep -Fq 'PS4 subtitle guard' app/src/activity/player_view.cpp
-          grep -Fq 'Restart episode' app/src/view/video_source.cpp
+          grep -Fq 'main/stremio/playback/restart_episode' app/src/view/video_source.cpp
           grep -Fq 'selectedProgress' app/src/tab/watchlist_tab.cpp
-          grep -Fq 'ITA AUDIO' app/src/tab/media_movie.cpp
+          grep -Fq 'main/stremio/source/italian_audio' app/src/tab/media_movie.cpp
+          grep -Fq 'orderPs4Sources(all)' app/src/api/stremio/backend.cpp
           git checkout -- custom/ps4-safe-sources.patch custom/ps4-ui-followups.patch
           git diff --check
 
