@@ -443,6 +443,11 @@
     },
     "movies": "Films",
     "series": "Séries",
+    "anime": {
+      "title": "Anime",
+      "empty_title": "Aucun catalogue d’anime trouvé",
+      "empty_sub": "Installez ou synchronisez un addon de catalogue d’anime dans Stremio pour parcourir les anime ici."
+    },
     "popular": "Populaires",
     "new": "Nouveautés",
     "featured": "À la une",

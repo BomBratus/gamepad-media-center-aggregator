@@ -1,6 +1,7 @@
 #include <borealis.hpp>
 
 #include "utils/config.hpp"
+#include "api/stremio/backend.hpp"
 #include "utils/download.hpp"
 #include "utils/offline_library.hpp"
 #include "utils/image_cache.hpp"
@@ -260,6 +261,8 @@ int main(int argc, char* argv[]) {
 
     ThreadPool::instance().stop();
 
+    // Restart may replace the process without running static destructors.
+    stremio::flushPlaybackHistory();
     conf.checkRestart(argv);
     // Exit
     return EXIT_SUCCESS;

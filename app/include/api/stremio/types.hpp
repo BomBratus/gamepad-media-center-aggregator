@@ -774,6 +774,9 @@ inline bool detectDebrid(const std::string& name, bool& cached) {
 /// classified as non-playable (no torrent engine / no browser on console).
 inline media::Media streamToMedia(const StreamOption& s, const std::string& addonName) {
     media::Media m;
+    // Preserve complete release metadata; display labels are not identities.
+    if (!s.title.empty())
+        m.sourceIdentity = nlohmann::json::array({addonName, s.name, s.title, s.infoHash, s.fileIdx}).dump();
     std::string blob = s.name + " " + s.title;
     m.videoResolution = qualityLabel(blob);
     m.label = addonName;

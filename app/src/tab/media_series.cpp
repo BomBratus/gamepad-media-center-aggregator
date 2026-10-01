@@ -26,6 +26,7 @@
 #include "utils/media_source.hpp"
 #include "utils/offline_library.hpp"
 #include "utils/network_state.hpp"
+#include "api/stremio/backend.hpp"
 #include "tab/remote_view.hpp"
 #include <fmt/ranges.h>
 

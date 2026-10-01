@@ -444,6 +444,11 @@
     },
     "movies": "电影",
     "series": "剧集",
+    "anime": {
+      "title": "动漫",
+      "empty_title": "未找到动漫目录",
+      "empty_sub": "在 Stremio 中安装或同步动漫目录插件，即可在此浏览动漫。"
+    },
     "popular": "热门",
     "new": "新作",
     "featured": "精选",

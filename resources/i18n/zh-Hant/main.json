@@ -444,6 +444,11 @@
     },
     "movies": "電影",
     "series": "影集",
+    "anime": {
+      "title": "動漫",
+      "empty_title": "找不到動漫目錄",
+      "empty_sub": "在 Stremio 中安裝或同步動漫目錄外掛，即可在此瀏覽動漫。"
+    },
     "popular": "熱門",
     "new": "新上架",
     "featured": "精選",

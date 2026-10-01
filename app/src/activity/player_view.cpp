@@ -13,6 +13,7 @@
 #include "activity/player_view.hpp"
 #include "api/plex.hpp"
 #include "api/backend.hpp"
+#include "api/stremio/backend.hpp"
 #include "tab/media_series.hpp"
 #include "utils/dialog.hpp"
 #include "utils/misc.hpp"
@@ -103,14 +104,36 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
             view->getProfile()->init(this->playMethod);
             break;
         case MpvEventEnum::MPV_PAUSE:
-            this->reportTimeline("paused", int64_t(mpv.video_progress) * 1000);
+            this->reportTimeline("paused", AppConfig::instance().backend().type() == media::BackendType::Stremio
+                ? int64_t(mpv.getDouble("playback-time", -1) * 1000)
+                : int64_t(mpv.video_progress) * 1000);
             break;
         case MpvEventEnum::LOADING_END:
             this->reportTimeline("playing", int64_t(mpv.playback_time) * 1000);
             break;
-        case MpvEventEnum::MPV_STOP:
-            this->mpvLoaded = false;
+        case MpvEventEnum::RESET:
+            if (AppConfig::instance().backend().type() != media::BackendType::Stremio) break;
             this->reportStop();
+            this->playbackCheckpoint.stop();
+            this->mpvLoaded = false;
+            break;
+        case MpvEventEnum::PLAYBACK_RESTART:
+            this->playbackCheckpoint.restart();
+            // A seek can deliver its position property before the restart event.
+            // Sample the confirmed position now so closing before the next second
+            // also preserves backward seeks, including a deliberate seek to zero.
+            if (AppConfig::instance().backend().type() == media::BackendType::Stremio)
+                this->checkpointPlayback(int64_t(mpv.getDouble("playback-time", -1) * 1000));
+            break;
+        case MpvEventEnum::SEEK_START:
+        case MpvEventEnum::LOADING_START:
+            this->playbackCheckpoint.suspend();
+            break;
+        case MpvEventEnum::MPV_STOP:
+            this->playbackCheckpoint.suspend();
+            this->reportStop();
+            this->playbackCheckpoint.stop();
+            this->mpvLoaded = false;
             break;
         case MpvEventEnum::END_OF_FILE:
             // VideoView defers autoplay to the next UI tick, so the current item
@@ -118,6 +141,7 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
             this->mpvLoaded = false;
             this->reportStop(this->item.duration > 0 ? this->item.duration
                                                      : int64_t(mpv.playback_time) * 1000);
+            this->playbackCheckpoint.stop();
             break;
         case MpvEventEnum::MPV_LOADED: {
             const char* flag = MPVCore::SUBS_FALLBACK ? "select" : "auto";
@@ -146,10 +170,13 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
             // mpv dropped the previous load's tracks, so (re)add them here. If the
             // fetch is still in flight, its callback adds them once it lands.
             this->mpvLoaded = true;
+            this->playbackCheckpoint.loaded();
             this->addExternalSubtitles();
             break;
         }
         case MpvEventEnum::UPDATE_PROGRESS:
+            if (!this->playbackCheckpoint.ready() && AppConfig::instance().backend().type() == media::BackendType::Stremio) break;
+            this->checkpointPlayback(int64_t(mpv.playback_time * 1000));
             // report cadence: every 10 s
             if (mpv.video_progress % 10 == 0) {
                 this->reportTimeline("playing", int64_t(mpv.video_progress) * 1000);
@@ -349,6 +376,8 @@ void PlayerView::playMedia(const int64_t seekMs) {
     // out immediately (the empty player pops itself, leaving us on the detail).
     if (std::getenv("GMCA_NAV_PIPE")) { VideoView::close(); return; }
 
+    const uint64_t generation = ++this->playbackGeneration;
+
     // Release any transcode session we were running before (re)loading. Covers
     // quality/track switches, episode navigation, and transcode->direct play.
     // Without it each reload orphaned a server-side session (verified on dev:
@@ -380,14 +409,18 @@ void PlayerView::playMedia(const int64_t seekMs) {
     // fresh metadata: Media/Part/Stream + chapters
     AppConfig::instance().backend().getItemDetail(
         this->itemId, true,
-        [ASYNC_TOKEN, seekMs](const media::Item& item) {
+        [ASYNC_TOKEN, seekMs, generation](const media::Item& item) {
             ASYNC_RELEASE
+            if (generation != this->playbackGeneration) return;
             this->item = item;
 
             // caller-chosen source (Stremio picker) if it still resolves to an
             // accessible file; otherwise the first accessible version.
             const plex::Media* chosen = nullptr;
             int chosenIndex = -1;
+            if (AppConfig::instance().backend().type() == media::BackendType::Stremio && seekMs > 0 &&
+                this->preferredVersion < 0)
+                this->preferredVersion = stremio::savedPlaybackSource(this->item);
             auto accessible = [](const plex::Media& m) {
                 for (auto& p : m.parts)
                     if (p.accessible && p.exists && !p.key.empty()) return true;
@@ -412,8 +445,9 @@ void PlayerView::playMedia(const int64_t seekMs) {
             this->setChapters(this->item.chapters, this->item.duration);
             this->startPlayback(seekMs);
         },
-        [ASYNC_TOKEN](const std::string& ex) {
+        [ASYNC_TOKEN, generation](const std::string& ex) {
             ASYNC_RELEASE
+            if (generation != this->playbackGeneration) return;
             Dialog::show(ex, []() { VideoView::close(); });
         });
 }
@@ -424,6 +458,9 @@ void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
     // re-add. (External subtitles are resolved AFTER the playback task is queued
     // — see the note at the end of this function.)
     this->mpvLoaded = false;
+    this->playbackCheckpoint.begin(seekMs);
+    if (AppConfig::instance().backend().type() == media::BackendType::Stremio)
+        stremio::rememberPlayback(this->item, this->stream, seekMs, this->item.duration);
 
     media::PlaybackOptions opts;
     opts.seekMs = seekMs;
@@ -443,17 +480,19 @@ void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
     // copies for the worker thread (avoids racing on this->item during a switch)
     media::Item item = this->item;
     media::Media version = this->stream;
+    const uint64_t generation = this->playbackGeneration;
 
     ASYNC_RETAIN
-    brls::async([ASYNC_TOKEN, item, version, opts]() {
+    brls::async([ASYNC_TOKEN, item, version, opts, generation]() {
         try {
             // resolvePlayback runs the transcode decision synchronously and
             // throws on failure; the direct-play fallback is internal. The Plex
             // universal-transcoder request (incl. the Vita 1080p height cap) is
             // built here — see PlexBackend::resolvePlayback.
             media::PlaybackSource src = AppConfig::instance().backend().resolvePlayback(item, version, opts);
-            brls::sync([ASYNC_TOKEN, src]() {
+            brls::sync([ASYNC_TOKEN, src, generation]() {
                 ASYNC_RELEASE
+                if (generation != this->playbackGeneration) return;
                 // A backend may report "nothing playable" with an empty url
                 // (e.g. Stremio with no direct/debrid stream) instead of throwing
                 // across the async/TU boundary; surface it as a player error.
@@ -476,8 +515,9 @@ void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
             });
         } catch (const std::exception& ex) {
             std::string msg = ex.what();
-            brls::sync([ASYNC_TOKEN, msg]() {
+            brls::sync([ASYNC_TOKEN, msg, generation]() {
                 ASYNC_RELEASE
+                if (generation != this->playbackGeneration) return;
                 if (this->trySourceRecovery()) return;
                 Dialog::show(msg, []() { VideoView::close(); });
             });
@@ -605,8 +645,7 @@ bool PlayerView::trySourceRecovery(int64_t resumeMs) {
     if (alternatives.empty()) return false;
 
     if (resumeMs < 0) {
-        resumeMs = int64_t(MPVCore::instance().playback_time) * 1000;
-        if (resumeMs <= 0) resumeMs = this->item.viewOffset;
+        resumeMs = this->playbackCheckpoint.position();
     }
     const int64_t resume = resumeMs;
     auto* picker = new brls::Dropdown("Choose another source", labels,
@@ -634,7 +673,23 @@ void PlayerView::stopTranscode() {
     this->transcodeSession.clear();
 }
 
+void PlayerView::checkpointPlayback(int64_t timeMs) {
+    if (timeMs < 0) return;
+    if (AppConfig::instance().backend().type() == media::BackendType::Stremio &&
+        !this->playbackCheckpoint.observe(timeMs)) return;
+    if (AppConfig::instance().backend().type() != media::BackendType::Stremio || this->scrobbled) return;
+    const int64_t duration = MPVCore::instance().duration > 0
+        ? MPVCore::instance().duration * 1000 : this->item.duration;
+    if (duration > 0) this->item.duration = duration;
+    stremio::rememberPlayback(this->item, this->stream, timeMs, duration);
+}
+
 void PlayerView::reportTimeline(const std::string& state, int64_t timeMs) {
+    if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
+        if (!this->playbackCheckpoint.ready() && state != "stopped") return;
+        if (state == "paused" && this->playbackCheckpoint.ready()) this->checkpointPlayback(timeMs);
+        if (state != "stopped") timeMs = this->playbackCheckpoint.position();
+    }
     media::PlayState st = state == "paused"    ? media::PlayState::Paused
                           : state == "stopped" ? media::PlayState::Stopped
                                                : media::PlayState::Playing;
@@ -642,7 +697,12 @@ void PlayerView::reportTimeline(const std::string& state, int64_t timeMs) {
 }
 
 void PlayerView::reportStop(int64_t timeMs) {
-    if (timeMs < 0) timeMs = int64_t(MPVCore::instance().playback_time) * 1000;
+    if (timeMs < 0) {
+        if (this->playbackCheckpoint.ready())
+            this->checkpointPlayback(int64_t(MPVCore::instance().getDouble("playback-time", -1) * 1000));
+        timeMs = AppConfig::instance().backend().type() == media::BackendType::Stremio
+            ? this->playbackCheckpoint.position() : int64_t(MPVCore::instance().playback_time) * 1000;
+    }
     this->reportTimeline("stopped", timeMs);
     this->maybeScrobble(timeMs);
     brls::Logger::debug("PlayerView reportStop {}", this->sessionId);

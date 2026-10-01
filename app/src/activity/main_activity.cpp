@@ -218,7 +218,11 @@ void MainTabFrame::addLibraryTabs(const std::vector<plex::Section>& sections) {
         item->setTabStyle(AutoTabBarStyle::ACCENT);
         // stable id so the item can be targeted (reorder / hide) by the manager
         item->setId("lib/" + s.key);
-        if (s.type == plex::mediaTypeMovie) {
+        bool animeSection = AppConfig::instance().backend().type() == media::BackendType::Stremio && s.key == "anime";
+        if (animeSection) {
+            item->applyXMLAttribute("icon", "@res/icon/ico-media.svg");
+            item->applyXMLAttribute("iconActivate", "@res/icon/ico-media-activate.svg");
+        } else if (s.type == plex::mediaTypeMovie) {
             item->applyXMLAttribute("icon", "@res/icon/ico-movie.svg");
             item->applyXMLAttribute("iconActivate", "@res/icon/ico-movie-activate.svg");
         } else if (s.type == plex::mediaTypeShow) {
@@ -235,7 +239,7 @@ void MainTabFrame::addLibraryTabs(const std::vector<plex::Section>& sections) {
         std::string key = s.key, type = s.type, title = s.title;
         // Backends that expose catalog sub-tabs (Stremio) get a catalogs-as-tabs
         // view; Plex/Jellyfin keep the standard MediaCollection.
-        bool catalogTabs = !AppConfig::instance().backend().sectionTabs(key).empty();
+        bool catalogTabs = animeSection || !AppConfig::instance().backend().sectionTabs(key).empty();
         this->addTab(
             item,
             [key, type, title, catalogTabs]() -> brls::View* {

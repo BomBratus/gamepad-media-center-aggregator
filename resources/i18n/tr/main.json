@@ -444,6 +444,11 @@
     },
     "movies": "Filmler",
     "series": "Diziler",
+    "anime": {
+      "title": "Anime",
+      "empty_title": "Anime kataloğu bulunamadı",
+      "empty_sub": "Anime içeriklerine buradan göz atmak için Stremio’ya bir anime kataloğu eklentisi yükleyin veya eşitleyin."
+    },
     "popular": "Popüler",
     "new": "Yeni",
     "featured": "Öne Çıkanlar",
