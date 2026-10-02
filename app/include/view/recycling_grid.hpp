@@ -91,6 +91,9 @@ public:
     RecyclingGridItem* dequeueReusableCell(std::string identifier);
 
     RecyclingGridDataSource* getDataSource() const;
+#ifdef GMCA_TEST_HARNESS
+    bool testLoading() const;
+#endif
 
     /// Cell currently bound to `index`, or nullptr if it is off-screen / not
     /// materialized. Generic over the vertical grid and the horizontal rows

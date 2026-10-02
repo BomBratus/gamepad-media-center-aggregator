@@ -19,6 +19,9 @@ public:
     /// Stremio source picker passes an explicit index to honor the user's choice.
     PlayerView(const plex::Item& item, const int64_t seekMs = 0, int versionIndex = -1);
     ~PlayerView();
+#ifdef GMCA_TEST_HARNESS
+    const std::string& testItem() const { return itemId; }
+#endif
 
     /// Loads the show's episode list (previous/next navigation)
     void setSeries(const std::string& showRatingKey);

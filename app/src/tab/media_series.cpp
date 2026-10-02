@@ -39,6 +39,7 @@
 
 using namespace brls::literals;  // for _i18n
 
+#if defined(GMCA_STREMIO_ONLY) || defined(GMCA_PS4_SAFE_SOURCES)
 namespace {
 
 brls::Label* episodeSourceLabel(const std::string& text, float size, NVGcolor color, bool grow = false) {
@@ -137,8 +138,10 @@ void showEpisodeSourcePicker(const plex::Item& item, int64_t seekMs, EpisodePick
     NVGcolor pillBg = theme.getColor("color/pill");
     NVGcolor textCol = theme.getColor("brls/text");
     NVGcolor greyCol = theme.getColor("font/grey");
+#if defined(GMCA_PS4_SAFE_SOURCES)
     NVGcolor warningBg = theme.getColor("color/app");
     NVGcolor warningFg = theme.getColor("brls/button/primary_enabled_text");
+#endif
 
     auto* content = new brls::Box();
     content->setId("stremio/source-picker");
@@ -280,6 +283,7 @@ void resolveAndShowEpisodeSourcePicker(
 }
 
 }  // namespace
+#endif
 
 class EpisodeCardCell : public BaseCardCell {
 public:

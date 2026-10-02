@@ -147,6 +147,10 @@ void RecyclingView::removeCell(brls::View* view) {
 
 RecyclingGridDataSource* RecyclingView::getDataSource() const { return this->dataSource; }
 
+#ifdef GMCA_TEST_HARNESS
+bool RecyclingView::testLoading() const { return dynamic_cast<DataSourceSkeleton*>(dataSource) != nullptr; }
+#endif
+
 void RecyclingView::showSkeleton(unsigned int num) { this->setDataSource(new DataSourceSkeleton(num)); }
 
 /// RecyclingGrid

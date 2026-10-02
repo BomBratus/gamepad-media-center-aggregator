@@ -1,0 +1,36 @@
+--- a/library/include/borealis/core/view.hpp
++++ b/library/include/borealis/core/view.hpp
+@@ -765,6 +765,9 @@
+      * Sets the id of the view.
+      */
+     void setId(std::string id);
++#ifdef GMCA_TEST_HARNESS
++    const std::string& testId() const { return id; }
++#endif
+ 
+     /**
+      * Overrides align items of the parent box.
+--- a/library/include/borealis/views/label.hpp
++++ b/library/include/borealis/views/label.hpp
+@@ -74,6 +74,9 @@
+      * Sets the text of the label.
+      */
+     virtual void setText(const std::string& text);
++#ifdef GMCA_TEST_HARNESS
++    const std::string& testText() const { return fullText; }
++#endif
+ 
+     /**
+      * Sets the alignment of the text inside
+--- a/library/include/borealis/core/application.hpp
++++ b/library/include/borealis/core/application.hpp
+@@ -195,6 +195,9 @@
+      * blockInputs()
+      */
+     static void unblockInputs();
++#ifdef GMCA_TEST_HARNESS
++    static bool testInputsBlocked() { return blockInputsTokens != 0; }
++#endif
+ 
+     static bool isInputBlocks();
+ 

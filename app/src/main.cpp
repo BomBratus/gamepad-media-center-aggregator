@@ -1,4 +1,7 @@
 #include <borealis.hpp>
+#ifdef GMCA_TEST_HARNESS
+#include "harness.hpp"
+#endif
 
 #include "utils/config.hpp"
 #include "api/stremio/backend.hpp"
@@ -256,8 +259,16 @@ int main(int argc, char* argv[]) {
     if (AppVersion::getVersion().compare(v)) AppVersion::checkUpdate();
 #endif
 
+    // Runtime automation is compiled only in the dedicated Linux test target.
+#ifdef GMCA_TEST_HARNESS
+    gmca::test::Harness harness;
+#endif
     // Run the app
-    while (brls::Application::mainLoop());
+    while (brls::Application::mainLoop()) {
+#ifdef GMCA_TEST_HARNESS
+        harness.tick();
+#endif
+    }
 
     ThreadPool::instance().stop();
 
