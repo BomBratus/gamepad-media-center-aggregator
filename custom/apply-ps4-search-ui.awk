@@ -20,6 +20,10 @@ BEGIN {
 
 {
     line = $0
+    # Current source compiles the shared behavior under GMCA_STREMIO_ONLY.
+    # Keep the transform compatible with older source trees for recovery builds.
+    if (NR == 1 && line == "// GMCA_SHARED_STREMIO_SEARCH") shared = 1
+    if (shared) { print line; next }
 
     if (line == "#include \"api/backend.hpp\"") {
         print line
@@ -147,6 +151,7 @@ BEGIN {
 }
 
 END {
+    if (shared) exit 0
     if (includes_done != 1 || state_done != 1 || ctor_done != 1 || dtor_done != 1 ||
         suggest_guards != 2 || search_callbacks != 2 || update_done != 1) {
         print "PS4 search transform assertion failed" > "/dev/stderr"
