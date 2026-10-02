@@ -15,6 +15,8 @@
 */
 
 #include "tab/setting_tab.hpp"
+#include "tab/archive_tab.hpp"
+#include "api/backend.hpp"
 #include "activity/server_list.hpp"
 #include "activity/hint_activity.hpp"
 #include "activity/changelog_activity.hpp"
@@ -407,6 +409,13 @@ void SettingTab::onCreate() {
         if (frame) ui::presentDetail(view, new LibraryManager(frame));
         return true;
     });
+    if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
+        btnArchiveRefresh->registerClickAction([](brls::View* view) -> bool {
+            stremio::archive::Cache::instance().refresh(true);
+            ui::presentDetail(view, new ArchiveTab());
+            return true;
+        });
+    } else btnArchiveRefresh->setVisibility(brls::Visibility::GONE);
 }
 
 brls::View* SettingTab::create() { return new SettingTab(); }

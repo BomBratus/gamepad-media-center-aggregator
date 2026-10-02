@@ -4,6 +4,7 @@
 #include "view/audio_player.hpp"
 #include "view/music_now_playing.hpp"
 #include "tab/media_collection.hpp"
+#include "tab/archive_tab.hpp"
 #include "utils/image.hpp"
 #include "utils/config.hpp"
 #include "tab/offline_collection.hpp"
@@ -174,6 +175,7 @@ void MainTabFrame::applyCapabilities() {
 brls::View* MainTabFrame::create() { return new MainTabFrame(); }
 
 void MainTabFrame::loadLibraries() {
+    this->addArchiveTab();
     // offline: no server to query — build the library tabs from the catalog
     if (NetworkState::isOffline()) {
         this->addOfflineLibraryTabs();
@@ -201,7 +203,10 @@ void MainTabFrame::addLibraryTabs(const std::vector<media::Section>& sections) {
     this->libs_.clear();
 
     // server order, right after the home tab
-    size_t position = 1;
+    size_t position = this->getSidebar()->getView("tab/archive") ? 2 : 1;
+    if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
+        stremio::archive::Cache::instance().refresh();
+    }
     for (auto& s : sections) {
         if (s.hidden) continue;
         // music (artist) is now supported (issue #11); other types stay out of scope
@@ -260,6 +265,7 @@ std::vector<std::string> MainTabFrame::naturalOrder() {
         return sb->getView(id) != nullptr || this->hiddenStash_.count(id) > 0;
     };
     std::vector<std::string> ids;
+    if (present("tab/archive")) ids.push_back("tab/archive");
     for (auto& s : this->libs_) ids.push_back("lib/" + s.key);
     if (present("tab/playlists")) ids.push_back("tab/playlists");
     if (present("tab/watchlist")) ids.push_back("tab/watchlist");
@@ -352,7 +358,28 @@ void MainTabFrame::applySidebarLayout() {
     }
 }
 
+void MainTabFrame::addArchiveTab() {
+    if (AppConfig::instance().backend().type() != media::BackendType::Stremio || this->getSidebar()->getView("tab/archive")) return;
+    auto* archive = new AutoSidebarItem();
+    archive->setId("tab/archive");
+    archive->setTabStyle(AutoTabBarStyle::ACCENT);
+    archive->setLabel(""); // the compact sidebar uses icons, like the library tabs
+    archive->applyXMLAttribute("icon", "@res/icon/ico-archive.svg");
+    archive->applyXMLAttribute("iconActivate", "@res/icon/ico-archive-activate.svg");
+    this->addTab(archive, []() { return new ArchiveTab(); }, 1);
+    this->scheduleArchiveRefresh();
+}
+
+void MainTabFrame::scheduleArchiveRefresh() {
+    archiveRefreshTimer = brls::delay(3600000, [this] {
+        archiveRefreshTimer = 0;
+        stremio::archive::Cache::instance().refresh();
+        scheduleArchiveRefresh();
+    });
+}
+
 MainTabFrame::~MainTabFrame() {
+    if (archiveRefreshTimer) brls::cancelDelay(archiveRefreshTimer);
     // stashed tabs are detached from the tree, so nothing else frees them
     for (auto& [id, it] : this->hiddenStash_) delete it;
 }
@@ -383,7 +410,10 @@ std::vector<MainTabFrame::SidebarEntry> MainTabFrame::getReorderableEntries() {
         SidebarEntry e;
         e.id = id;
         e.visible = hidden.count(id) == 0;
-        if (id == "tab/playlists") {
+        if (id == "tab/archive") {
+            e.label = "main/archive/title"_i18n;
+            e.icon = "@res/icon/ico-archive.svg";
+        } else if (id == "tab/playlists") {
             e.label = brls::getStr("main/playlist/title");
             e.icon = "@res/icon/ico-playlist.svg";
         } else if (id == "tab/watchlist") {
@@ -419,7 +449,7 @@ void MainTabFrame::addOfflineLibraryTabs() {
     if (this->librariesLoaded) return;
     this->librariesLoaded = true;
 
-    size_t position = 1;
+    size_t position = this->getSidebar()->getView("tab/archive") ? 2 : 1;
     for (auto& s : OfflineLibrary::instance().sections()) {
         auto* item = new AutoSidebarItem();
         item->setTabStyle(AutoTabBarStyle::ACCENT);

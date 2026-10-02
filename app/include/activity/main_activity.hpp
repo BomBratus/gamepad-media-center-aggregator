@@ -61,6 +61,9 @@ public:
     ~MainTabFrame() override;
 
 private:
+    void scheduleArchiveRefresh();
+    void addArchiveTab();
+    size_t archiveRefreshTimer = 0;
     void addLibraryTabs(const std::vector<media::Section>& sections);
     /// offline mode: build the library tabs from the local catalog instead of
     /// /library/sections (SPEC §4.4)

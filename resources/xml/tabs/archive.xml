@@ -1,0 +1,27 @@
+<brls:Box width="auto" height="auto" axis="column" paddingTop="12" paddingLeft="24" paddingRight="24">
+    <brls:Label text="@i18n/main/archive/title" fontSize="28" marginBottom="6" />
+    <brls:Label id="archive/status" fontSize="15" marginBottom="10" />
+    <brls:Box width="auto" grow="1" axis="row">
+        <brls:ScrollingFrame width="330" height="auto" marginRight="18" scrollingBehavior="centered">
+            <brls:Box width="auto" axis="column">
+                <brls:InputCell id="archive/search" />
+                <brls:SelectorCell id="archive/type" />
+                <brls:SelectorCell id="archive/genre" />
+                <brls:SelectorCell id="archive/country" />
+                <brls:InputCell id="archive/years" />
+                <brls:SelectorCell id="archive/rating" />
+                <brls:SelectorCell id="archive/views" />
+                <brls:SelectorCell id="archive/service" />
+                <brls:SelectorCell id="archive/addon" />
+                <brls:SelectorCell id="archive/other" />
+                <brls:SelectorCell id="archive/sort" />
+                <brls:SelectorCell id="archive/order" />
+                <brls:Button id="archive/random" text="@i18n/main/archive/random" marginTop="12" />
+                <brls:Button id="archive/reset" text="@i18n/main/archive/reset" marginTop="8" />
+                <brls:Button id="archive/refresh" text="@i18n/main/archive/refresh" marginTop="8" />
+                <brls:Label id="archive/help" fontSize="13" marginTop="12" marginBottom="18" />
+            </brls:Box>
+        </brls:ScrollingFrame>
+        <RecyclingGrid id="archive/grid" grow="1" spanCount="4" itemImageRatio="1.5" itemExtraHeight="55" />
+    </brls:Box>
+</brls:Box>

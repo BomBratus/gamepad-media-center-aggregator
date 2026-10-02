@@ -22,6 +22,10 @@
                 title="@i18n/main/setting/libraries/header"
                 id="setting/libraries"
                 marginBottom="16px" />
+            <brls:RadioCell
+                title="@i18n/main/archive/refresh"
+                id="setting/archive_refresh"
+                marginBottom="16px" />
 
             <brls:Header
                 width="auto"
