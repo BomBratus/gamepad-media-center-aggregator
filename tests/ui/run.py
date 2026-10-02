@@ -245,6 +245,8 @@ def boot(app):
                      any(n.get('id') == 'tab/home' for n in nodes(s.get('tree', {}))) and not s['loading'], 'boot to Stremio home')
     assert state.get('mapping_verified'), 'SDL to Borealis button mapping was not verified'
     app.build_commit = state.get('build_commit')
+    expected = getattr(app, 'expected_commit', None)
+    assert not expected or (app.build_commit and expected.startswith(app.build_commit)), 'executable build commit differs from configured candidate'
     app.boot_seconds = time.monotonic() - app.boot
     app.checkpoint('home')
     return state
@@ -584,7 +586,19 @@ FUNCTIONS = {'movies': movie, 'series': series, 'source-picker': source_picker,
              'search': search, 'error-loading': error_loading}
 
 
-def runtime_case(name, directory, media):
+def configured_live():
+    candidates = [Path(os.environ['GMCA_TEST_LIVE_CONFIG'])] if os.environ.get('GMCA_TEST_LIVE_CONFIG') else [Path.home() / '.config/GMCA/config.json', Path.home() / '.cache/gmca-tvtest-live/config.json']
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate.read_text())
+            if any(s.get('type') == 'stremio' and s.get('access_token') and any(u.get('server_id') == s.get('id') for u in data.get('users', [])) for s in data.get('servers', [])):
+                return candidate
+        except (OSError, ValueError):
+            pass
+    return None
+
+
+def runtime_case(name, directory, media, expected_commit=None):
     result = {'scenario': name, 'status': 'FAIL', 'step': 'launch'}
     app = fixture = None
     began = time.monotonic()
@@ -593,7 +607,7 @@ def runtime_case(name, directory, media):
             path = Path(temporary) / 'config'
             if name == 'live':
                 candidates = [Path.home() / '.config/GMCA/config.json', Path.home() / '.cache/gmca-tvtest-live/config.json']
-                live = Path(os.environ['GMCA_TEST_LIVE_CONFIG']) if os.environ.get('GMCA_TEST_LIVE_CONFIG') else next((p for p in candidates if p.exists()), candidates[0])
+                live = configured_live() or candidates[0]
                 secrets = profile(path, None, live)
                 base = None
             else:
@@ -602,6 +616,7 @@ def runtime_case(name, directory, media):
                 secrets = profile(path, base)
             stop_previous()
             app = Runtime(BUILD / 'GMCA', directory, path, base, secrets)
+            app.expected_commit = expected_commit
             result['step'] = 'runtime'
             try:
                 scenarios(app, name, fixture)
@@ -640,6 +655,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('scenario', nargs='?', default='smoke', choices=['smoke', 'boot', 'navigation', 'movies', 'series', 'source-picker', 'continue-watching', 'resume', 'watched', 'search', 'error-loading', 'live'])
     parser.add_argument('--runtime-only', action='store_true', help='reuse already validated build for scenario debugging')
+    parser.add_argument('--fixture-only', action='store_true', help='omit optional read-only live case from smoke')
     parser.add_argument('--sync', action='store_true', help='fetch origin refs; never reset or merge local changes')
     args = parser.parse_args()
     os.umask(0o077)
@@ -669,7 +685,7 @@ def main():
             subprocess.run(['xrandr', '--current'], env=dict(os.environ, DISPLAY=os.environ.get('DISPLAY', ':0'), XAUTHORITY=os.environ.get('XAUTHORITY', '/home/michele/.Xauthority')), stdout=subprocess.DEVNULL, check=True)
             if args.sync:
                 result['step'] = 'fetch'
-                command(['git', 'fetch', 'origin', '--prune'], directory / 'build.log')
+                command(['git', 'fetch', 'origin', '--prune', '+refs/heads/*:refs/remotes/origin/*'], directory / 'build.log')
             result['step'] = 'stop previous test runtime'
             stop_previous()
             result['runtime_only'] = args.runtime_only
@@ -698,10 +714,15 @@ def main():
             result['step'] = 'runtime'
             selected = ('navigation', 'continue-watching', 'source-picker', 'resume', 'movies', 'watched', 'search', 'error-loading') if args.scenario == 'smoke' else (args.scenario,)
             result['cases'] = {}
+            if args.scenario == 'smoke':
+                if not args.fixture_only and configured_live():
+                    selected += ('live',)
+                else:
+                    result['cases']['live'] = {'status': 'SKIP', 'reason': 'fixture-only requested' if args.fixture_only else 'no authenticated local config'}
             for name in selected:
                 case_directory = directory / name if args.scenario == 'smoke' else directory
                 case_directory.mkdir(exist_ok=True)
-                case = runtime_case(name, case_directory, media)
+                case = runtime_case(name, case_directory, media, None if args.runtime_only else result['commit'])
                 result['cases'][name] = case
                 result['peak_rss_kib'] = max(result.get('peak_rss_kib', 0), case.get('peak_rss_kib', 0))
                 if case['status'] != 'PASS':

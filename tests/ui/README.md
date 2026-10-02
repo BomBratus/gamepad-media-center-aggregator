@@ -78,6 +78,11 @@ Files are created with private permissions. A failed assertion records its preci
 
 ## Live integration
 
+Smoke automatically adds the read-only live case when an authenticated local
+config is available; otherwise its result records an explicit SKIP. Use
+`smoke --fixture-only` for deterministic offline checks. An expired account
+remains a live FAIL rather than being silently replaced with fixture results.
+
 ```sh
 GMCA_TEST_LIVE_CONFIG=/private/path/config.json ./scripts/test-tvbox.sh live
 ```
