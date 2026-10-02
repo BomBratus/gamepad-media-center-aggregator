@@ -91,8 +91,7 @@ jobs:
           # Exact matches only: include every dependency and build recipe input.
           key: ps4-libmpv-v1-pacbrew-250221-${{ runner.arch }}-${{ hashFiles('scripts/ps4/dependencies.txt', 'scripts/ps4/install-dependencies.sh', 'scripts/ps4/build-patched-libmpv.sh', 'scripts/ps4/libmpv/**', '.github/workflows/build-ps4-stremio-only.yml') }}
 
-      - name: Set up Python for local libmpv build
-        if: steps.libmpv.outputs.cache-hit != 'true'
+      - name: Set up Python for build and manifest checks
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
