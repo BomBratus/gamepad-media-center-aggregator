@@ -148,6 +148,9 @@ public:
     void setEmpty(std::string title = "", std::string subtitle = "", std::string icon = "");
 
     void setError(std::string error = "");
+#ifdef GMCA_TEST_HARNESS
+    bool testError() const;
+#endif
 
     void selectRowAt(size_t index, bool animated);
 

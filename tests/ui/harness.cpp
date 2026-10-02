@@ -16,6 +16,7 @@
 #include "view/video_source.hpp"
 #include "activity/player_view.hpp"
 #include "view/mpv_core.hpp"
+#include "utils/config.hpp"
 
 namespace gmca::test {
 using json = nlohmann::json;
@@ -24,9 +25,21 @@ std::string env(const char* name) {
     const auto* value = std::getenv(name);
     return value ? value : "";
 }
+std::string observedId(brls::View* view, bool labels) {
+    const auto& id = view->testId();
+    return !labels && id.find("://") != std::string::npos ? "route/redacted" : id;
+}
+std::string observedClass(brls::View* view, bool labels) {
+    auto description = view->describe();
+    if (!labels && description.find("://") != std::string::npos) {
+        const auto suffix = description.find(" (id=");
+        return description.substr(0, suffix);
+    }
+    return description;
+}
 // Keep snapshots semantic and bounded. Never export free-form input/auth fields.
 json node(brls::View* view, size_t& count, bool labels) {
-    json out = {{"id", view->testId()}, {"class", view->describe()}};
+    json out = {{"id", observedId(view, labels)}, {"class", observedClass(view, labels)}};
     ++count;
     if (labels) {
         if (auto* label = dynamic_cast<brls::Label*>(view)) {
@@ -36,7 +49,7 @@ json node(brls::View* view, size_t& count, bool labels) {
     }
     if (auto* grid = dynamic_cast<RecyclingGrid*>(view)) out["items"] = grid->getItemCount();
     if (auto* recycler = dynamic_cast<RecyclingView*>(view)) {
-        if (auto* source = dynamic_cast<VideoDataSource*>(recycler->getDataSource())) {
+        if (auto* source = dynamic_cast<VideoDataSource*>(recycler->getDataSource()); source && labels) {
             out["continue_watching"] = source->testContinueWatching();
             out["media_items"] = json::array();
             for (const auto& item : source->testItems()) {
@@ -59,10 +72,21 @@ json node(brls::View* view, size_t& count, bool labels) {
 }
 void inspect(brls::View* view, json& out) {
     if (view->getVisibility() != brls::Visibility::VISIBLE) return;
+    const auto description = view->describe();
+    if (description.find("Skeleton") != std::string::npos) out["loading"] = true;
+    const std::pair<const char*, const char*> screens[] = {
+        {"HomeTab", "stremio_home"}, {"StremioCatalogs", "stremio_catalogs"},
+        {"MediaMovie", "stremio_movie"}, {"MediaSeries", "stremio_series"},
+        {"MediaSeason", "stremio_episodes"}, {"SearchTab", "search"},
+        {"GenresTab", "genres"}, {"HubView", "catalog"}, {"MediaCollection", "catalog"}, {"SearchResult", "search_results"}};
+    for (auto screen : screens)
+        if (description.find(screen.first) != std::string::npos) out["view"] = screen.second;
+    if (description.find("ContextMenu") != std::string::npos) out["dialog"] = "context_menu";
     if (dynamic_cast<brls::Dialog*>(view)) out["dialog"] = "dialog";
     if (dynamic_cast<brls::Dropdown*>(view)) out["dialog"] = "dropdown";
     if (auto* player = dynamic_cast<PlayerView*>(view)) {
         out["player"] = true;
+        out["view"] = "player";
         out["player_item"] = player->testItem();
         auto& mpv = MPVCore::instance();
         out["playback_seconds"] = mpv.playback_time;
@@ -71,33 +95,38 @@ void inspect(brls::View* view, json& out) {
     }
     if (auto* recycler = dynamic_cast<RecyclingView*>(view))
         if (recycler->testLoading()) out["loading"] = true;
+    if (auto* grid = dynamic_cast<RecyclingGrid*>(view))
+        if (grid->testError()) out["error"] = "request_failed";
     if (auto* label = dynamic_cast<brls::Label*>(view))
         if (label->testText() == brls::getStr("main/empty/error")) out["error"] = "request_failed";
     if (dynamic_cast<brls::ProgressSpinner*>(view)) out["loading"] = true;
-    if (view->testId() == "stremio/source-picker") out["source_picker"] = true;
+    if (view->testId() == "stremio/source-picker") { out["source_picker"] = true; out["view"] = "source_picker"; }
     if (view->testId() == "stremio/resume-menu") out["dialog"] = "resume";
     if (auto* box = dynamic_cast<brls::Box*>(view))
         for (auto* child : box->getChildren()) inspect(child, out);
 }
 json state() {
-    json out = {{"ready", true}, {"dialog", nullptr}, {"loading", brls::Application::isInputBlocks()},
-                {"source_picker", false}, {"player", false}, {"focus", nullptr}, {"error", nullptr}};
+    json out = {{"ready", true}, {"input_blocked", brls::Application::isInputBlocks()}, {"dialog", nullptr}, {"loading", brls::Application::isInputBlocks()},
+                {"source_picker", false}, {"player", false}, {"view", nullptr}, {"focus", nullptr}, {"error", nullptr}};
     auto stack = brls::Application::getActivitiesStack();
     out["depth"] = stack.size();
+    for (auto* activity : stack)
+        if (auto* player = dynamic_cast<PlayerView*>(activity->getContentView())) inspect(player, out);
+    out["build_commit"] = AppVersion::getCommit();
     if (!stack.empty()) {
         auto* root = stack.back()->getContentView();
         if (root) {
             size_t count = 0;
             // Only fixture runs export labels. Live snapshots contain IDs/classes.
             out["tree"] = node(root, count, !env("GMCA_TEST_FIXTURE_URL").empty());
-            out["activity"] = root->describe();
+            out["activity"] = observedClass(root, !env("GMCA_TEST_FIXTURE_URL").empty());
             inspect(root, out);
         }
     }
     if (auto* focus = brls::Application::getCurrentFocus()) {
         out["focus"] = json::array();
         for (auto* v = focus; v; v = v->getParent()) {
-            out["focus"].push_back({{"id", v->testId()}, {"class", v->describe()}});
+            out["focus"].push_back({{"id", observedId(v, !env("GMCA_TEST_FIXTURE_URL").empty())}, {"class", observedClass(v, !env("GMCA_TEST_FIXTURE_URL").empty())}});
         }
     }
     out["mapping_verified"] = true;
@@ -216,7 +245,8 @@ void Harness::tick() {
         } else if (cmd == "quit") { brls::Application::quit(); reply = {{"ok", true}}; }
         else throw std::runtime_error("unknown test command");
     } catch (const std::exception&) { reply = {{"error", "invalid test command"}}; }
-    const auto bytes = reply.dump();
+    auto bytes = reply.dump();
+    if (bytes.size() > 180000) bytes = json({{"error", "test snapshot exceeded socket limit"}}).dump();
     send(client_, bytes.data(), bytes.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
     close(client_); client_ = -1;
 }
