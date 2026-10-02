@@ -67,5 +67,23 @@ int main() {
     resolved.duration = 3600000;
     assert(stremio::applySeriesContinuation(wire, resolved, true));
     assert(wire.key == sixth && wire.viewOffset == 2400000 && wire.duration == 3600000);
+    // Leave E1 midway, skip to E2, and finish E2: Home and Next Up must
+    // advance to E3, retaining E1's independent resume checkpoint.
+    auto skipped = remoteOnly;
+    for (auto& e : skipped) { e.viewCount = 0; e.viewOffset = 0; }
+    skipped[1].viewOffset = 2500;
+    skipped[1].duration = 10000;
+    skipped[2].viewCount = 1;
+    assert(stremio::episodeContinuationFromLatest(skipped, skipped[2].ratingKey) == 3);
+    assert(skipped[1].viewOffset == 2500 && !stremio::episodeCompleted(skipped[1]));
+    // Finishing the last episode must not resurrect an older partial.
+    skipped[3].viewCount = 1;
+    assert(stremio::episodeContinuationFromLatest(skipped, skipped[3].ratingKey) == -1);
+    // A deliberate return to the older episode resumes it; a newer partial
+    // also wins over older partials, even across seasons.
+    assert(stremio::episodeContinuationFromLatest(skipped, skipped[1].ratingKey) == 1);
+    skipped[3].viewCount = 0; skipped[3].viewOffset = 1500; skipped[3].duration = 10000;
+    assert(stremio::episodeContinuationFromLatest(skipped, skipped[3].ratingKey) == 3);
+    assert(stremio::episodeContinuationFromLatest(skipped, "missing") == 1);
     std::puts("episode continuation: PASS");
 }

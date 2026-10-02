@@ -1366,10 +1366,7 @@ void StremioBackend::getContinueWatching(
                                 applyEpisodeWatched(episode, watched);
                                 applyEpisodeProgress(episode, remote, localProgress, watched);
                             }
-                            const bool completed = watched.count(episodeKey) ||
-                                completedPosition(item.viewOffset, item.duration);
-                            const bool partial = std::any_of(episodes.begin(), episodes.end(), episodePartial);
-                            const int next = episodeContinuationIndex(episodes, completed && !partial ? episodeKey : "");
+                            const int next = episodeContinuationFromLatest(episodes, episodeKey);
                             if (next >= 0) selected = episodes[next];
                             break;
                         } catch (const std::exception& ex) {
@@ -1806,14 +1803,8 @@ void StremioBackend::getNextUp(
     const auto show = parseId(showId);
     getAllEpisodes(showId, false, [then, show](media::Container<media::Item> episodes) {
         const auto progress = loadEpisodeProgress(show.baseId);
-        std::string completedKey;
         const std::string lastKey = episodeId(show.baseId, progress.videoId, show.stremioType);
-        for (const auto& episode : episodes.Items)
-            if (episode.ratingKey == lastKey && episodeCompleted(episode)) completedKey = lastKey;
-        const bool partial = std::any_of(episodes.Items.begin(), episodes.Items.end(), [](const media::Item& e) {
-            return episodePartial(e);
-        });
-        const int index = episodeContinuationIndex(episodes.Items, partial ? "" : completedKey);
+        const int index = episodeContinuationFromLatest(episodes.Items, lastKey);
         then(index >= 0 ? episodes.Items[index] : media::Item{}, false);
     }, [then](const std::string&) { then(media::Item{}, false); });
 }

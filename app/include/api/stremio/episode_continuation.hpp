@@ -62,4 +62,16 @@ inline int episodeContinuationIndex(const std::vector<media::Item>& episodes,
     }
     return -1;
 }
+// Continue Watching and Next Up follow the latest episode. Older checkpoints
+// remain available in the episode list without moving the series backwards.
+inline int episodeContinuationFromLatest(const std::vector<media::Item>& episodes,
+    const std::string& latestKey) {
+    for (size_t i = 0; i < episodes.size(); ++i) {
+        if (episodes[i].ratingKey != latestKey) continue;
+        if (episodePartial(episodes[i])) return static_cast<int>(i);
+        if (episodeCompleted(episodes[i])) return episodeContinuationIndex(episodes, latestKey);
+        break;
+    }
+    return episodeContinuationIndex(episodes);
+}
 } // namespace stremio
