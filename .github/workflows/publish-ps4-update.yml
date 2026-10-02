@@ -1,19 +1,10 @@
 name: publish PS4 Stremio update
 
 on:
-  push:
+  workflow_run:
+    workflows: [ build PS4 Stremio-only ]
+    types: [ completed ]
     branches: [ dev ]
-    paths:
-      - CMakeLists.txt
-      - cmake/**
-      - app/**
-      - library/**
-      - resources/**
-      - scripts/**
-      - tests/**
-      - .gitmodules
-      - .github/workflows/build-ps4-stremio-only.yml
-      - .github/workflows/publish-ps4-update.yml
 
 permissions:
   actions: read
@@ -26,34 +17,35 @@ concurrency:
 
 jobs:
   publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
       ROLLING_TAG: ps4-stremio-latest
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+      SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 2
 
-      - name: Find validated PR artifact
+      - name: Find validated dev build artifact
         id: source
         shell: bash
         run: |
           set -euo pipefail
+          run_id="$SOURCE_RUN_ID"
+          head_sha="$SOURCE_SHA"
+          [[ "$run_id" =~ ^[0-9]+$ ]]
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
 
-          head_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '.[0].head.sha // empty')"
-          if [ -z "$head_sha" ]; then
-            echo "No merged pull request is associated with $GITHUB_SHA; nothing to publish."
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          run_id="$(
-            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build-ps4-stremio-only.yml/runs?event=pull_request&head_sha=$head_sha&per_page=20" \
-              --jq '[.workflow_runs[] | select(.conclusion == "success")][0].id // empty'
-          )"
-          if [ -z "$run_id" ]; then
-            echo "No successful PS4 Stremio-only PR workflow found for $head_sha."
+          # Publish only the current dev revision, never an obsolete build.
+          current_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/dev" --jq '.commit.sha')"
+          if [ "$head_sha" != "$current_sha" ]; then
+            echo "Build $run_id is superseded by $current_sha; nothing to publish."
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -168,7 +160,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ steps.payload.outputs.version }}"
-          notes="Validated GMCA PS4 Stremio-only rolling update $version. Source PR artifact run: ${{ steps.source.outputs.run_id }}."
+          notes="Validated GMCA PS4 Stremio-only rolling update $version. Source validated dev build: ${{ steps.source.outputs.run_id }}."
 
           if gh release view "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             # Replace the payload first and the manifest last: a console can only

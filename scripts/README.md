@@ -40,8 +40,8 @@ account coverage.
 ## PS4 build caches
 
 The Stremio-only build runs on pushes to `dev` and PS4 release branches, on
-relevant pull requests, and by manual dispatch. Publishing remains a separate
-workflow.
+relevant pull requests, and by manual dispatch. A successful build of the current `dev` revision triggers the separate
+publishing workflow. Superseded builds and pull-request builds do not publish.
 
 Pinned package downloads are listed in `ps4/dependencies.txt` and cached before
 installation. Patched libmpv is cached separately, including its static library,
