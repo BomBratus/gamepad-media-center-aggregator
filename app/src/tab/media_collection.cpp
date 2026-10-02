@@ -39,6 +39,7 @@ public:
         // 2026-06-10) -> Kometa poster via the server's photo transcoder
         // (genre_image.cpp); unknown genre -> placeholder set by
         // prepareForReuse (no request, the Kometa set is embedded)
+        cell->setId("genre/" + item.key);
         cell->labelTitle->setText(item.title);
         cell->labelExt->setVisibility(brls::Visibility::GONE);
         // Kometa posters are keyed by the English genre name; the displayed

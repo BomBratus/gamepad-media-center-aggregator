@@ -21,7 +21,16 @@ cmake_dependent_option(USE_LIBUSBHSFS "Use libusbhsfs for ums access" OFF "PLATF
 # PS4
 # Personal/lean profile for installations that use GMCA only as a Stremio client.
 # Normal PS4 builds remain multi-backend unless this is explicitly enabled.
-cmake_dependent_option(GMCA_STREMIO_ONLY "Build PS4 with only Stremio connection setup" OFF "PLATFORM_PS4" OFF)
+option(GMCA_STREMIO_ONLY "Build with only Stremio connection setup" OFF)
+if (GMCA_STREMIO_ONLY AND NOT PLATFORM_DESKTOP AND NOT PLATFORM_PS4)
+    message(FATAL_ERROR "GMCA_STREMIO_ONLY supports desktop and PS4")
+endif ()
+option(GMCA_TEST_HARNESS "Enable desktop SDL controller runtime tests" OFF)
+if (GMCA_TEST_HARNESS)
+    if (NOT PLATFORM_DESKTOP OR PLATFORM_PS4 OR NOT USE_SDL2 OR NOT UNIX OR APPLE)
+        message(FATAL_ERROR "GMCA_TEST_HARNESS requires Linux PLATFORM_DESKTOP and USE_SDL2")
+    endif ()
+endif ()
 
 # mpv related
 # If your system does not support OpenGL(ES), you can use software rendering, but it will affect performance.
@@ -102,7 +111,7 @@ if (GMCA_STREMIO_ONLY)
     # and avoids destabilizing playback or cross-platform code.
     list(FILTER MAIN_SRC EXCLUDE REGEX "/app/src/tab/(plex_add|jellyfin_add)\\.cpp$")
     list(APPEND APP_PLATFORM_OPTION -DGMCA_STREMIO_ONLY)
-    message(STATUS "GMCA PS4 Stremio-only connection profile enabled")
+    message(STATUS "GMCA Stremio-only connection profile enabled")
 endif ()
 if (PLATFORM_SWITCH)
     # System service initialization functions required for libnx
@@ -251,13 +260,23 @@ if (USE_LIBUSBHSFS)
     list(APPEND APP_PLATFORM_OPTION -DUSE_LIBUSBHSFS)
 endif ()
 
+if (GMCA_TEST_HARNESS)
+    find_package(SDL2 2.24 REQUIRED)
+    list(APPEND MAIN_SRC ${PROJECT_SOURCE_DIR}/tests/ui/harness.cpp)
+    list(APPEND APP_PLATFORM_OPTION -DGMCA_TEST_HARNESS)
+    list(APPEND APP_PLATFORM_INCLUDE ${PROJECT_SOURCE_DIR}/tests/ui)
+    target_compile_definitions(borealis PUBLIC GMCA_TEST_HARNESS)
+endif ()
+
 # building target
 program_target(${PROJECT_NAME} "${MAIN_SRC}")
 set_target_properties(${PROJECT_NAME} PROPERTIES CXX_STANDARD 17)
 target_include_directories(${PROJECT_NAME} PRIVATE app/include ${APP_PLATFORM_INCLUDE})
 target_compile_options(${PROJECT_NAME} PRIVATE -ffunction-sections -fdata-sections -Wunused-variable ${APP_PLATFORM_OPTION})
 target_link_libraries(${PROJECT_NAME} PRIVATE borealis lunasvg ${APP_PLATFORM_LIB})
-target_compile_definitions(${PROJECT_NAME} PRIVATE
+# Version macros are consumed only by version.cpp. Keep commit metadata local
+# to that translation unit so each incremental configure does not rebuild GMCA.
+set_property(SOURCE app/src/utils/version.cpp APPEND PROPERTY COMPILE_DEFINITIONS
     APP_VERSION=${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_ALTER}
     APP_BUILD=${VERSION_BUILD}
     BUILD_TAG_SHORT=${GIT_TAG_SHORT}

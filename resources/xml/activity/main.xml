@@ -16,6 +16,7 @@
             sidebarPosition="left">
 
             <Tab label=""
+                id="tab/home"
                 fontSize="18"
                 icon="@res/icon/ico-home.svg"
                 iconActivate="@res/icon/ico-home-activate.svg">
@@ -23,6 +24,7 @@
             </Tab>
 
             <Tab label=""
+                id="tab/search"
                 fontSize="18"
                 icon="@res/icon/ico-search.svg"
                 iconActivate="@res/icon/ico-search-activate.svg">

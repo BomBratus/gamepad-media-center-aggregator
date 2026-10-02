@@ -1,0 +1,16 @@
+--- a/library/include/borealis/core/view.hpp
++++ b/library/include/borealis/core/view.hpp
+@@ -766,2 +766,5 @@
+      */
++#ifdef GMCA_TEST_HARNESS
++    const std::string& testId() const { return id; }
++#endif
+     void setId(std::string id);
+--- a/library/include/borealis/views/label.hpp
++++ b/library/include/borealis/views/label.hpp
+@@ -75,2 +75,5 @@
+      */
++#ifdef GMCA_TEST_HARNESS
++    const std::string& testText() const { return fullText; }
++#endif
+     virtual void setText(const std::string& text);

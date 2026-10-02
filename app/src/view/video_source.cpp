@@ -69,10 +69,11 @@ void showStremioResumeSourcePicker(const media::Item& card, int64_t seekMs, bool
                 return;
             }
             auto* picker = new brls::Dropdown("main/stremio/playback/choose_source"_i18n, choices,
-                [play, playable](int selected) {
+                [](int) {}, 0, [play, playable](int selected) {
                     if (selected < 0 || selected >= (int)playable.size()) return;
                     play(playable[(size_t)selected]);
                 });
+            picker->setId("stremio/source-picker");
             brls::Application::pushActivity(new brls::Activity(picker));
         },
         [](const std::string& error) { Dialog::show(error); });
@@ -112,6 +113,7 @@ void showStremioResumeDialog(brls::Box* recycler, const media::Item& card) {
             default: break;
             }
         });
+    picker->setId("stremio/resume-menu");
     brls::Application::pushActivity(new brls::Activity(picker));
 }
 

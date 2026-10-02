@@ -33,3 +33,8 @@ plezy/
 # Local dev tooling hook (points at an untracked .github/skills/)
 /.github/hooks/
 
+
+/test-results/
+/tests/ui/__pycache__/
+
+/.tmp/

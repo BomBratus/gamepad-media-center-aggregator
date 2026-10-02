@@ -439,11 +439,14 @@ void MediaMovie::buildSources(const media::Item& item) {
                                      : sourcePill("main/stremio/source/uncached"_i18n, pillBg, greyCol));
         else
             cells.push_back(sourcePill("main/stremio/source/direct"_i18n, pillBg, textCol));
+#if defined(GMCA_STREMIO_ONLY) || defined(GMCA_PS4_SAFE_SOURCES)
+        if (stremio::hasItalianAudio(m.sourceName + " " + m.sourceTitle))
+            cells.push_back(sourcePill("main/stremio/source/italian_audio"_i18n, pillBg, textCol));
+#endif
 #if defined(GMCA_PS4_SAFE_SOURCES)
         std::string warning = stremio::ps4WarningLabel(m);
         if (!warning.empty()) cells.push_back(sourcePill(fmt::format("main/stremio/source/ps4_risk"_i18n, warning), goldBg, goldFg));
-        if (stremio::hasItalianAudio(m.sourceName + " " + m.sourceTitle))
-            cells.push_back(sourcePill("main/stremio/source/italian_audio"_i18n, pillBg, textCol));
+
         // Prefer the concrete release title on PS4; keep addon + parsed metadata
         // as the secondary line so the user can identify both provider and file.
         std::string primary = !m.sourceTitle.empty() ? m.sourceTitle :

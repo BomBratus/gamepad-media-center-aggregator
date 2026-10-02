@@ -1,4 +1,7 @@
 #include "api/http.hpp"
+#ifdef GMCA_TEST_HARNESS
+#include "harness.hpp"
+#endif
 #include "utils/config.hpp"
 #include <borealis/core/logger.hpp>
 #include <curl/curl.h>
@@ -265,7 +268,12 @@ std::string HTTP::encode_form(const Form& form) {
 }
 
 void HTTP::_get(const std::string& url, std::ostream* out) {
-    curl_easy_setopt(this->easy, CURLOPT_URL, url.c_str());
+#ifdef GMCA_TEST_HARNESS
+    const auto target = gmca::test::requestUrl(url, false);
+#else
+    const auto& target = url;
+#endif
+    curl_easy_setopt(this->easy, CURLOPT_URL, target.c_str());
     curl_easy_setopt(this->easy, CURLOPT_HTTPGET, 1L);
     int code = this->perform(out);
     if (code >= 400) throw curl_error(fmt::format("http status {}", code));
@@ -280,8 +288,13 @@ int HTTP::propfind(const std::string& url, std::ostream* out) {
 }
 
 std::string HTTP::_post(const std::string& url, const std::string& data) {
+#ifdef GMCA_TEST_HARNESS
+    const auto target = gmca::test::requestUrl(url, true);
+#else
+    const auto& target = url;
+#endif
     std::ostringstream body;
-    curl_easy_setopt(this->easy, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(this->easy, CURLOPT_URL, target.c_str());
     curl_easy_setopt(this->easy, CURLOPT_POSTFIELDS, data.c_str());
     curl_easy_setopt(this->easy, CURLOPT_POSTFIELDSIZE, data.size());
     int code = this->perform(&body);
@@ -290,8 +303,13 @@ std::string HTTP::_post(const std::string& url, const std::string& data) {
 }
 
 std::string HTTP::_put(const std::string& url, const std::string& data) {
+#ifdef GMCA_TEST_HARNESS
+    const auto target = gmca::test::requestUrl(url, true);
+#else
+    const auto& target = url;
+#endif
     std::ostringstream body;
-    curl_easy_setopt(this->easy, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(this->easy, CURLOPT_URL, target.c_str());
     curl_easy_setopt(this->easy, CURLOPT_POSTFIELDS, data.c_str());
     curl_easy_setopt(this->easy, CURLOPT_POSTFIELDSIZE, data.size());
     curl_easy_setopt(this->easy, CURLOPT_CUSTOMREQUEST, "PUT");
@@ -301,7 +319,12 @@ std::string HTTP::_put(const std::string& url, const std::string& data) {
 }
 
 void HTTP::_delete(const std::string& url, std::ostream* out) {
-    curl_easy_setopt(this->easy, CURLOPT_URL, url.c_str());
+#ifdef GMCA_TEST_HARNESS
+    const auto target = gmca::test::requestUrl(url, true);
+#else
+    const auto& target = url;
+#endif
+    curl_easy_setopt(this->easy, CURLOPT_URL, target.c_str());
     curl_easy_setopt(this->easy, CURLOPT_CUSTOMREQUEST, "DELETE");
     int code = this->perform(out);
     if (code >= 400) throw curl_error(fmt::format("http status {}", code));

@@ -11,6 +11,10 @@ public:
     explicit VideoDataSource(const MediaList& r, const std::string& parentId);
 
     size_t getItemCount() override;
+#ifdef GMCA_TEST_HARNESS
+    const MediaList& testItems() const { return list; }
+    bool testContinueWatching() const { return stremioContinueWatching; }
+#endif
 
     RecyclingGridItem* cellForRow(RecyclingView* recycler, size_t index) override;
 
