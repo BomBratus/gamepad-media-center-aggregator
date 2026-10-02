@@ -169,9 +169,9 @@ inline Json serialize(const Record& r) {
     return {{"meta", r.meta}, {"addons", r.addons}, {"added", r.added}, {"updated", r.updated}};
 }
 
-inline Record deserialize(const Json& j) {
+inline Record deserialize(Json j) {
     Record r;
-    r.meta = j.at("meta");
+    r.meta = std::move(j.at("meta"));
     if (!r.meta.is_object() || media::jstr(r.meta, "id").empty()) throw std::runtime_error("Invalid archive record");
     r.addons = tags(j, "addons");
     r.added = media::jint(j, "added"); r.updated = media::jint(j, "updated");

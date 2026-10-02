@@ -43,9 +43,12 @@ outages. A changed profile/addon configuration cancels the old job; shutdown
 also cancels its HTTP requests before the HTTP pool is joined.
 
 The job uses one HTTP-pool slot instead of Borealis's serial async queue. Its
-requests are serial, with a short pause between pages. Limits of 50,000 records,
-64 MiB of serialized metadata, 2,000 page requests and 30 minutes per pass keep
-console memory, disk and network work bounded. Incomplete enumeration is labelled
+requests are serial, with a short pause between pages. There is no fixed title
+count or metadata-file size cutoff. Cache writes serialize one record at a time
+to avoid duplicating the entire encoded archive in memory. Existing caches are
+recrawled after removing the old cap so previously discarded titles can be added.
+The 2,000-request and 30-minute budgets bound each pass, with saved progress
+continuing on the next pass; they do not limit the total archive size. Incomplete enumeration is labelled
 **Partial catalog coverage**. Failed network passes retry with a ten-minute
 backoff while Archive is open; passes stopped by time/request budgets also resume after that backoff. Completed
 passes use the normal three-day schedule. Metadata already archived is retained when a provider later omits it.

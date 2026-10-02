@@ -112,8 +112,8 @@ void Cache::refresh(bool force) {
             std::lock_guard<std::mutex> guard(job->mutex);
             old = job->snapshot;
             const auto time = now();
-            if (!force && ((old->crawlVersion == 2 && old->crawlFinished && old->refreshed && time - old->refreshed < 3 * 86400) || time - job->attempted < 600)) {
-                job->nextCheck = old->crawlVersion == 2 && old->crawlFinished && old->refreshed && time - old->refreshed < 3 * 86400 ? old->refreshed + 3 * 86400 : job->attempted + 600;
+            if (!force && ((old->crawlVersion == 3 && old->crawlFinished && old->refreshed && time - old->refreshed < 3 * 86400) || time - job->attempted < 600)) {
+                job->nextCheck = old->crawlVersion == 3 && old->crawlFinished && old->refreshed && time - old->refreshed < 3 * 86400 ? old->refreshed + 3 * 86400 : job->attempted + 600;
                 job->refreshing = false;
                 return;
             }
@@ -123,8 +123,8 @@ void Cache::refresh(bool force) {
         }
         try {
             Snapshot next = *old;
-            if (next.crawlVersion != 2 || next.crawlFinished) next.crawl = Json::object();
-            next.crawlVersion = 2;
+            if (next.crawlVersion != 3 || next.crawlFinished) next.crawl = Json::object();
+            next.crawlVersion = 3;
             next.crawlFinished = false;
             std::unordered_map<std::string, size_t> ids;
             for (size_t i = 0; i < next.records.size(); ++i) ids[identity(next.records[i].meta)] = i;
@@ -173,7 +173,6 @@ void Cache::refresh(bool force) {
                                 auto id = identity(meta);
                                 auto existing = ids.find(id);
                                 if (existing == ids.end()) {
-                                    if (next.records.size() >= MAX_RECORDS) { partial = true; continue; }
                                     ids[id] = next.records.size();
                                     next.records.push_back({meta, {manifest.name}, now(), now()});
                                 } else {

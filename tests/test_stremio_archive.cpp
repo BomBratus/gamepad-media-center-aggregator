@@ -94,10 +94,33 @@ int main() {
     assert(old.records.size() == 1 && old.crawlVersion == 0 && !old.crawlFinished);
     assert(read.refreshed == 123456 && read.partial && read.records.size() == 300);
     assert(select(read.records, threshold) == std::vector<size_t>{148});
-    Snapshot oversized = snapshot;
-    oversized.records.front().meta["description"] = std::string(MAX_CACHE_BYTES + 1, 'x');
+    // Both old cutoffs are gone, including on reload after an app restart.
+    {
+        Snapshot large;
+        large.records.reserve(50001);
+        for (size_t i = 0; i < 50001; ++i)
+            large.records.push_back({{{"id", "tt" + std::to_string(i)}, {"type", "movie"}}, {}, 0, 0});
+        auto largePath = (dir / "large.json").string();
+        writeSnapshot(largePath, large);
+        auto restored = readSnapshot(largePath);
+        assert(restored.records.size() == 50001);
+        assert(media::jstr(restored.records.back().meta, "id") == "tt50000");
+    }
+    {
+        Snapshot large;
+        large.records.push_back(records[0]);
+        large.records[0].meta["description"] = std::string(64 * 1024 * 1024 + 1, 'x');
+        auto largePath = (dir / "large-bytes.json").string();
+        writeSnapshot(largePath, large);
+        assert(std::filesystem::file_size(largePath) > 64 * 1024 * 1024);
+        auto restored = readSnapshot(largePath);
+        assert(restored.records[0].meta["description"] == large.records[0].meta["description"]);
+    }
+    Snapshot invalid = snapshot;
+    // A failure midway through streamed serialization must preserve the old file.
+    invalid.records.back().meta["description"] = std::string(1, static_cast<char>(0xff));
     bool threw = false;
-    try { writeSnapshot(path, oversized); } catch (...) { threw = true; }
+    try { writeSnapshot(path, invalid); } catch (...) { threw = true; }
     assert(threw && readSnapshot(path).records.size() == 300);
     assert(!std::filesystem::exists(path + ".tmp"));
     std::ofstream(path) << "broken json";
