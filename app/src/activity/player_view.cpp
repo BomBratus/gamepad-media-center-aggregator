@@ -128,7 +128,9 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
                 this->checkpointPlayback(int64_t(mpv.getDouble("playback-time", -1) * 1000));
             break;
         case MpvEventEnum::SEEK_START:
-        case MpvEventEnum::LOADING_START:
+        case MpvEventEnum::START_FILE:
+            // LOADING_START also represents core-idle during a pause or
+            // buffering. It must not disable checkpoints for a loaded file.
             this->playbackCheckpoint.suspend();
             break;
         case MpvEventEnum::MPV_STOP:

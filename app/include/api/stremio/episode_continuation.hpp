@@ -18,6 +18,29 @@ inline bool episodePartial(const media::Item& episode) {
     return !episodeCompleted(episode) && episode.viewOffset > 0;
 }
 
+// A show's newest active checkpoint is sufficient to render its resume card,
+// including when the metadata provider is temporarily unavailable.
+inline bool resumeCheckpointEpisode(media::Item& show, const std::string& episodeKey) {
+    if (episodeKey.empty() || !episodePartial(show)) return false;
+    show.key = episodeKey;
+    return true;
+}
+
+// A missing provider result is not evidence that a series is finished.
+// Return false only when a usable episode list has no continuation left.
+inline bool applySeriesContinuation(media::Item& show, const media::Item& selected, bool resolvedEpisodes) {
+    if (selected.ratingKey.empty()) {
+        if (resolvedEpisodes) return false;
+        show.key = show.ratingKey;  // open overview until episodes can be resolved
+        show.viewOffset = 0;
+    } else {
+        show.key = selected.ratingKey;
+        show.viewOffset = selected.viewOffset;
+        show.duration = selected.duration;
+    }
+    return true;
+}
+
 // Episodes are ordered by season/episode by the backend. An explicit current
 // key advances strictly forward; entry without a key resumes a partial first.
 inline int episodeContinuationIndex(const std::vector<media::Item>& episodes,

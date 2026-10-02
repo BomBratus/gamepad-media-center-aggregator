@@ -1144,8 +1144,8 @@ void StremioBackend::getHomeHubs(
                 }
                 if (res.items.empty()) continue;
                 media::Hub h;
-                h.title = (classifyAnimeCatalog(cat.type, cat.id, cat.name, cat.genres, cat.hasGenre()) !=
-                        AnimeCatalogKind::None ? loc.anime : typeLabel(loc, cat.type)) +
+                h.title = (animeCatalogResults(classifyAnimeCatalog(cat.type, cat.id, cat.name, cat.genres, cat.hasGenre()),
+                        pc.genreFilter) ? loc.anime : typeLabel(loc, cat.type)) +
                     " · " + bestCatalogLabel(loc, pc.addon, cat);
                 h.hubIdentifier = "home.catalog." + std::to_string(out.Items.size());
                 h.key = catalogKey(pc.addon.base, cat.type, cat.id, pc.genreFilter);  // "see all" -> getHubPage
@@ -1384,7 +1384,15 @@ void StremioBackend::getContinueWatching(
                 std::string videoId = state == libraryItem.end() ? "" : jstr(*state, "videoId");
                 std::string episodeKey = episodeId(item.guid, videoId, parseId(item.ratingKey).stremioType);
                 if (item.type == media::mediaTypeShow) {
+                    // An active checkpoint already identifies the episode to
+                    // resume. Do not depend on an addon metadata request or an
+                    // older partial episode to keep this series on Home.
+                    if (resumeCheckpointEpisode(item, episodeKey)) {
+                        h.items.push_back(std::move(item));
+                        continue;
+                    }
                     media::Item selected;
+                    bool resolvedEpisodes = false;
                     const auto resourceType = parseId(item.ratingKey).stremioType;
                     for (const auto& addon : engine->addonsFor("meta", resourceType, item.guid)) {
                         try {
@@ -1392,6 +1400,10 @@ void StremioBackend::getContinueWatching(
                             auto meta = result.find("meta");
                             if (meta == result.end() || !meta->is_object()) continue;
                             auto episodes = parseEpisodes(*meta, parseMeta(*meta));
+                            // Some meta providers return only a series preview.
+                            // Give the next provider a chance to resolve episodes.
+                            if (episodes.empty()) continue;
+                            resolvedEpisodes = true;
                             auto remote = loadEpisodeProgress(item.guid);
                             for (auto& episode : episodes) {
                                 applyEpisodeWatched(episode, watched);
@@ -1407,10 +1419,7 @@ void StremioBackend::getContinueWatching(
                             brls::Logger::warning("stremio continuation: {}", ex.what());
                         }
                     }
-                    if (selected.ratingKey.empty()) continue;
-                    item.key = selected.ratingKey;
-                    item.viewOffset = selected.viewOffset;
-                    item.duration = selected.duration;
+                    if (!applySeriesContinuation(item, selected, resolvedEpisodes)) continue;
                 } else if (item.duration > 0 && item.viewOffset >= item.duration) {
                     continue;
                 }

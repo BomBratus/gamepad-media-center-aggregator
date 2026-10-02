@@ -35,6 +35,12 @@ int main() {
     CHECK(stremio::classifyAnimeCatalog("movie", "top", "Popular", {"Anime"}, true) ==
         AnimeCatalogKind::GenreFiltered);
 
+    CHECK(!stremio::animeCatalogResults(AnimeCatalogKind::GenreFiltered, ""));
+    CHECK(!stremio::animeCatalogResults(AnimeCatalogKind::GenreFiltered, "Drama"));
+    CHECK(stremio::animeCatalogResults(AnimeCatalogKind::GenreFiltered, "Anime"));
+    CHECK(stremio::animeCatalogResults(AnimeCatalogKind::Dedicated, ""));
+    CHECK(!stremio::animeCatalogResults(AnimeCatalogKind::None, "Anime"));
+
     // A descriptor whose native Stremio type is anime remains eligible even
     // when its catalog id and provider name do not contain the word Anime.
     const auto nativeAnimeManifest = stremio::parseManifest(nlohmann::json::parse(R"({

@@ -491,6 +491,7 @@
       "ps4_risk": "PS4 RISK: {}"
     },
     "playback": {
+      "open_overview": "Open overview",
       "resume_episode": "Resume episode",
       "restart_episode": "Restart episode",
       "resume_movie": "Resume movie",

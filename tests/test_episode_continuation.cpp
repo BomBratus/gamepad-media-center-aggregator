@@ -41,5 +41,31 @@ int main() {
     assert(stremio::episodeCompleted(remoteOnly[2]));
     assert(stremio::episodeContinuationIndex(remoteOnly, remoteOnly[2].ratingKey) == 3);
     assert(stremio::remotePlaybackOffset(false, true, 9000) == 0);
+    // The Wire: manually moving from E4 to E6 must retain E6 at 40 min,
+    // without fetching metadata or selecting an older partial episode.
+    auto wire = stremio::parseMeta(nlohmann::json::parse(
+        R"({"id":"tt0306414","type":"series","name":"The Wire"})"));
+    wire.viewOffset = 40 * 60 * 1000;
+    wire.duration = 60 * 60 * 1000;
+    const auto sixth = stremio::episodeId(wire.guid, "tt0306414:1:6", "series");
+    assert(stremio::resumeCheckpointEpisode(wire, sixth));
+    assert(wire.key == sixth && wire.viewOffset == 2400000);
+    assert(!stremio::resumeCheckpointEpisode(wire, ""));
+    wire.viewOffset = 0;
+    assert(!stremio::resumeCheckpointEpisode(wire, sixth));
+    wire.viewOffset = wire.duration;
+    assert(!stremio::resumeCheckpointEpisode(wire, sixth));
+    // Addon failure must keep a series visible and route it to its overview;
+    // a confirmed finished series should still disappear.
+    media::Item unavailable;
+    assert(stremio::applySeriesContinuation(wire, unavailable, false));
+    assert(wire.key == wire.ratingKey && wire.viewOffset == 0);
+    assert(!stremio::applySeriesContinuation(wire, unavailable, true));
+    media::Item resolved;
+    resolved.ratingKey = sixth;
+    resolved.viewOffset = 2400000;
+    resolved.duration = 3600000;
+    assert(stremio::applySeriesContinuation(wire, resolved, true));
+    assert(wire.key == sixth && wire.viewOffset == 2400000 && wire.duration == 3600000);
     std::puts("episode continuation: PASS");
 }

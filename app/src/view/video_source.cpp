@@ -91,13 +91,28 @@ void showStremioResumeDialog(brls::Box* recycler, const media::Item& card) {
         if (remainingMin > 0) meta += fmt::format("main/stremio/playback/min_left"_i18n, meta.empty() ? "" : " · ", remainingMin);
     }
     const bool movie = card.type == media::mediaTypeMovie;
-    auto* dialog = new brls::Dialog(meta.empty() ? card.title : card.title + "\n" + meta);
-    dialog->addButton(movie ? "main/stremio/playback/resume_movie"_i18n : "main/stremio/playback/resume_episode"_i18n, [card]() { showStremioResumeSourcePicker(card, card.viewOffset); });
-    dialog->addButton("main/stremio/playback/choose_another"_i18n, [card]() { showStremioResumeSourcePicker(card, card.viewOffset, false); });
-    dialog->addButton(movie ? "main/stremio/playback/restart_movie"_i18n : "main/stremio/playback/restart_episode"_i18n, [card]() { showStremioResumeSourcePicker(card, 0); });
-    if (!movie)
-        dialog->addButton("main/stremio/playback/go_series"_i18n, [recycler, card]() { ui::presentDetail(recycler, new MediaSeries(card)); });
-    dialog->open();
+    // Borealis Dialog accepts only three buttons. A dropdown keeps every
+    // playback action and the overview reachable with controller navigation.
+    std::vector<std::string> choices = {
+        movie ? "main/stremio/playback/resume_movie"_i18n : "main/stremio/playback/resume_episode"_i18n,
+        "main/stremio/playback/choose_another"_i18n,
+        movie ? "main/stremio/playback/restart_movie"_i18n : "main/stremio/playback/restart_episode"_i18n,
+        "main/stremio/playback/open_overview"_i18n,
+    };
+    auto* picker = new brls::Dropdown(meta.empty() ? card.title : card.title + "\n" + meta, choices,
+        [](int) {}, 0, [recycler, card, movie](int selected) {
+            switch (selected) {
+            case 0: showStremioResumeSourcePicker(card, card.viewOffset); break;
+            case 1: showStremioResumeSourcePicker(card, card.viewOffset, false); break;
+            case 2: showStremioResumeSourcePicker(card, 0); break;
+            case 3:
+                if (movie) ui::presentDetail(recycler, new MediaMovie(card));
+                else ui::presentDetail(recycler, new MediaSeries(card));
+                break;
+            default: break;
+            }
+        });
+    brls::Application::pushActivity(new brls::Activity(picker));
 }
 
 }  // namespace

@@ -52,6 +52,13 @@ inline AnimeCatalogKind classifyAnimeCatalog(const std::string& catalogType, con
     return AnimeCatalogKind::None;
 }
 
+/// Discovery can include generic catalogs; only a requested Anime filter
+/// makes their results an Anime shelf.
+inline bool animeCatalogResults(AnimeCatalogKind kind, const std::string& genreFilter) {
+    return kind == AnimeCatalogKind::Dedicated ||
+        (kind == AnimeCatalogKind::GenreFiltered && genreFilter == "Anime");
+}
+
 struct CatalogRoute {
     std::string base;
     std::string type;
