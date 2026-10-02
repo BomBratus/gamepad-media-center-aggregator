@@ -11,6 +11,8 @@
 #include "api/plex/watchlist.hpp"
 #include "api/backend.hpp"
 #include "api/stremio/types.hpp"
+#include "api/stremio/source_audio.hpp"
+#include "api/stremio/source_safety.hpp"
 #include "utils/misc.hpp"
 #include "utils/dialog.hpp"
 #include "utils/download.hpp"
@@ -439,9 +441,9 @@ void MediaMovie::buildSources(const media::Item& item) {
             cells.push_back(sourcePill("main/stremio/source/direct"_i18n, pillBg, textCol));
 #if defined(GMCA_PS4_SAFE_SOURCES)
         std::string warning = stremio::ps4WarningLabel(m);
-        if (!warning.empty()) cells.push_back(sourcePill(warning, goldBg, goldFg));
-        if (stremio::ps4HasItalianAudio(m))
-            cells.push_back(sourcePill("ITA AUDIO", pillBg, textCol));
+        if (!warning.empty()) cells.push_back(sourcePill(fmt::format("main/stremio/source/ps4_risk"_i18n, warning), goldBg, goldFg));
+        if (stremio::hasItalianAudio(m.sourceName + " " + m.sourceTitle))
+            cells.push_back(sourcePill("main/stremio/source/italian_audio"_i18n, pillBg, textCol));
         // Prefer the concrete release title on PS4; keep addon + parsed metadata
         // as the secondary line so the user can identify both provider and file.
         std::string primary = !m.sourceTitle.empty() ? m.sourceTitle :

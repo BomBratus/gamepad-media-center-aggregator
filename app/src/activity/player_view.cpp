@@ -14,6 +14,7 @@
 #include "api/plex.hpp"
 #include "api/backend.hpp"
 #include "api/stremio/backend.hpp"
+#include "api/stremio/episode_continuation.hpp"
 #include "tab/media_series.hpp"
 #include "utils/dialog.hpp"
 #include "utils/misc.hpp"
@@ -89,6 +90,7 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
 
     brls::Application::pushActivity(new brls::Activity(this), brls::TransitionAnimation::NONE);
 
+    view->setNextEpisode([this]() { return this->nextEpisodeIndex(); });
     playSubscribeID = view->getPlayEvent()->subscribe([this](int index) { this->playIndex(index); });
 
     settingSubscribeID = view->getSettingEvent()->subscribe([]() {
@@ -237,7 +239,7 @@ PlayerView::~PlayerView() {
 void PlayerView::setSeries(const std::string& showRatingKey) {
     ASYNC_RETAIN
     // all episodes of the show
-    AppConfig::instance().backend().getAllEpisodes(showRatingKey, true,
+    AppConfig::instance().backend().getAllEpisodes(showRatingKey, false,
         [ASYNC_TOKEN](const media::Container<media::Item>& r) {
             ASYNC_RELEASE
             int index = -1;
@@ -276,15 +278,18 @@ bool PlayerView::playIndex(int index) {
         return VideoView::close();
     }
     this->dismissUpNext();
-    this->episodeIndex = index;
     this->upNextDismissed = false;
     this->view->setAutoNext(AppConfig::instance().getItem(AppConfig::PLAYER_AUTOPLAY_NEXT, true));
+    // reset synchronously reports the old episode; retain its navigation index
+    // until that checkpoint has updated the loaded episode list.
     MPVCore::instance().reset();
+    this->episodeIndex = index;
 
     auto next = this->episodes.at(index);
     this->itemId = next.ratingKey;
     this->item = next;
     this->scrobbled = false;
+    this->sessionId = misc::randHex(12);
     this->preferredVersion = -1;  // binge: auto-pick the best source for the new episode
     this->playMedia(0);
     view->setTitie(next.grandparentTitle.empty()
@@ -302,12 +307,21 @@ void PlayerView::dismissUpNext() {
     dialog->close([]() {});
 }
 
+int PlayerView::nextEpisodeIndex() const {
+    if (AppConfig::instance().backend().type() == media::BackendType::Stremio)
+        return stremio::episodeContinuationIndex(this->episodes, this->itemId);
+    return this->episodeIndex >= 0 && this->episodeIndex + 1 < (int)this->episodes.size()
+        ? this->episodeIndex + 1 : -1;
+}
+
 void PlayerView::updateUpNext(int64_t progressSeconds) {
     const bool enabled = AppConfig::instance().getItem(AppConfig::PLAYER_AUTOPLAY_NEXT, true);
-    this->view->setAutoNext(enabled && !this->upNextDismissed);
-    if (!enabled || this->upNextDismissed || this->episodeIndex < 0 ||
-        this->episodeIndex + 1 >= (int)this->episodes.size())
+    const int target = this->nextEpisodeIndex();
+    this->view->setAutoNext(enabled && !this->upNextDismissed && target >= 0);
+    if (!enabled || this->upNextDismissed || target < 0) {
+        this->dismissUpNext();
         return;
+    }
 
     int64_t durationSeconds = this->item.duration > 0 ? this->item.duration / 1000
                                                       : (int64_t)MPVCore::instance().duration;
@@ -315,12 +329,12 @@ void PlayerView::updateUpNext(int64_t progressSeconds) {
     int remaining = (int)std::max<int64_t>(0, durationSeconds - progressSeconds);
     if (remaining > 10 || remaining <= 0) return;
 
-    const auto& next = this->episodes[(size_t)this->episodeIndex + 1];
+    const auto& next = this->episodes[(size_t)target];
     std::string nextTitle = next.grandparentTitle.empty()
                                 ? fmt::format("S{}E{} — {}", next.parentIndex, next.index, next.title)
                                 : fmt::format("{} · S{}E{} — {}", next.grandparentTitle, next.parentIndex,
                                       next.index, next.title);
-    std::string text = fmt::format("Next episode in {} s\n{}", remaining, nextTitle);
+    std::string text = fmt::format("main/stremio/playback/next_in"_i18n, remaining, nextTitle);
 
     if (this->upNextLabel) {
         this->upNextLabel->setText(text);
@@ -341,19 +355,19 @@ void PlayerView::updateUpNext(int64_t progressSeconds) {
     auto* dialog = new brls::Dialog(content);
     this->upNextDialog = dialog;
     this->upNextLabel = label;
-    dialog->addButton("Play next now", [this]() {
+    dialog->addButton("main/stremio/playback/play_next"_i18n, [this]() {
         this->upNextDialog = nullptr;
         this->upNextLabel = nullptr;
         this->view->playNext(1);
     });
-    dialog->addButton("Cancel autoplay", [this]() {
+    dialog->addButton("main/stremio/playback/cancel_autoplay"_i18n, [this]() {
         this->upNextDialog = nullptr;
         this->upNextLabel = nullptr;
         this->upNextDismissed = true;
         this->view->setAutoNext(false);
     });
     if (!this->item.grandparentRatingKey.empty()) {
-        dialog->addButton("Open series", [this]() {
+        dialog->addButton("main/stremio/playback/open_series"_i18n, [this]() {
             this->upNextDialog = nullptr;
             this->upNextLabel = nullptr;
             plex::Item show;
@@ -385,6 +399,7 @@ void PlayerView::playMedia(const int64_t seekMs) {
     this->stopTranscode();
     // deliberate (re)start: allow the direct-play fallback to trigger again
     this->directPlayFallback = false;
+    this->resolvingRecoverySources = false;
 
     // Fast path: the caller already resolved the exact source (Stremio source
     // picker passes the fully-resolved item + chosen index). Re-fetching would
@@ -407,9 +422,7 @@ void PlayerView::playMedia(const int64_t seekMs) {
 
     ASYNC_RETAIN
     // fresh metadata: Media/Part/Stream + chapters
-    AppConfig::instance().backend().getItemDetail(
-        this->itemId, true,
-        [ASYNC_TOKEN, seekMs, generation](const media::Item& item) {
+    auto detailReady = [ASYNC_TOKEN, seekMs, generation](const media::Item& item) {
             ASYNC_RELEASE
             if (generation != this->playbackGeneration) return;
             this->item = item;
@@ -444,12 +457,16 @@ void PlayerView::playMedia(const int64_t seekMs) {
             this->stream = *chosen;
             this->setChapters(this->item.chapters, this->item.duration);
             this->startPlayback(seekMs);
-        },
-        [ASYNC_TOKEN, generation](const std::string& ex) {
-            ASYNC_RELEASE
-            if (generation != this->playbackGeneration) return;
-            Dialog::show(ex, []() { VideoView::close(); });
-        });
+        };
+    auto detailError = [ASYNC_TOKEN, generation](const std::string& ex) {
+        ASYNC_RELEASE
+        if (generation != this->playbackGeneration) return;
+        Dialog::show(ex, []() { VideoView::close(); });
+    };
+    if (auto* backend = dynamic_cast<stremio::StremioBackend*>(&AppConfig::instance().backend()))
+        backend->getResumeDetail(this->itemId, seekMs > 0, detailReady, detailError);
+    else
+        AppConfig::instance().backend().getItemDetail(this->itemId, true, detailReady, detailError);
 }
 
 void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
@@ -459,8 +476,10 @@ void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
     // — see the note at the end of this function.)
     this->mpvLoaded = false;
     this->playbackCheckpoint.begin(seekMs);
-    if (AppConfig::instance().backend().type() == media::BackendType::Stremio)
+    if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
+        stremio::beginPlayback(this->itemId, this->sessionId);
         stremio::rememberPlayback(this->item, this->stream, seekMs, this->item.duration);
+    }
 
     media::PlaybackOptions opts;
     opts.seekMs = seekMs;
@@ -569,12 +588,13 @@ void PlayerView::addExternalSubtitles() {
         pref.clear();
     }
 
+    bool selectedPreferred = false;
     for (auto& s : this->externalSubs) {
         if (s.key.empty()) continue;
         std::string url = backend.subtitleSidecarUrl(s.key);
         // select the track matching the preferred language; add the rest as
         // "auto" so they stay pickable in the subtitle menu without stealing it.
-        bool preferred = !pref.empty() && s.languageTag == pref;
+        bool preferred = !selectedPreferred && !pref.empty() && s.languageTag == pref;
         const char* flag = preferred ? "select" : "auto";
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
         auto safety = ps4SubtitleSidecarSafety(url);
@@ -584,6 +604,7 @@ void PlayerView::addExternalSubtitles() {
         // only. Bitmap/unknown URLs stay available but require explicit selection.
         if (safety != Ps4SubtitleSidecarSafety::SafeText) flag = "auto";
 #endif
+        if (std::strcmp(flag, "select") == 0) selectedPreferred = true;
         mpv.command("sub-add", url.c_str(), flag, s.displayTitle.c_str(), s.languageTag.c_str());
     }
 }
@@ -606,8 +627,32 @@ bool PlayerView::tryDirectPlayFallback() {
 }
 
 bool PlayerView::trySourceRecovery(int64_t resumeMs) {
-    if (AppConfig::instance().backend().type() != media::BackendType::Stremio || this->item.media.size() < 2)
-        return false;
+    auto* backend = dynamic_cast<stremio::StremioBackend*>(&AppConfig::instance().backend());
+    if (!backend) return false;
+    if (!this->item.sourcesComplete) {
+        if (this->resolvingRecoverySources) return true;
+        this->resolvingRecoverySources = true;
+        const auto generation = this->playbackGeneration;
+        const int64_t resume = resumeMs < 0 ? this->playbackCheckpoint.position() : resumeMs;
+        ASYNC_RETAIN
+        backend->completePlaybackSources(this->item,
+            [ASYNC_TOKEN, generation, resume](const media::Item& detail) {
+                ASYNC_RELEASE
+                if (generation != this->playbackGeneration) return;
+                this->resolvingRecoverySources = false;
+                this->item = detail;
+                this->preferredVersion = -1; // locate the failed source by identity below
+                if (!this->trySourceRecovery(resume)) Dialog::show("main/player/error"_i18n);
+            },
+            [ASYNC_TOKEN, generation](const std::string& error) {
+                ASYNC_RELEASE
+                if (generation != this->playbackGeneration) return;
+                this->resolvingRecoverySources = false;
+                Dialog::show(error);
+            });
+        return true;
+    }
+    if (this->item.media.size() < 2) return false;
 
     auto accessible = [](const media::Media& m) {
         for (const auto& p : m.parts)
@@ -615,7 +660,8 @@ bool PlayerView::trySourceRecovery(int64_t resumeMs) {
         return false;
     };
     auto mediaKey = [](const media::Media& m) -> std::string {
-        return m.parts.empty() ? std::string() : m.parts.front().key;
+        return !m.sourceIdentity.empty() ? m.sourceIdentity :
+            (m.parts.empty() ? std::string() : m.parts.front().key);
     };
 
     int current = this->preferredVersion;
@@ -638,7 +684,7 @@ bool PlayerView::trySourceRecovery(int64_t resumeMs) {
         if (!m.videoCodec.empty()) label += (label.empty() ? "" : " · ") + m.videoCodec;
         if (!m.label.empty()) label += (label.empty() ? "" : " · ") + m.label;
         if (!m.detail.empty()) label += (label.empty() ? "" : " · ") + m.detail;
-        if (label.empty()) label = fmt::format("Source {}", i + 1);
+        if (label.empty()) label = fmt::format("main/stremio/playback/source_number"_i18n, i + 1);
         alternatives.push_back((int)i);
         labels.push_back(std::move(label));
     }
@@ -648,7 +694,7 @@ bool PlayerView::trySourceRecovery(int64_t resumeMs) {
         resumeMs = this->playbackCheckpoint.position();
     }
     const int64_t resume = resumeMs;
-    auto* picker = new brls::Dropdown("Choose another source", labels,
+    auto* picker = new brls::Dropdown("main/stremio/playback/choose_another"_i18n, labels,
         [this, alternatives, resume](int selected) {
             if (selected < 0 || selected >= (int)alternatives.size()) return;
             int index = alternatives[(size_t)selected];
@@ -694,6 +740,18 @@ void PlayerView::reportTimeline(const std::string& state, int64_t timeMs) {
                           : state == "stopped" ? media::PlayState::Stopped
                                                : media::PlayState::Playing;
     AppConfig::instance().backend().reportProgress(this->itemId, st, timeMs, this->item.duration, this->sessionId);
+    if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
+        const bool completed = stremio::playbackCompleted(this->itemId);
+        this->scrobbled = completed;
+        // Reflect the backend decision in the loaded navigation list; returning
+        // to an earlier episode must not offer an episode just completed here.
+        if (this->episodeIndex >= 0 && this->episodeIndex < (int)this->episodes.size()) {
+            auto& episode = this->episodes[(size_t)this->episodeIndex];
+            episode.viewCount = completed ? 1 : 0;
+            episode.viewOffset = completed ? 0 : std::max<int64_t>(0, timeMs);
+            episode.duration = this->item.duration;
+        }
+    }
 }
 
 void PlayerView::reportStop(int64_t timeMs) {
@@ -709,6 +767,8 @@ void PlayerView::reportStop(int64_t timeMs) {
 }
 
 void PlayerView::maybeScrobble(int64_t timeMs) {
+    // Stremio completion is owned by reportProgress, including local and account state.
+    if (AppConfig::instance().backend().type() == media::BackendType::Stremio) return;
     // state=stopped is NOT enough to mark as watched: explicit scrobble required
     if (this->scrobbled || this->item.duration <= 0) return;
     if (double(timeMs) / double(this->item.duration) < SCROBBLE_THRESHOLD) return;

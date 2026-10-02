@@ -24,6 +24,8 @@ namespace stremio {
 
 // Local playback checkpoints are queued asynchronously, independently of account sync.
 void flushPlaybackHistory();
+void beginPlayback(const std::string& id, const std::string& sessionId);
+bool playbackCompleted(const std::string& id);
 nlohmann::json savedPlayback(const std::string& id);
 void rememberPlayback(const media::Item& item, const media::Media& source, int64_t position, int64_t duration);
 int savedPlaybackSource(const media::Item& item);
@@ -52,6 +54,8 @@ public:
     void getHubPage(const std::string& hubKey, size_t start, size_t size,
         media::Then<media::Container<media::Item>> then, media::OnError error) override;
     void getItemDetail(const std::string& id, bool full, media::Then<media::Item> then, media::OnError error) override;
+    void completePlaybackSources(media::Item item, media::Then<media::Item> then, media::OnError error);
+    void getResumeDetail(const std::string& id, bool reuseSource, media::Then<media::Item> then, media::OnError error);
     void getChildren(
         const std::string& id, media::Then<media::Container<media::Item>> then, media::OnError error) override;
     void getAllEpisodes(const std::string& showId, bool includeStreams,
@@ -104,6 +108,7 @@ public:
     void setWatchlisted(const media::Item& item, bool add, std::function<void()> then, media::OnError error) override;
 
 private:
+    void getDetail(const std::string& id, bool full, bool reuseSource, media::Then<media::Item> then, media::OnError error);
     media::Capabilities caps_;
     std::shared_ptr<AddonEngine> engine;
 };

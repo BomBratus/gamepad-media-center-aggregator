@@ -320,13 +320,13 @@ VideoView::VideoView() {
 
     /// 播放控制
     this->btnBackward->registerClickAction([this](...) {
-        this->playIndexEvent.fire(--this->playIndex);
+        this->playNext(-1);
         return true;
     });
     this->btnBackward->addGestureRecognizer(new brls::TapGestureRecognizer(this->btnBackward));
 
     this->btnForward->registerClickAction([this](...) {
-        this->playIndexEvent.fire(++this->playIndex);
+        this->playNext(1);
         return true;
     });
     this->btnForward->addGestureRecognizer(new brls::TapGestureRecognizer(this->btnForward));
@@ -646,7 +646,11 @@ void VideoView::registerMpvEvent() {
                 // Defer episode switching until every mpv END_OF_FILE subscriber
                 // has observed the item that actually ended (PlayerView persists
                 // its final progress in its own subscriber).
-                brls::sync([this]() { this->playIndexEvent.fire(++this->playIndex); });
+                ASYNC_RETAIN
+                brls::sync([ASYNC_TOKEN]() {
+                    ASYNC_RELEASE
+                    this->playNext(1);
+                });
             }
             break;
         case MpvEventEnum::CACHE_SPEED_CHANGE:
@@ -861,7 +865,10 @@ void VideoView::setClipPoint(const std::vector<float>& clips) {
     }
 }
 
-void VideoView::playNext(int offset) { this->playIndexEvent.fire(this->playIndex + offset); }
+void VideoView::playNext(int offset) {
+    const int target = offset == 1 && this->nextEpisode ? this->nextEpisode() : this->playIndex + offset;
+    if (target >= 0) this->playIndexEvent.fire(target);
+}
 
 void VideoView::hideVideoProgressSlider() { this->osdSlider->setVisibility(brls::Visibility::GONE); }
 

@@ -4,6 +4,7 @@
 #include "api/backend.hpp"
 #include "api/stremio/types.hpp"
 #include "api/stremio/backend.hpp"
+#include "api/stremio/playback_resume.hpp"
 #include "tab/media_collection.hpp"
 #include "tab/media_series.hpp"
 #include "tab/media_movie.hpp"
@@ -30,20 +31,21 @@ using namespace brls::literals;  // for _i18n
 namespace {
 
 void showStremioResumeSourcePicker(const media::Item& card, int64_t seekMs, bool reuseSource = true) {
-    const std::string episodeId = card.key;
-    AppConfig::instance().backend().getItemDetail(
-        episodeId, true,
+    const std::string episodeId = card.key.empty() ? card.ratingKey : card.key;
+    auto* backend = dynamic_cast<stremio::StremioBackend*>(&AppConfig::instance().backend());
+    if (!backend) return;
+    backend->getResumeDetail(
+        episodeId, reuseSource,
         [seekMs, reuseSource](const media::Item& detail) {
             // Zero is an explicit Restart request. For Resume, fresh local/detail
             // progress takes precedence over a stale Home card.
-            const auto checkpoint = stremio::savedPlayback(detail.ratingKey);
-            const int64_t resumeMs = seekMs == 0 ? 0
-                : (!checkpoint.empty() || detail.viewOffset > 0 ? detail.viewOffset : seekMs);
+            const int64_t resumeMs = stremio::resumePosition(seekMs, detail.viewOffset,
+                !stremio::savedPlayback(detail.ratingKey).empty());
             auto play = [detail, resumeMs](int source) {
                 media::Item episode = detail;
                 episode.viewOffset = resumeMs;
                 auto* view = new PlayerView(episode, resumeMs, source);
-                view->setTitie(episode.grandparentTitle.empty()
+                view->setTitie(episode.type == media::mediaTypeMovie ? episode.title : episode.grandparentTitle.empty()
                     ? fmt::format("S{}E{} - {}", episode.parentIndex, episode.index, episode.title)
                     : fmt::format("{} - S{}E{} - {}", episode.grandparentTitle,
                         episode.parentIndex, episode.index, episode.title));
@@ -66,7 +68,7 @@ void showStremioResumeSourcePicker(const media::Item& card, int64_t seekMs, bool
                 Dialog::show("main/stremio/source/none"_i18n);
                 return;
             }
-            auto* picker = new brls::Dropdown("Choose source", choices,
+            auto* picker = new brls::Dropdown("main/stremio/playback/choose_source"_i18n, choices,
                 [play, playable](int selected) {
                     if (selected < 0 || selected >= (int)playable.size()) return;
                     play(playable[(size_t)selected]);
@@ -86,13 +88,15 @@ void showStremioResumeDialog(brls::Box* recycler, const media::Item& card) {
         int64_t remainingMs = std::max<int64_t>(0, card.duration - card.viewOffset);
         int remainingMin = (int)((remainingMs + 59999) / 60000);
         if (percent > 0) meta += fmt::format("{}{}%", meta.empty() ? "" : " · ", percent);
-        if (remainingMin > 0) meta += fmt::format("{}{} min left", meta.empty() ? "" : " · ", remainingMin);
+        if (remainingMin > 0) meta += fmt::format("main/stremio/playback/min_left"_i18n, meta.empty() ? "" : " · ", remainingMin);
     }
+    const bool movie = card.type == media::mediaTypeMovie;
     auto* dialog = new brls::Dialog(meta.empty() ? card.title : card.title + "\n" + meta);
-    dialog->addButton("Resume episode", [card]() { showStremioResumeSourcePicker(card, card.viewOffset); });
-    dialog->addButton("Choose another source", [card]() { showStremioResumeSourcePicker(card, card.viewOffset, false); });
-    dialog->addButton("Restart episode", [card]() { showStremioResumeSourcePicker(card, 0); });
-    dialog->addButton("Go to series", [recycler, card]() { ui::presentDetail(recycler, new MediaSeries(card)); });
+    dialog->addButton(movie ? "main/stremio/playback/resume_movie"_i18n : "main/stremio/playback/resume_episode"_i18n, [card]() { showStremioResumeSourcePicker(card, card.viewOffset); });
+    dialog->addButton("main/stremio/playback/choose_another"_i18n, [card]() { showStremioResumeSourcePicker(card, card.viewOffset, false); });
+    dialog->addButton(movie ? "main/stremio/playback/restart_movie"_i18n : "main/stremio/playback/restart_episode"_i18n, [card]() { showStremioResumeSourcePicker(card, 0); });
+    if (!movie)
+        dialog->addButton("main/stremio/playback/go_series"_i18n, [recycler, card]() { ui::presentDetail(recycler, new MediaSeries(card)); });
     dialog->open();
 }
 
@@ -201,7 +205,7 @@ RecyclingGridItem* VideoDataSource::cellForRow(RecyclingView* recycler, size_t i
                 int64_t remainingMs = std::max<int64_t>(0, item.duration - item.viewOffset);
                 int remainingMin = (int)((remainingMs + 59999) / 60000);
                 if (remainingMin > 0)
-                    progress += fmt::format("{}{} min left", progress.empty() ? "" : " · ", remainingMin);
+                    progress += fmt::format("main/stremio/playback/min_left"_i18n, progress.empty() ? "" : " · ", remainingMin);
             }
             if (!progress.empty()) {
                 cell->labelExt->setText(progress);
@@ -270,13 +274,18 @@ void VideoDataSource::onItemSelected(brls::Box* recycler, size_t index) {
     if (item.type == plex::mediaTypeShow) {
         if (this->stremioContinueWatching && AppConfig::instance().backend().type() == media::BackendType::Stremio) {
             stremio::ParsedId episode = stremio::parseId(item.key);
-            if (episode.stremioType == "series" && episode.episode >= 0 && item.viewOffset > 0) {
+            if ((episode.stremioType == "series" || episode.stremioType == "anime") && !episode.stremioId.empty() && item.key != item.ratingKey) {
                 showStremioResumeDialog(recycler, item);
                 return;
             }
         }
         ui::presentDetail(recycler, new MediaSeries(item, this->localContext));
     } else if (item.type == plex::mediaTypeMovie) {
+        if (this->stremioContinueWatching && item.viewOffset > 0 &&
+            AppConfig::instance().backend().type() == media::BackendType::Stremio) {
+            showStremioResumeDialog(recycler, item);
+            return;
+        }
         ui::presentDetail(recycler, new MediaMovie(item, this->localContext));
     } else if (item.type == plex::mediaTypeSeason) {
         ui::presentDetail(recycler, new MediaSeries(item, this->localContext));

@@ -49,6 +49,8 @@ public:
 
     void playNext(int offset);
     void setAutoNext(bool enabled) { this->autoNext = enabled; }
+    // Player supplies backend-aware advancement; explicit episode selection stays direct.
+    void setNextEpisode(std::function<int()> next) { this->nextEpisode = std::move(next); }
 
     brls::Event<int>* getPlayEvent() { return &this->playIndexEvent; }
 
@@ -141,6 +143,7 @@ private:
 
     int playIndex = -1;
     bool autoNext = true;
+    std::function<int()> nextEpisode;
     brls::Event<int> playIndexEvent;
     brls::VoidEvent settingEvent;
     View* lastFocusedView = nullptr;

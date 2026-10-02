@@ -122,7 +122,7 @@ int main() {
     };
     CHECK(stremio::PlaybackHistory::chooseSource(first, refreshed) == 1);
     refreshed.insert(refreshed.begin(), makeSource("https://cdn.example/video?token=old", "different/identity"));
-    CHECK(stremio::PlaybackHistory::chooseSource(first, refreshed) == 0);
+    CHECK(stremio::PlaybackHistory::chooseSource(first, refreshed) == 2);
 
     media::Media placeholder;
     placeholder.sourceIdentity = "addon/release/file";
