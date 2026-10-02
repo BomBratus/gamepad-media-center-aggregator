@@ -341,7 +341,7 @@ def source_picker(app, fixture):
     rows = [n for n in flat(app, state) if n.get('id', '').startswith('stremio/source/')]
     assert len(rows) == 2, 'source picker fixture did not expose both sources'
     labels = [[v.get('text') for v in nodes(row)] for row in rows]
-    assert sum('ITA AUDIO' in values for values in labels) == 1, 'ITA AUDIO must classify audio only, never SUB ITA' 
+    assert sum('ITA AUDIO' in values for values in labels) == 1, 'ITA AUDIO must classify audio only, never SUB ITA'
     first = app.focus()
     app.press('down')
     assert app.focus() and first != app.focus(), 'source list is not navigable'
@@ -367,7 +367,7 @@ def continue_watching(app, fixture):
     assert rows, 'Continue Watching row missing'
     items = rows[0]['media_items']
     assert any(i['id'] == 'series:tt9000010' and i['key'] == 'series:tt9000010:1:1' and i['position_ms'] == 12000 for i in items), 'partial series checkpoint missing'
-    assert any(i['id'] == 'movie:tt9000001' and i['position_ms'] == 12000 for i in items), 'partial movie missing' 
+    assert any(i['id'] == 'movie:tt9000001' and i['position_ms'] == 12000 for i in items), 'partial movie missing'
     app.press('a')
     app.wait(lambda s: s['dialog'] == 'resume', 'partial progress offers Resume menu')
     app.checkpoint('resume-menu')
@@ -480,7 +480,7 @@ def search(app, fixture):
     state = app.checkpoint('search-input')
     assert any(n.get('id') == 'tv/search/input' and n.get('text') == 'A' for n in flat(app, state)), 'controller keyboard failed to type A'
     ids = [i['id'] for n in flat(app, state) for i in n.get('media_items', [])]
-    assert ids and len(ids) == len(set(ids)), 'search missing results or immediately duplicated' 
+    assert ids and len(ids) == len(set(ids)), 'search missing results or immediately duplicated'
     home(app)
 
 

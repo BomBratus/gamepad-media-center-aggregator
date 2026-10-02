@@ -80,7 +80,7 @@ void inspect(brls::View* view, json& out) {
         for (auto* child : box->getChildren()) inspect(child, out);
 }
 json state() {
-    json out = {{"ready", true}, {"dialog", nullptr}, {"loading", brls::Application::testInputsBlocked()},
+    json out = {{"ready", true}, {"dialog", nullptr}, {"loading", brls::Application::isInputBlocks()},
                 {"source_picker", false}, {"player", false}, {"focus", nullptr}, {"error", nullptr}};
     auto stack = brls::Application::getActivitiesStack();
     out["depth"] = stack.size();
