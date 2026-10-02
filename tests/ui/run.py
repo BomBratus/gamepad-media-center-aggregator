@@ -37,6 +37,11 @@ def patch(name):
         raise RuntimeError('Borealis patch drift: ' + name)
 
 
+def xenv():
+    return dict(os.environ, DISPLAY=os.environ.get('DISPLAY', ':0'),
+                XAUTHORITY=os.environ.get('XAUTHORITY', '/home/michele/.Xauthority'))
+
+
 def nodes(tree):
     yield tree
     for child in tree.get('children', []):
@@ -54,7 +59,8 @@ def stop_previous():
     data = json.loads(owned.read_text())
     pid = int(data['pid'])
     try:
-        if start_ticks(pid) != data['start_ticks'] or Path(f'/proc/{pid}/exe').resolve() != BUILD / 'GMCA':
+        executable = str(Path(f'/proc/{pid}/exe').resolve())
+        if start_ticks(pid) != data['start_ticks'] or executable not in (str(BUILD / 'GMCA'), str(BUILD / 'GMCA') + ' (deleted)'):
             raise RuntimeError('stale runtime ownership record; refusing to signal another process')
         os.killpg(pid, signal.SIGTERM)
         for _ in range(30):
@@ -71,10 +77,12 @@ def stop_previous():
 class Runtime:
     def __init__(self, binary, directory, profile, base, secrets=()):
         self.directory = directory
+        self.live = not bool(base)
         self.step = 'launch'
         self.snapshots = 0
         self.peak_rss = 0
         self.boot = time.monotonic()
+        self.cpu_seconds = 0
         self.socket_path = profile.parent / 'controller.sock'
         env = dict(os.environ, DISPLAY=os.environ.get('DISPLAY', ':0'),
                    XAUTHORITY=os.environ.get('XAUTHORITY', '/home/michele/.Xauthority'),
@@ -85,7 +93,7 @@ class Runtime:
             env['GMCA_TEST_FIXTURE_URL'] = base
         else:
             env.pop('GMCA_TEST_FIXTURE_URL', None)
-        self.proc = subprocess.Popen([str(binary)], cwd=binary.parent, env=env,
+        self.proc = subprocess.Popen(['stdbuf', '-oL', '-eL', str(binary)], cwd=binary.parent, env=env,
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
         (BUILD / 'runtime.json').write_text(json.dumps({'pid': self.proc.pid, 'start_ticks': start_ticks(self.proc.pid)}))
         # Never persist a raw log containing signed stream/addon URLs or account tokens.
@@ -113,11 +121,13 @@ class Runtime:
             conn.connect(str(self.socket_path))
             conn.sendall(json.dumps(request).encode())
             reply = json.loads(conn.recv(262144))
-        if reply.get('error') == 'invalid test command':
+        if reply.get('error'):
             raise RuntimeError(reply['error'])
         return reply
 
     def state(self):
+        cpu = Path(f'/proc/{self.proc.pid}/stat').read_text().split(') ', 1)[1].split()
+        self.cpu_seconds = (int(cpu[11]) + int(cpu[12])) / os.sysconf('SC_CLK_TCK')
         stat = Path(f'/proc/{self.proc.pid}/status').read_text()
         match = re.search(r'VmHWM:\s+(\d+)', stat)
         if match:
@@ -133,7 +143,7 @@ class Runtime:
                 last = self.state()
                 if predicate(last):
                     return last
-            except (FileNotFoundError, ConnectionRefusedError):
+            except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
                 if self.proc.poll() is not None:
                     raise RuntimeError(f'GMCA exited/crashed: {self.proc.returncode}')
             time.sleep(.15)
@@ -142,6 +152,13 @@ class Runtime:
         raise AssertionError('timeout: ' + step)
 
     def press(self, button):
+        saved_step = self.step
+        self.wait(lambda s: not s.get('input_blocked', s['loading'] if s['dialog'] else False), 'input transition ready', timeout=10)
+        self.step = saved_step
+        # Let the real input loop observe the released previous button after
+        # a modal transition; blocked frames do not update oldControllerState.
+        self.state()
+        self.state()
         self.call(command='button', button=button, pressed=True)
         time.sleep(.10)
         self.call(command='button', button=button, pressed=False)
@@ -169,8 +186,10 @@ class Runtime:
     def checkpoint(self, name):
         self.snapshots += 1
         state = self.state()
+        if self.live and (state.get('view') not in ('stremio_home', 'stremio_catalogs') or state.get('dialog')):
+            raise RuntimeError('live screenshot suppressed outside safe Stremio browsing views')
         (self.directory / f'{self.snapshots:02}-{name}.json').write_text(json.dumps(state, indent=2))
-        subprocess.run(['scrot', '-o', str(self.directory / f'{self.snapshots:02}-{name}.png')], check=True)
+        subprocess.run(['scrot', '-o', str(self.directory / f'{self.snapshots:02}-{name}.png')], env=xenv(), check=True)
         return state
 
     def close(self):
@@ -221,8 +240,11 @@ def profile(path, base, live=None):
 
 
 def boot(app):
+    app.step = 'boot to Stremio home'
     state = app.wait(lambda s: s.get('focus') and s.get('controllers', 0) > 0 and
                      any(n.get('id') == 'tab/home' for n in nodes(s.get('tree', {}))) and not s['loading'], 'boot to Stremio home')
+    assert state.get('mapping_verified'), 'SDL to Borealis button mapping was not verified'
+    app.build_commit = state.get('build_commit')
     app.boot_seconds = time.monotonic() - app.boot
     app.checkpoint('home')
     return state
@@ -241,7 +263,7 @@ def scenarios(app, name, fixture):
     boot(app)
     if name in ('smoke', 'navigation', 'live'):
         navigation(app)
-    if name == 'navigation':
+    if name in ('boot', 'navigation'):
         return
     if name == 'live':
         # Read-only live integration uses the real account/addons; never starts playback.
@@ -251,7 +273,7 @@ def scenarios(app, name, fixture):
         app.checkpoint('live-movies')
         return
     # Concrete scenario functions are below; every route observes real UI state.
-    selected = ('continue-watching', 'resume', 'movies', 'watched', 'series', 'source-picker', 'search', 'error-loading') if name == 'smoke' else (name,)
+    selected = (name,)
     app.timings = {}
     for scenario in selected:
         print('TV test scenario: ' + scenario, flush=True)
@@ -270,7 +292,7 @@ def contains(app, value, state=None):
 
 def home(app):
     for _ in range(6):
-        if app.state().get('depth', 0) <= 1 and not any(contains(app, cls) for cls in ('MediaMovie', 'MediaSeries', 'MediaSeason')):
+        if app.state().get('depth', 0) <= 1 and not any(contains(app, cls) for cls in ('MediaMovie', 'MediaSeries', 'MediaSeason', 'SearchResult', 'MediaCollection')):
             break
         app.press('b')
     sidebar(app, 'tab/home')
@@ -324,9 +346,23 @@ def series(app, fixture):
     assert app.focus() and app.focus() != original, 'cannot switch season'
     app.checkpoint('season-selection')
     app.press('a')
-    app.wait(lambda s: contains(app, 'MediaSeason', s) and not s['loading'], 'season episodes')
+    app.wait(lambda s: contains(app, 'MediaSeason', s) and any(n.get('id') == 'series:tt9000010:2:1' for n in flat(app, s)), 'season episodes')
+    app.seek('series:tt9000010:2:1', ['down'], limit=6)
+    app.press('down')
+    app.wait(lambda s: 'series:tt9000010:2:2' in app.ids(s), 'episode navigation')
+    app.press('up')
     app.checkpoint('episodes')
     return
+
+
+def close_player(app, step):
+    app.step = step
+    # TV mode first hides a visible OSD; a following Back closes playback.
+    for _ in range(3):
+        if not app.state()['player']:
+            break
+        app.press('b')
+    app.wait(lambda s: not s['player'], step)
 
 
 def source_picker(app, fixture):
@@ -349,12 +385,13 @@ def source_picker(app, fixture):
     app.wait(lambda s: not s['source_picker'], 'source picker Back')
     assert app.focus() == before, 'picker did not restore episode focus'
     app.press('a')
-    app.wait(lambda s: s['source_picker'], 'source picker reopen')
+    app.wait(lambda s: s['source_picker'] and not s['loading'], 'source picker reopen')
+    state = app.checkpoint('source-picker-reopened')
+    assert any(i.startswith('stremio/source/') for i in app.ids(state)), 'reopened picker focused Cancel instead of source'
     app.press('a')
     app.wait(lambda s: s['player'] and s.get('duration_seconds', 0) > 0 and not s.get('player_stopped'), 'source confirm opens playing mpv', timeout=30)
     app.checkpoint('player')
-    app.press('b')
-    app.wait(lambda s: not s['player'], 'player Back')
+    close_player(app, 'player Back')
     home(app)
 
 
@@ -377,13 +414,15 @@ def continue_watching(app, fixture):
     with fixture._lock:
         record = next(r for r in fixture.library if r['_id'] == 'tt9000010')
         record['state']['timeOffset'] = 119000
+    app.press('right')
     app.press('back')
     state = app.wait(lambda s: not s['loading'] and any(n.get('continue_watching') and any(i['id'] == 'series:tt9000010' and i['key'] == 'series:tt9000010:1:2' for i in n.get('media_items', [])) for n in flat(app, s)), 'completed episode advances to next')
     app.checkpoint('continue-next-episode')
     with fixture._lock:
         record['state']['timeOffset'] = 12000
+    app.press('right')
     app.press('back')
-    app.wait(lambda s: not s['loading'], 'partial checkpoint restored')
+    app.wait(lambda s: not s['loading'] and any(n.get('continue_watching') and any(i['id'] == 'series:tt9000010' and i['key'] == 'series:tt9000010:1:1' and i['position_ms'] == 12000 for i in n.get('media_items', [])) for n in flat(app, s)), 'partial checkpoint restored')
 
 
 def resume(app, fixture):
@@ -413,8 +452,7 @@ def resume(app, fixture):
             app.press('a')
         app.wait(lambda s: s['player'] and s.get('playback_seconds', 0) >= 10, 'Resume keeps checkpoint')
         app.checkpoint('resume-player')
-        app.press('b')
-        app.wait(lambda s: not s['player'], 'Resume player closed')
+        close_player(app, 'Resume player closed')
         home(app)
         app.press('right')
         app.seek(ident, ['right'], limit=4)
@@ -429,40 +467,55 @@ def resume(app, fixture):
         state = app.wait(lambda s: s['player'] and s.get('duration_seconds', 0) > 0, 'Restart player opened')
         assert state.get('playback_seconds', 999) < 5, 'Restart reused progress'
         app.checkpoint('restart-player')
-        app.press('b')
-        app.wait(lambda s: not s['player'], 'Restart player closed')
+        close_player(app, 'Restart player closed')
     home(app)
 
 
-def watched(app, fixture):
-    catalog(app, 'movie')
-    app.seek('movie:tt9000001', ['down', 'left'], limit=10)
+def toggle_watched(app):
     app.press('x')
     app.wait(lambda s: contains(app, 'ContextMenu', s), 'watched context menu')
+    app.seek('menu/mark/play', ['down'], limit=8)
     app.checkpoint('watched-menu')
-    # Locate the focused menu item by its visible label, never assume menu order.
-    for _ in range(14):
-        state = app.state()
-        focus_ids = app.ids(state)
-        focus_tree = next((n for n in flat(app, state) if n.get('id') and n['id'] in focus_ids), {})
-        texts = [n.get('text', '') for n in nodes(focus_tree)]
-        if any('watched' in t.lower() or 'played' in t.lower() for t in texts):
-            app.press('a')
-            break
-        app.press('down')
-    else:
-        raise AssertionError('watched action unreachable')
+    app.press('a')
     app.wait(lambda s: not contains(app, 'ContextMenu', s), 'watched action closes menu')
-    app.wait(lambda s: any(any(i['id'] == 'movie:tt9000001' and i['watched'] for i in n.get('media_items', [])) for n in flat(app, s)), 'watched card semantic state')
+
+
+def datastore_state(fixture, ident, predicate):
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         with fixture._lock:
-            if any(r['_id'] == 'tt9000001' and r.get('state', {}).get('flaggedWatched') for r in fixture.library):
-                break
+            if any(r['_id'] == ident and predicate(r.get('state', {})) for r in fixture.library):
+                return
         time.sleep(.1)
-    else:
-        raise AssertionError('watched not persisted to fixture datastore')
-    app.checkpoint('watched')
+    raise AssertionError('watched not persisted to fixture datastore: ' + ident)
+
+
+def watched(app, fixture):
+    # Movie and whole-series actions must be reversible and stay separate.
+    for kind, ident in [('movie', 'tt9000001'), ('series', 'tt9000010')]:
+        catalog(app, kind)
+        key = kind + ':' + ident
+        app.seek(key, ['down', 'left'], limit=10)
+        for expected in (True, False):
+            toggle_watched(app)
+            app.wait(lambda s: any(any(i['id'] == key and i['watched'] == expected for i in n.get('media_items', [])) for n in flat(app, s)), 'watched card state ' + key)
+            datastore_state(fixture, ident, lambda s: bool(s.get('flaggedWatched')) == expected)
+            app.checkpoint('watched-' + kind + ('-set' if expected else '-clear'))
+        home(app)
+    # An episode checkmark must not mark its sibling or the complete show watched.
+    series(app, fixture)
+    episode = 'series:tt9000010:2:1'
+    app.seek(episode, ['down'], limit=6)
+    def badge(state, ident):
+        card = next((n for n in flat(app, state) if n.get('id') == ident), None)
+        return card is not None and any(n.get('id') == 'episode/card/watched' for n in nodes(card))
+    for expected in (True, False):
+        app.seek(episode, ['up', 'down'], limit=6)
+        toggle_watched(app)
+        app.wait(lambda s: any(n.get('id') == episode for n in flat(app, s)) and badge(s, episode) == expected, 'episode watched badge')
+        assert not badge(app.state(), 'series:tt9000010:2:2'), 'episode action marked its sibling watched'
+        datastore_state(fixture, 'tt9000010', lambda s: not s.get('flaggedWatched') and s.get('videoId') == 'tt9000010:2:1')
+        app.checkpoint('watched-episode' + ('-set' if expected else '-clear'))
     home(app)
 
 
@@ -474,14 +527,25 @@ def search(app, fixture):
     app.checkpoint('search')
     # TV search has an on-screen keyboard, exercised with controller confirmation.
     app.seek('tv/search/key/A', ['down'], limit=8)
+    app.seek('tv/search/key/F', ['right'], limit=8)
     app.press('a')
-    app.press('start')
-    app.wait(lambda s: not s['loading'] and bool(s['focus']), 'search results preserve focus')
     state = app.checkpoint('search-input')
-    assert any(n.get('id') == 'tv/search/input' and n.get('text') == 'A' for n in flat(app, state)), 'controller keyboard failed to type A'
+    assert any(n.get('id') == 'tv/search/input' and n.get('text') == 'F' for n in flat(app, state)), 'controller keyboard failed to type F'
+    app.press('start')
+    app.wait(lambda s: contains(app, 'SearchResult', s) and not s['loading'] and bool(s['focus']) and any(n.get('media_items') for n in flat(app, s)), 'search results preserve focus')
+    state = app.checkpoint('search-results')
     ids = [i['id'] for n in flat(app, state) for i in n.get('media_items', [])]
     assert ids and len(ids) == len(set(ids)), 'search missing results or immediately duplicated'
     home(app)
+
+
+def genre(app, title):
+    def targets(state):
+        return [n['id'] for n in flat(app, state) if n.get('id', '').startswith('genre/') and any(v.get('text') == title for v in nodes(n))]
+    state = app.wait(lambda s: bool(targets(s)), 'genre card ' + title)
+    if not any(i.startswith('genre/') for i in app.ids(state)):
+        app.press('down')
+    app.seek(targets(state)[0], ['right'], limit=6)
 
 
 def error_loading(app, fixture):
@@ -489,7 +553,7 @@ def error_loading(app, fixture):
     app.press('r1')
     app.press('r1')
     app.wait(lambda s: contains(app, 'GenresTab', s) and not s['loading'], 'Genres controller tab')
-    app.seek('genre/Drama', ['down', 'left'], limit=10)
+    genre(app, 'Drama')
     app.checkpoint('genres')
     fixture.mode = 'slow'
     app.press('a')
@@ -504,7 +568,7 @@ def error_loading(app, fixture):
     app.checkpoint('genre-catalog')
     app.press('b')
     app.wait(lambda s: contains(app, 'GenresTab', s), 'genre catalog Back')
-    app.seek('genre/Comedy', ['right'], limit=4)
+    genre(app, 'Comedy')
     fixture.mode = 'error'
     app.press('a')
     app.wait(lambda s: s['error'], 'request error visible', timeout=15)
@@ -520,12 +584,65 @@ FUNCTIONS = {'movies': movie, 'series': series, 'source-picker': source_picker,
              'search': search, 'error-loading': error_loading}
 
 
+def runtime_case(name, directory, media):
+    result = {'scenario': name, 'status': 'FAIL', 'step': 'launch'}
+    app = fixture = None
+    began = time.monotonic()
+    try:
+        with tempfile.TemporaryDirectory(prefix='gmca-tvtest-') as temporary:
+            path = Path(temporary) / 'config'
+            if name == 'live':
+                candidates = [Path.home() / '.config/GMCA/config.json', Path.home() / '.cache/gmca-tvtest-live/config.json']
+                live = Path(os.environ['GMCA_TEST_LIVE_CONFIG']) if os.environ.get('GMCA_TEST_LIVE_CONFIG') else next((p for p in candidates if p.exists()), candidates[0])
+                secrets = profile(path, None, live)
+                base = None
+            else:
+                fixture = FixtureServer(media).start()
+                base = fixture.base
+                secrets = profile(path, base)
+            stop_previous()
+            app = Runtime(BUILD / 'GMCA', directory, path, base, secrets)
+            result['step'] = 'runtime'
+            try:
+                scenarios(app, name, fixture)
+                result['status'] = 'PASS'
+                result['step'] = 'complete'
+            finally:
+                if result['status'] != 'PASS':
+                    try:
+                        app.checkpoint('failure')
+                    except Exception:
+                        if name != 'live':
+                            subprocess.run(['scrot', '-o', str(directory / 'failure.png')], env=xenv(), check=False)
+                result['failed_step'] = app.step if result['status'] != 'PASS' else None
+                result['peak_rss_kib'] = app.peak_rss
+                result['cpu_seconds'] = round(app.cpu_seconds, 3)
+                result['scenario_seconds'] = getattr(app, 'timings', {})
+                result['boot_seconds'] = getattr(app, 'boot_seconds', None)
+                result['build_commit'] = getattr(app, 'build_commit', None)
+                app.close()
+                result['exit_code'] = app.proc.returncode
+                if app.proc.returncode != 0:
+                    result['status'] = 'FAIL'
+                    result['failed_step'] = result.get('failed_step') or 'GMCA exit'
+    except Exception as error:
+        result['error'] = str(error)
+    finally:
+        if fixture:
+            (directory / 'requests.json').write_text(json.dumps(fixture.requests, indent=2))
+            fixture.close()
+        result['duration_seconds'] = round(time.monotonic() - began, 3)
+        (directory / 'result.json').write_text(json.dumps(result, indent=2))
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('scenario', nargs='?', default='smoke', choices=['smoke', 'navigation', 'movies', 'series', 'source-picker', 'continue-watching', 'resume', 'watched', 'search', 'error-loading', 'live'])
+    parser.add_argument('scenario', nargs='?', default='smoke', choices=['smoke', 'boot', 'navigation', 'movies', 'series', 'source-picker', 'continue-watching', 'resume', 'watched', 'search', 'error-loading', 'live'])
     parser.add_argument('--runtime-only', action='store_true', help='reuse already validated build for scenario debugging')
     parser.add_argument('--sync', action='store_true', help='fetch origin refs; never reset or merge local changes')
     args = parser.parse_args()
+    os.umask(0o077)
     RESULTS.mkdir(exist_ok=True)
     (BUILD / 'tmp').mkdir(parents=True, exist_ok=True)
     os.environ['TMPDIR'] = str(BUILD / 'tmp')
@@ -542,10 +659,9 @@ def main():
         directory = RESULTS / ('run-' + time.strftime('%Y%m%d-%H%M%S') + '-' + args.scenario)
         directory.mkdir()
         result = {'scenario': args.scenario, 'status': 'FAIL', 'step': 'dependencies', 'ps4_validated': False}
-        app = fixture = None
         start = time.monotonic()
         try:
-            for tool in ('git', 'c++', 'cmake', 'ninja', 'pkg-config', 'ffmpeg', 'scrot', 'xrandr'):
+            for tool in ('git', 'c++', 'cmake', 'ninja', 'pkg-config', 'ffmpeg', 'scrot', 'xrandr', 'stdbuf'):
                 if not shutil.which(tool):
                     raise RuntimeError('missing dependency: ' + tool)
             for package in ('sdl2', 'mpv', 'libavformat', 'libcurl'):
@@ -554,6 +670,9 @@ def main():
             if args.sync:
                 result['step'] = 'fetch'
                 command(['git', 'fetch', 'origin', '--prune'], directory / 'build.log')
+            result['step'] = 'stop previous test runtime'
+            stop_previous()
+            result['runtime_only'] = args.runtime_only
             result['commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
             result['dirty'] = bool(subprocess.check_output(['git', 'status', '--porcelain', '--ignore-submodules=dirty'], cwd=ROOT))
             if not args.runtime_only:
@@ -563,6 +682,7 @@ def main():
                 patch('borealis-test-observers.patch')
                 result['step'] = 'unit tests'
                 command([str(ROOT / 'tests/run.sh')], directory / 'unit-tests.log')
+                command([sys.executable, '-m', 'unittest', 'discover', '-s', str(ROOT / 'tests/ui'), '-p', 'test_*.py'], directory / 'unit-tests.log')
                 result['step'] = 'configure'
                 configure = ['cmake', '-S', str(ROOT), '-B', str(BUILD), '-G', 'Ninja', '-DPLATFORM_DESKTOP=ON', '-DUSE_SDL2=ON', '-DUSE_SYSTEM_SDL2=ON', '-DGMCA_STREMIO_ONLY=ON', '-DGMCA_TEST_HARNESS=ON']
                 if shutil.which('ccache'):
@@ -575,46 +695,23 @@ def main():
             media = BUILD / 'tvtest-video.mp4'
             if not media.exists():
                 command(['ffmpeg', '-nostdin', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=5', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=22050', '-t', '120', '-c:v', 'mpeg4', '-q:v', '10', '-c:a', 'aac', '-threads', '1', '-movflags', '+faststart', str(media)], directory / 'build.log')
-            with tempfile.TemporaryDirectory(prefix='gmca-tvtest-') as temporary:
-                path = Path(temporary) / 'config'
-                if args.scenario == 'live':
-                    live = Path(os.environ.get('GMCA_TEST_LIVE_CONFIG', str(Path.home() / '.config/GMCA/config.json')))
-                    secrets = profile(path, None, live)
-                    base = None
-                else:
-                    fixture = FixtureServer(media)
-                    fixture.start()
-                    base = fixture.base
-                    secrets = profile(path, base)
-                stop_previous()
-                app = Runtime(BUILD / 'GMCA', directory, path, base, secrets)
-                result['step'] = 'runtime'
-                try:
-                    scenarios(app, args.scenario, fixture)
-                    result['status'] = 'PASS'
-                    result['step'] = 'complete'
-                finally:
-                    if result['status'] != 'PASS':
-                        try:
-                            app.checkpoint('failure')
-                        except Exception:
-                            subprocess.run(['scrot', '-o', str(directory / 'failure.png')], check=False)
-                    result['failed_step'] = app.step if result['status'] != 'PASS' else None
-                    result['peak_rss_kib'] = app.peak_rss
-                    result['scenario_seconds'] = getattr(app, 'timings', {})
-                    result['boot_seconds'] = getattr(app, 'boot_seconds', None)
-                    app.close()
-                    result['exit_code'] = app.proc.returncode
-                    if app.proc.returncode != 0:
-                        result['status'] = 'FAIL'
-                        result['step'] = 'GMCA exit'
-                if fixture:
-                    (directory / 'requests.json').write_text(json.dumps(fixture.requests, indent=2))
+            result['step'] = 'runtime'
+            selected = ('navigation', 'continue-watching', 'source-picker', 'resume', 'movies', 'watched', 'search', 'error-loading') if args.scenario == 'smoke' else (args.scenario,)
+            result['cases'] = {}
+            for name in selected:
+                case_directory = directory / name if args.scenario == 'smoke' else directory
+                case_directory.mkdir(exist_ok=True)
+                case = runtime_case(name, case_directory, media)
+                result['cases'][name] = case
+                result['peak_rss_kib'] = max(result.get('peak_rss_kib', 0), case.get('peak_rss_kib', 0))
+                if case['status'] != 'PASS':
+                    result['failed_step'] = name + ': ' + (case.get('failed_step') or case['step'])
+                    raise AssertionError(case.get('error', 'GMCA exit/crash'))
+            result['status'] = 'PASS'
+            result['step'] = 'complete'
         except Exception as error:
             result['error'] = str(error)
         finally:
-            if fixture:
-                fixture.close()
             result['duration_seconds'] = round(time.monotonic() - start, 2)
             (directory / 'result.json').write_text(json.dumps(result, indent=2))
             print(f"{result['status']}: {result.get('failed_step') or result['step']} — {directory}")

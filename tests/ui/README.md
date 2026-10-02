@@ -4,6 +4,7 @@ Run from the GMCA checkout on Debian/Xorg:
 
 ```sh
 ./scripts/test-tvbox.sh smoke --sync
+./scripts/test-tvbox.sh boot
 ./scripts/test-tvbox.sh navigation
 ./scripts/test-tvbox.sh movies
 ./scripts/test-tvbox.sh series
@@ -51,7 +52,7 @@ by `GMCA_TEST_HARNESS`; there is no production observer thread or socket.
 
 ## Isolation and artifacts
 
-Each run creates a private temporary `XDG_CONFIG_HOME` and `XDG_CACHE_HOME`.
+Each scenario creates a fresh private temporary `XDG_CONFIG_HOME` and `XDG_CACHE_HOME`.
 Config migration therefore sees only this isolated directory, never the real
 GMCA/pleNx/Switchlex folders. Config, search history, image cache, downloads,
 `stremio-watched.json`, `stremio-progress.json`, and `stremio-playback.json` all use
@@ -70,9 +71,10 @@ concurrent launches/builds. Production GMCA instances are never killed by name.
 
 `test-results/run-<timestamp>-<scenario>/` contains PNG screenshots from the real X
 root window, semantic JSON checkpoints, sanitized `gmca.log`, unit/build logs,
-request paths, and `result.json`. Five recent runs are retained. Logs are bounded;
+request paths, and `result.json`. Smoke checkpoints/logs are grouped in one subdirectory per scenario; the root
+result lists every completed case and the exact failed step. Five recent runs are retained. Logs are bounded;
 fixture snapshots include labels, while live snapshots include only IDs/classes.
-A failed assertion records its precise step and the last semantic state.
+Files are created with private permissions. A failed assertion records its precise step and the last semantic state.
 
 ## Live integration
 
@@ -80,7 +82,8 @@ A failed assertion records its precise step and the last semantic state.
 GMCA_TEST_LIVE_CONFIG=/private/path/config.json ./scripts/test-tvbox.sh live
 ```
 
-The default candidate is `~/.config/GMCA/config.json`. The runner copies only one
+The default candidate is `~/.config/GMCA/config.json`, with an optional private
+local copy at `~/.cache/gmca-tvtest-live/config.json` as fallback. The runner copies only one
 authenticated Stremio server/user into its private profile. It does not copy
 history, downloads, caches, other backend credentials, or account progress files.
 An absent authenticated config makes the live scenario fail explicitly; it does
@@ -88,7 +91,9 @@ not silently replace live validation with fixtures. The live scenario browses ho
 and Movies without playback or watched changes. The test HTTP guard permits the
 account read APIs and rejects account writes. Tokens and signed URLs are removed
 before stdout/stderr is persisted, and are never placed into result artifacts.
-No screenshots of login/settings/token forms are taken.
+Live screenshots are allowlisted to Home and Movies catalog views without an
+open dialog. Failed live boots outside those views suppress screenshots. No
+login/settings/token form or live progress datastore is exported.
 
 ## PS4 equivalence and limits
 
