@@ -1,8 +1,8 @@
+#include "utils/config.hpp"
 #include "view/search_list.hpp"
 #include "view/h_recycling.hpp"
 #include "view/video_source.hpp"
 #include "view/video_card.hpp"
-#include "api/plex.hpp"
 #include "api/backend.hpp"
 
 SearchList::SearchList() {
@@ -22,7 +22,6 @@ SearchList::SearchList() {
 SearchList::~SearchList() { brls::Logger::debug("View SearchList: delete"); }
 
 void SearchList::doRequest(const std::string& searchTerm) {
-    // itemType XML attribute "Movie"/"Series" -> Plex searchTypes; the
     // "Episode" column has no /library/search equivalent (removed from the XML)
     bool series = this->itemType == "Series";
     std::string wanted = series ? media::mediaTypeShow : media::mediaTypeMovie;
@@ -33,7 +32,7 @@ void SearchList::doRequest(const std::string& searchTerm) {
         [ASYNC_TOKEN, wanted](const media::Container<media::Item>& r) {
             ASYNC_RELEASE
             // /library/search returns mixed types -> client-side filter
-            std::vector<plex::Item> items;
+            std::vector<media::Item> items;
             for (auto& it : r.Items) {
                 if (it.type == wanted) items.push_back(it);
             }

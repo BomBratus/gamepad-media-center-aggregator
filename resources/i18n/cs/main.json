@@ -3,8 +3,8 @@
     "title": "pleNx je teď GMCA",
     "intro": "Stejná aplikace, jen dospělejší. Z pleNx se stal GMCA — Gamepad Media Center Aggregator — a umí toho teď mnohem víc.",
     "whats_new": "CO JE NOVÉHO",
-    "feature_backends": "Jedna aplikace, všechny servery — Plex, Jellyfin, Emby a Stremio",
-    "feature_music": "Vaše hudební knihovna hned vedle filmů a seriálů",
+    "feature_backends": "Stremio catalogs, library and playback on PS4",
+    "feature_music": "Multiple Stremio accounts, with your own library and history",
     "feature_offline": "Stahování offline, abyste mohli sledovat kdekoli bez připojení",
     "feature_updates": "Pravidelné aktualizace doručené přímo do aplikace",
     "reassure": "Vaše přihlášení, nastavení a stažené soubory byly přeneseny automaticky — nic není třeba nastavovat znovu. Užijte si to!",
@@ -16,8 +16,7 @@
     "suggest": "Návrhy",
     "search": "Vyhledat",
     "downloads": "Stahování",
-    "setting": "Nastavení",
-    "remote": "Servery"
+    "setting": "Nastavení"
   },
   "home": {
     "resume": "Pokračovat ve sledování",
@@ -86,7 +85,8 @@
     "go_series": "Přejít na seriál",
     "go_season": "Přejít na řadu",
     "director": "Režie",
-    "open": "Otevřít"
+    "open": "Otevřít",
+    "type": "Type"
   },
   "search": {
     "hint": "Podporuje klíčová slova i jejich počáteční písmena",
@@ -147,47 +147,12 @@
     "on_server": "Na serveru",
     "not_on_server": "Mimo server"
   },
-  "remote": {
-    "empty_title": "Žádné soubory",
-    "empty_sub": "Procházejte místní úložiště a své servery WebDAV, FTP nebo SFTP.",
-    "local": "Soubory",
-    "folder": "Složka",
-    "up": "Nahoru",
-    "bluray": "Přehrát Blu-ray",
-    "add_server": "Přidat server",
-    "edit_server": "Upravit server",
-    "manage": "Spravovat server",
-    "edit": "Upravit",
-    "delete": "Smazat",
-    "delete_confirm": "Smazat „{}“?",
-    "type": "Typ",
-    "name": "Název",
-    "host": "Hostitel",
-    "port": "Port",
-    "username": "Uživatelské jméno",
-    "password": "Heslo",
-    "path": "Výchozí cesta",
-    "optional": "Volitelné",
-    "save": "Otestovat a uložit",
-    "test_failed": "Připojení selhalo: {}",
-    "retry": "Zkusit znovu?",
-    "required": "Zadejte alespoň název a hostitele.",
-    "sort": "Seřadit soubory",
-    "date": "Datum úpravy",
-    "size": "Velikost",
-    "pin": "Připnout do Souborů",
-    "unpin": "Odebrat ze Souborů",
-    "pinned": "Připnuto do Souborů",
-    "unpinned": "Odebráno ze Souborů",
-    "already_pinned": "Již připnuto",
-    "pin_missing": "Tato složka již není dostupná. Odebrat ze Souborů?"
-  },
   "download": {
     "start": "Stáhnout",
     "cancel": "Zrušit stahování",
     "remove": "Odstranit stažené",
     "downloading": "Stahování…",
-    "eta": "zbývá {}",
+    "eta": "Zbývá {}",
     "completed": "Staženo",
     "failed": "Stahování selhalo",
     "queued": "Ve frontě",
@@ -212,8 +177,7 @@
     "section_done": "Staženo",
     "remove_all": "Odstranit vše",
     "confirm_remove_all": "Odstranit všechna stažení?",
-    "empty_sub": "Stažené filmy a epizody se zobrazí zde, připravené ke sledování offline.",
-    "eta": "Zbývá {}"
+    "empty_sub": "Stažené filmy a epizody se zobrazí zde, připravené ke sledování offline."
   },
   "setting": {
     "quit_hint": "Chystáte se ukončit aplikaci. Nastavení se projeví po příštím spuštění",
@@ -382,25 +346,6 @@
     "hint_confirm": "Instalace NSP forwarderu může vést k banu\nProsím potvrďte znovu",
     "remove_old": "GMCA je ve vaší nabídce HOME. Pokud tam ještě je stará dlaždice pleNx, odstraňte ji v Nastavení systému > Správa dat > Odstranit software."
   },
-  "plex": {
-    "title": "Přihlaste se ke svému účtu Plex",
-    "generating": "Generování kódu…",
-    "waiting": "Čekání na potvrzení…",
-    "connected": "Připojeno!",
-    "expired": "Kód vypršel, zkuste to prosím znovu",
-    "step1": "1. Na telefonu nebo počítači otevřete plex.tv/link",
-    "step2": "2. Přihlaste se ke svému účtu Plex",
-    "step3": "3. Zadejte výše zobrazený kód",
-    "regenerate": "Vygenerovat nový kód",
-    "choose_server": "Vyberte server",
-    "choose_profile": "Vyberte profil",
-    "profile_pin": "PIN profilu",
-    "wrong_pin": "Nesprávný PIN",
-    "no_server": "Na tomto účtu nebyl nalezen žádný server",
-    "connecting": "Připojování k serveru…",
-    "unreachable": "Server je nedostupný",
-    "connecting_slow": "Trvá to déle než obvykle — stále se snažíme připojit k vašemu serveru. Ještě chvilku…"
-  },
   "empty": {
     "title": "Nic k zobrazení",
     "error": "Nelze načíst"
@@ -422,21 +367,16 @@
     "choose_type": "Zvolte typ připojení",
     "switch_title": "Připojení",
     "add": "Přidat",
-    "jellyfin": {
-      "title_jellyfin": "Přihlásit se do Jellyfin",
-      "title_emby": "Přihlásit se do Emby",
-      "url": "Adresa serveru",
-      "username": "Uživatelské jméno",
-      "password": "Heslo",
-      "connect": "Připojit"
-    },
     "stremio": {
       "title": "Přihlásit se do Stremio",
       "email": "E-mail",
       "password": "Heslo",
       "connect": "Připojit",
       "invalid": "Zadejte svůj e-mail a heslo"
-    }
+    },
+    "connecting": "Připojování k serveru…",
+    "unreachable": "Server je nedostupný",
+    "connecting_slow": "Trvá to déle než obvykle — stále se snažíme připojit k vašemu serveru. Ještě chvilku…"
   },
   "stremio": {
     "subtitle": {

@@ -1,3 +1,10 @@
+# Archived: historical pleNx → GMCA transition plan
+
+> This document records the earlier rebrand and multi-platform transition. It
+> is retained as project history, not current product or release guidance.
+> Current GMCA development and delivery target PS4 with Stremio only; Linux is
+> an explicit shared-behavior test bench.
+
 # pleNx → GMCA — transition plan
 
 > **Goal:** rename **pleNx** to **Gamepad Media Center Aggregator (GMCA)** to match the app's pivot

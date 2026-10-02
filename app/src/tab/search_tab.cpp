@@ -1,8 +1,8 @@
-// GMCA_SHARED_STREMIO_SEARCH
 /*
     Copyright 2023 dragonflylee
 */
 
+#include "utils/config.hpp"
 #include "tab/search_tab.hpp"
 #include "view/recycling_grid.hpp"
 #include "view/svg_image.hpp"
@@ -13,16 +13,11 @@
 #include "utils/keybind.hpp"
 #include "utils/network_state.hpp"
 #include "utils/offline_library.hpp"
-#include "api/plex.hpp"
 #include "api/backend.hpp"
-#ifdef GMCA_STREMIO_ONLY
 #include <algorithm>
 #include <cstdint>
-#endif
 #include <fstream>
-#ifdef GMCA_STREMIO_ONLY
 #include <map>
-#endif
 
 using namespace brls::literals;  // for _i18n
 
@@ -70,7 +65,6 @@ private:
     std::string path;
     std::vector<std::string> list;
 };
-#ifdef GMCA_STREMIO_ONLY
 
 namespace {
 struct SearchDebounceState {
@@ -81,7 +75,6 @@ struct SearchDebounceState {
 std::map<SearchTab*, SearchDebounceState> searchDebounceStates;
 std::map<SearchTab*, brls::Event<>::Subscription> searchDebounceSubscriptions;
 }  // namespace
-#endif
 
 /// Removes the last UTF-8 code point: the IME can input multi-byte
 /// characters, a bare pop_back would cut a sequence in the middle.
@@ -193,7 +186,6 @@ SearchTab::SearchTab() {
     });
 
     this->searchSuggest->registerCell("Cell", VideoCardCell::create);
-#ifdef GMCA_STREMIO_ONLY
 
     searchDebounceStates[this] = {};
     auto subscription = brls::Application::getRunLoopEvent()->subscribe([this]() {
@@ -204,7 +196,6 @@ SearchTab::SearchTab() {
         this->doSearch(this->currentSearch);
     });
     searchDebounceSubscriptions.emplace(this, subscription);
-#endif
 }
 
 void SearchTab::onCreate() {
@@ -224,7 +215,6 @@ void SearchTab::onCreate() {
     this->updateInput();
 }
 
-#ifdef GMCA_STREMIO_ONLY
 SearchTab::~SearchTab() {
     auto sub = searchDebounceSubscriptions.find(this);
     if (sub != searchDebounceSubscriptions.end()) {
@@ -234,9 +224,6 @@ SearchTab::~SearchTab() {
     searchDebounceStates.erase(this);
     brls::Logger::debug("SearchTab: deleted");
 }
-#else
-SearchTab::~SearchTab() { brls::Logger::debug("SearchTab: deleted"); }
-#endif
 
 brls::View* SearchTab::create() { return new SearchTab(); }
 
@@ -255,7 +242,6 @@ void SearchTab::buildKeyboard() {
         for (int col = 0; col < 6; col++) {
             const char key = layout[row * 6 + col];
             auto* cell = new brls::Box();
-            cell->setId("tv/search/key/" + std::string(1, key));
             cell->setFocusable(true);
             cell->setDimensions(50, 46);
             if (col > 0) cell->setMarginLeft(8);
@@ -395,27 +381,21 @@ void SearchTab::doSuggest() {
     AppConfig::instance().backend().getRecentlyAdded(0, 24,
         [ASYNC_TOKEN](const media::Container<media::Item>& r) {
             ASYNC_RELEASE
-#ifdef GMCA_STREMIO_ONLY
             if (!this->currentSearch.empty()) return;
-#endif
             // poster grid: the suggestions are complete items
             this->searchSuggest->setDataSource(new VideoDataSource(r.Items));
         },
         [ASYNC_TOKEN](const std::string& ex) {
             ASYNC_RELEASE
-#ifdef GMCA_STREMIO_ONLY
             if (!this->currentSearch.empty()) return;
-#endif
             this->searchSuggest->setError(ex);
         });
 }
 
 void SearchTab::doSearch(const std::string& searchTerm) {
-#ifdef GMCA_STREMIO_ONLY
     auto state = searchDebounceStates.find(this);
     const uint64_t generation = state == searchDebounceStates.end() ? 0 : state->second.generation;
 
-#endif
     // offline: search the local catalog (title contains, case-insensitive)
     // instead of the server (SPEC §4.4)
     if (NetworkState::isOffline()) {
@@ -434,18 +414,12 @@ void SearchTab::doSearch(const std::string& searchTerm) {
     ASYNC_RETAIN
     // a single page: search does not paginate reliably
     AppConfig::instance().backend().search(searchTerm, media::MediaKind::Any, 40,
-#ifdef GMCA_STREMIO_ONLY
         [ASYNC_TOKEN, searchTerm, generation](const media::Container<media::Item>& r) {
-#else
-        [ASYNC_TOKEN](const media::Container<media::Item>& r) {
-#endif
             ASYNC_RELEASE
-#ifdef GMCA_STREMIO_ONLY
             auto state = searchDebounceStates.find(this);
             if (state == searchDebounceStates.end() || state->second.generation != generation ||
                 searchTerm != this->currentSearch)
                 return;
-#endif
             if (r.Items.empty()) {
                 this->searchSuggest->setEmpty(
                     "main/search/no_results"_i18n, "main/search/no_results_sub"_i18n, "icon/ico-search.svg");
@@ -453,28 +427,20 @@ void SearchTab::doSearch(const std::string& searchTerm) {
                 this->searchSuggest->setDataSource(new VideoDataSource(r.Items));
             }
         },
-#ifdef GMCA_STREMIO_ONLY
         [ASYNC_TOKEN, searchTerm, generation](const std::string& ex) {
-#else
-        [ASYNC_TOKEN](const std::string& ex) {
-#endif
             ASYNC_RELEASE
-#ifdef GMCA_STREMIO_ONLY
             auto state = searchDebounceStates.find(this);
             if (state == searchDebounceStates.end() || state->second.generation != generation ||
                 searchTerm != this->currentSearch)
                 return;
-#endif
             brls::Application::notify(ex);
         });
 }
 
 void SearchTab::updateInput() {
-#ifdef GMCA_STREMIO_ONLY
     auto& debounce = searchDebounceStates[this];
     ++debounce.generation;
     debounce.frames = 0;
-#endif
     auto theme = brls::Application::getTheme();
     if (this->currentSearch.empty()) {
         this->inputLabel->setText("main/search/placeholder"_i18n);
@@ -490,13 +456,8 @@ void SearchTab::updateInput() {
             this->historyBox->setVisibility(brls::Visibility::GONE);
         }
         this->suggestHeader->setTitle("main/search/results"_i18n);
-#ifdef GMCA_STREMIO_ONLY
         size_t fps = brls::Application::getFPS();
         if (fps == 0) fps = 60;
         debounce.frames = std::max(1, (int)(fps * 450 / 1000));
-#else
-        this->searchSuggest->showSkeleton();
-        this->doSearch(this->currentSearch);
-#endif
     }
 }

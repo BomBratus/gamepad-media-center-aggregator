@@ -1,9 +1,4 @@
-/*
-    GMCA — Plex video player.
-    Verified pipeline: PLEX_MIGRATION.md §2.7.
-    Units: mpv positions in seconds, Plex API in milliseconds,
-    transcoder offset in whole seconds.
-*/
+/* GMCA Stremio player. mpv positions are seconds; media progress is milliseconds. */
 
 #include <algorithm>
 #include <cctype>
@@ -11,12 +6,12 @@
 #include <cstring>
 
 #include "activity/player_view.hpp"
-#include "api/plex.hpp"
 #include "api/backend.hpp"
 #include "api/stremio/backend.hpp"
 #include "api/stremio/episode_continuation.hpp"
 #include "tab/media_series.hpp"
 #include "utils/dialog.hpp"
+#include "utils/config.hpp"
 #include "utils/misc.hpp"
 #include "view/mpv_core.hpp"
 #include "view/player_setting.hpp"
@@ -27,9 +22,6 @@
 
 using namespace brls::literals;
 
-/// "Watched" threshold: default value of the server preference
-/// LibraryVideoPlayedThreshold
-static const double SCROBBLE_THRESHOLD = 0.90;
 
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
 enum class Ps4SubtitleSidecarSafety { SafeText, Unknown, Risky };
@@ -49,7 +41,7 @@ static Ps4SubtitleSidecarSafety ps4SubtitleSidecarSafety(const std::string& rawU
 }
 #endif
 
-PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int versionIndex)
+PlayerView::PlayerView(const media::Item& item, const int64_t seekMs, int versionIndex)
     : itemId(item.ratingKey), item(item), preferredVersion(versionIndex) {
     // take sole ownership of MPVCore: if music was playing, the audio controller
     // must stop owning the shared event bus (else it reports this video's
@@ -65,8 +57,6 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
     this->setDimensions(width, height);
     this->addView(view);
     view->registerVideoQuality([this](...) { return this->toggleQuality(); });
-    // direct-access OSD pickers; &stream lets them switch transcode-side
-    // tracks (the Vita default) as well as embedded ones
     view->registerVideoSubtitle([this](...) {
         PlayerSetting::showSubtitleMenu(&this->stream);
         return true;
@@ -75,11 +65,7 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
         PlayerSetting::showAudioMenu(&this->stream);
         return true;
     });
-    // Recovery stays backend-aware: Plex/Vita gets its direct-play retry first;
-    // Stremio then offers the already-resolved alternate sources without any
-    // hidden refetch or addon reordering.
     view->registerError([this](...) {
-        if (this->tryDirectPlayFallback()) return true;
         return this->trySourceRecovery();
     });
 
@@ -149,8 +135,6 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
             break;
         case MpvEventEnum::MPV_LOADED: {
             const char* flag = MPVCore::SUBS_FALLBACK ? "select" : "auto";
-            // External (sidecar) subtitles embedded in the Media streams at detail
-            // time (Plex/Jellyfin direct play).
             for (auto& part : this->stream.parts) {
                 for (auto& s : part.streams) {
                     if (s.streamType != media::streamTypeSubtitle || s.key.empty()) continue;
@@ -184,7 +168,6 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
             // report cadence: every 10 s
             if (mpv.video_progress % 10 == 0) {
                 this->reportTimeline("playing", int64_t(mpv.video_progress) * 1000);
-                this->maybeScrobble(int64_t(mpv.video_progress) * 1000);
             }
             this->updateUpNext(mpv.video_progress);
             break;
@@ -193,13 +176,6 @@ PlayerView::PlayerView(const plex::Item& item, const int64_t seekMs, int version
     });
     customEventSubscribeID = mpv.getCustomEvent()->subscribe([this](const std::string& event, void* data) {
         if (event == QUALITY_CHANGE) {
-            // Quality/audio/subtitle change: the HLS transcode carries a single
-            // audio track and no selectable subtitle, so switching means asking
-            // the server for a fresh transcode and reloading it. Mirror
-            // playIndex and reset() mpv first: reloading in place kept the old
-            // (Vita hardware) decoder pinned, so the switch stalled and then
-            // failed with a playback error. Read the position before reset()
-            // zeroes it so the new transcode resumes where we were.
             int64_t pos = int64_t(MPVCore::instance().playback_time) * 1000;
             MPVCore::instance().reset();
             this->playMedia(pos);
@@ -233,7 +209,6 @@ PlayerView::~PlayerView() {
 
     if (!mpv.isStopped()) this->reportStop();
     // Free the server-side transcode session on exit (else it lingers orphaned).
-    this->stopTranscode();
     brls::Application::getExitEvent()->unsubscribe(this->exitSubscribeID);
     brls::Logger::debug("trying delete PlayerView...");
 }
@@ -265,7 +240,7 @@ void PlayerView::setSeries(const std::string& showRatingKey) {
 
 void PlayerView::setTitie(const std::string& title) { this->view->setTitie(title); }
 
-void PlayerView::setChapters(const std::vector<plex::Chapter>& chaps, int64_t durationMs) {
+void PlayerView::setChapters(const std::vector<media::Chapter>& chaps, int64_t durationMs) {
     std::vector<float> clips;
     if (durationMs > 0) {
         for (auto& c : chaps) {
@@ -372,9 +347,9 @@ void PlayerView::updateUpNext(int64_t progressSeconds) {
         dialog->addButton("main/stremio/playback/open_series"_i18n, [this]() {
             this->upNextDialog = nullptr;
             this->upNextLabel = nullptr;
-            plex::Item show;
+            media::Item show;
             show.ratingKey = this->item.grandparentRatingKey;
-            show.type = plex::mediaTypeShow;
+            show.type = media::mediaTypeShow;
             show.title = this->item.grandparentTitle;
             brls::Application::popActivity(brls::TransitionAnimation::NONE, [show]() {
                 if (auto* focus = brls::Application::getCurrentFocus())
@@ -398,9 +373,7 @@ void PlayerView::playMedia(const int64_t seekMs) {
     // quality/track switches, episode navigation, and transcode->direct play.
     // Without it each reload orphaned a server-side session (verified on dev:
     // they stack up at ~0% progress and never free), starving new transcodes.
-    this->stopTranscode();
     // deliberate (re)start: allow the direct-play fallback to trigger again
-    this->directPlayFallback = false;
     this->resolvingRecoverySources = false;
 
     // Fast path: the caller already resolved the exact source (Stremio source
@@ -408,7 +381,7 @@ void PlayerView::playMedia(const int64_t seekMs) {
     // re-resolve streams and could return a different order/set, silently playing
     // a different release than the one selected — so play the chosen one directly.
     {
-        auto accessible = [](const plex::Media& m) {
+        auto accessible = [](const media::Media& m) {
             for (auto& p : m.parts)
                 if (p.accessible && p.exists && !p.key.empty()) return true;
             return false;
@@ -431,12 +404,12 @@ void PlayerView::playMedia(const int64_t seekMs) {
 
             // caller-chosen source (Stremio picker) if it still resolves to an
             // accessible file; otherwise the first accessible version.
-            const plex::Media* chosen = nullptr;
+            const media::Media* chosen = nullptr;
             int chosenIndex = -1;
             if (AppConfig::instance().backend().type() == media::BackendType::Stremio && seekMs > 0 &&
                 this->preferredVersion < 0)
                 this->preferredVersion = stremio::savedPlaybackSource(this->item);
-            auto accessible = [](const plex::Media& m) {
+            auto accessible = [](const media::Media& m) {
                 for (auto& p : m.parts)
                     if (p.accessible && p.exists && !p.key.empty()) return true;
                 return false;
@@ -492,9 +465,6 @@ void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
     opts.audioStreamId = PlayerSetting::selectedAudio;
     opts.subtitleStreamId = PlayerSetting::selectedSubtitle;
     opts.burnSubtitles = PlayerSetting::selectedSubtitle > 0;
-    // transcode target codec: kept identical to the former hard-coded value
-    // (MPVCore::VIDEO_CODEC was never wired into the Plex transcoder — see
-    // MULTI_BACKEND.md §6); revisit when exposing the codec choice per backend
     opts.videoCodec = "h264";
     opts.sessionId = this->sessionId;
 
@@ -506,10 +476,6 @@ void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
     ASYNC_RETAIN
     brls::async([ASYNC_TOKEN, item, version, opts, generation]() {
         try {
-            // resolvePlayback runs the transcode decision synchronously and
-            // throws on failure; the direct-play fallback is internal. The Plex
-            // universal-transcoder request (incl. the Vita 1080p height cap) is
-            // built here — see PlexBackend::resolvePlayback.
             media::PlaybackSource src = AppConfig::instance().backend().resolvePlayback(item, version, opts);
             brls::sync([ASYNC_TOKEN, src, generation]() {
                 ASYNC_RELEASE
@@ -523,11 +489,6 @@ void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
                     return;
                 }
                 this->playMethod = src.playMethod;
-                // Remember the backend transcode session so we can tear it down
-                // server-side on reload/exit — the dev Vita fix. Set by the backend
-                // (Plex); empty for direct play or backends without a server
-                // transcode session, leaving stopTranscode a safe no-op.
-                this->transcodeSession = src.transcodeSession;
                 MPVCore::instance().setUrl(src.url, src.mpvExtra);
                 // Resolve subtitles only after a playable URL has actually been
                 // accepted. This preserves the single-worker playback-first order
@@ -609,23 +570,6 @@ void PlayerView::addExternalSubtitles() {
         if (std::strcmp(flag, "select") == 0) selectedPreferred = true;
         mpv.command("sub-add", url.c_str(), flag, s.displayTitle.c_str(), s.languageTag.c_str());
     }
-}
-
-bool PlayerView::tryDirectPlayFallback() {
-    auto& mpv = MPVCore::instance();
-    // only recover a failed transcode, and only once per (re)load
-    if (this->playMethod != "transcode" || this->directPlayFallback) return false;
-    this->directPlayFallback = true;
-
-    int64_t pos = int64_t(mpv.playback_time) * 1000;  // read before reset() zeroes it
-    brls::Logger::error("PlayerView: transcode playback failed ({}) — falling back to direct play at {} ms",
-        mpv.getError(), pos);
-    mpv.reset();            // release the (Vita hardware) decoder held by the failed stream
-    this->stopTranscode();  // drop the dead transcode session server-side
-    this->startPlayback(pos, /*forceDirect=*/true);  // re-resolve, forcing direct play
-    // surface the reason to the user too, so bug reports carry the mpv code
-    brls::Application::notify(fmt::format("{} ({})", "main/player/direct_fallback"_i18n, mpv.getError()));
-    return true;  // handled: no error dialog
 }
 
 bool PlayerView::trySourceRecovery(int64_t resumeMs) {
@@ -711,15 +655,6 @@ bool PlayerView::trySourceRecovery(int64_t resumeMs) {
     return true;
 }
 
-void PlayerView::stopTranscode() {
-    if (this->transcodeSession.empty()) return;
-    auto& conf = AppConfig::instance();
-    // Fire-and-forget: getAction copies url+token, so it is safe even if this
-    // PlayerView is being destroyed. A stale session id just 404s server-side.
-    plex::getAction(conf.getUrl(), conf.getToken(), nullptr, plex::apiTranscodeStop,
-        HTTP::encode_form({{"session", this->transcodeSession}}));
-    this->transcodeSession.clear();
-}
 
 void PlayerView::checkpointPlayback(int64_t timeMs) {
     if (timeMs < 0) return;
@@ -764,24 +699,13 @@ void PlayerView::reportStop(int64_t timeMs) {
             ? this->playbackCheckpoint.position() : int64_t(MPVCore::instance().playback_time) * 1000;
     }
     this->reportTimeline("stopped", timeMs);
-    this->maybeScrobble(timeMs);
     brls::Logger::debug("PlayerView reportStop {}", this->sessionId);
-}
-
-void PlayerView::maybeScrobble(int64_t timeMs) {
-    // Stremio completion is owned by reportProgress, including local and account state.
-    if (AppConfig::instance().backend().type() == media::BackendType::Stremio) return;
-    // state=stopped is NOT enough to mark as watched: explicit scrobble required
-    if (this->scrobbled || this->item.duration <= 0) return;
-    if (double(timeMs) / double(this->item.duration) < SCROBBLE_THRESHOLD) return;
-    this->scrobbled = true;
-    AppConfig::instance().backend().markWatched(this->itemId);
 }
 
 bool PlayerView::toggleQuality() {
     std::vector<std::string> options = {"main/player/auto"_i18n};
     std::vector<int64_t> values = {0};
-    int64_t videoBitRate = this->stream.bitrate * 1000;  // Plex: kbps -> bps
+    int64_t videoBitRate = this->stream.bitrate * 1000;  // compatible media field
 
     if (videoBitRate >= 15000000) options.push_back("20 Mbps"), values.push_back(20000000);
     if (videoBitRate >= 10000000) options.push_back("15 Mbps"), values.push_back(15000000);
@@ -801,8 +725,6 @@ bool PlayerView::toggleQuality() {
         "main/player/quality"_i18n, options,
         [values](int selected) {
             MPVCore::VIDEO_QUALITY = values[selected];
-            // remember the choice across launches (Vita users had to re-lower
-            // it every session otherwise — see config.cpp default)
             AppConfig::instance().setItem(AppConfig::PLAYER_VIDEO_QUALITY, MPVCore::VIDEO_QUALITY);
             MPVCore::instance().getCustomEvent()->fire(QUALITY_CHANGE, nullptr);
             return true;

@@ -19,7 +19,6 @@ RecyclingGridItem* PeopleDataSource::cellForRow(RecyclingView* recycler, size_t 
     cell->picture->clear();
     if (!item.thumb.empty()) {
         // depending on the metadata agent, a Role thumb is an absolute URL
-        // (provider.plex.tv) or a server-relative path
         if (item.thumb.rfind("http", 0) == 0) {
             Image::with(cell->picture, item.thumb);
         } else {

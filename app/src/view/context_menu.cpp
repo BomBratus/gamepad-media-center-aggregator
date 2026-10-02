@@ -1,3 +1,4 @@
+#include "utils/config.hpp"
 #include "view/context_menu.hpp"
 #include "view/svg_image.hpp"
 #include "view/auto_tab_frame.hpp"
@@ -5,8 +6,6 @@
 #include "view/video_card.hpp"
 #include "view/mpv_core.hpp"
 #include "tab/media_series.hpp"
-#include "api/plex.hpp"
-#include "api/plex/watchlist.hpp"
 #include "api/backend.hpp"
 #include "utils/download.hpp"
 
@@ -67,7 +66,7 @@ void MenuItem::setSelected(bool selected) {
 
 brls::View* MenuItem::create() { return new MenuItem(); }
 
-ContextMenu::ContextMenu(const plex::Item& item, brls::Box* host) : host(host), itemId(item.ratingKey) {
+ContextMenu::ContextMenu(const media::Item& item, brls::Box* host) : host(host), itemId(item.ratingKey) {
     this->inflateFromXMLRes("xml/view/context_menu.xml");
     brls::Logger::debug("ContextMenu: create");
 
@@ -82,7 +81,7 @@ ContextMenu::ContextMenu(const plex::Item& item, brls::Box* host) : host(host), 
     this->cancel->addGestureRecognizer(new brls::TapGestureRecognizer(this->cancel));
 
     // contextual header: what are we acting on?
-    if (item.type == plex::mediaTypeEpisode) {
+    if (item.type == media::mediaTypeEpisode) {
         this->labelTitle->setText(item.grandparentTitle.empty() ? item.title : item.grandparentTitle);
         this->labelSubtitle->setText(fmt::format("S{}E{} — {}", item.parentIndex, item.index, item.title));
     } else {
@@ -96,9 +95,9 @@ ContextMenu::ContextMenu(const plex::Item& item, brls::Box* host) : host(host), 
         this->btnGoSeries->setVisibility(brls::Visibility::VISIBLE);
         this->btnGoSeries->registerClickAction([item, host](...) {
             brls::Application::popActivity(brls::TransitionAnimation::NONE, [item, host]() {
-                plex::Item series;
+                media::Item series;
                 series.ratingKey = item.grandparentRatingKey;
-                series.type = plex::mediaTypeShow;
+                series.type = media::mediaTypeShow;
                 series.title = item.grandparentTitle;
                 series.thumb = item.grandparentThumb;
                 ui::presentDetail(host, new MediaSeries(series));
@@ -106,13 +105,13 @@ ContextMenu::ContextMenu(const plex::Item& item, brls::Box* host) : host(host), 
             return true;
         });
         this->btnGoSeries->addGestureRecognizer(new brls::TapGestureRecognizer(this->btnGoSeries));
-    } else if (item.type == plex::mediaTypeSeason && !item.parentRatingKey.empty()) {
+    } else if (item.type == media::mediaTypeSeason && !item.parentRatingKey.empty()) {
         this->btnGoSeries->setVisibility(brls::Visibility::VISIBLE);
         this->btnGoSeries->registerClickAction([item, host](...) {
             brls::Application::popActivity(brls::TransitionAnimation::NONE, [item, host]() {
-                plex::Item series;
+                media::Item series;
                 series.ratingKey = item.parentRatingKey;
-                series.type = plex::mediaTypeShow;
+                series.type = media::mediaTypeShow;
                 series.title = item.parentTitle;
                 ui::presentDetail(host, new MediaSeries(series));
             });
@@ -121,13 +120,13 @@ ContextMenu::ContextMenu(const plex::Item& item, brls::Box* host) : host(host), 
         this->btnGoSeries->addGestureRecognizer(new brls::TapGestureRecognizer(this->btnGoSeries));
     }
 
-    if (item.type == plex::mediaTypeEpisode && !item.parentRatingKey.empty()) {
+    if (item.type == media::mediaTypeEpisode && !item.parentRatingKey.empty()) {
         this->btnGoSeason->setVisibility(brls::Visibility::VISIBLE);
         this->btnGoSeason->registerClickAction([item, host](...) {
             brls::Application::popActivity(brls::TransitionAnimation::NONE, [item, host]() {
-                plex::Item season;
+                media::Item season;
                 season.ratingKey = item.parentRatingKey;
-                season.type = plex::mediaTypeSeason;
+                season.type = media::mediaTypeSeason;
                 season.parentRatingKey = item.grandparentRatingKey;
                 season.title = item.grandparentTitle;
                 season.thumb = item.parentThumb;
@@ -147,33 +146,18 @@ ContextMenu::ContextMenu(const plex::Item& item, brls::Box* host) : host(host), 
     this->btnMarkPlay->addGestureRecognizer(new brls::TapGestureRecognizer(this->btnMarkPlay));
     this->btnMarkPlay->setSelected(item.played());
 
-    // plex.tv watchlist: movies and shows only (the provider API accepts
     // neither episodes nor seasons); the entry stays hidden until the
     // state is known (async provider request — see initWatchlist)
     auto& be = AppConfig::instance().backend();
     if (be.caps().listKind != media::ListKind::None) {
         if (be.canList(item)) {
             this->initWatchlist(item);
-        } else if (be.caps().listKind == media::ListKind::Watchlist &&
-                   (item.type == media::mediaTypeMovie || item.type == media::mediaTypeShow)) {
-            // Plex: guid missing from this listing -> fetch full metadata, then init
-            ASYNC_RETAIN
-            be.getItemDetail(
-                this->itemId, false,
-                [ASYNC_TOKEN](const media::Item& full) {
-                    ASYNC_RELEASE
-                    this->initWatchlist(full);
-                },
-                [ASYNC_TOKEN](const std::string& ex) {
-                    ASYNC_RELEASE
-                    brls::Logger::warning("ContextMenu list guid: {}", ex);
-                });
         }
     }
 
     auto& dm = DownloadManager::instance();
-    if (item.type == plex::mediaTypeMovie || item.type == plex::mediaTypeEpisode ||
-        item.type == plex::mediaTypeClip) {
+    if (item.type == media::mediaTypeMovie || item.type == media::mediaTypeEpisode ||
+        item.type == media::mediaTypeClip) {
         if (dm.isDownloaded(item.ratingKey)) {
             this->btnDownload->title->setText("main/download/completed"_i18n);
             this->btnDownload->setSelected(true);

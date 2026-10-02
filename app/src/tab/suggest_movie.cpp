@@ -1,8 +1,8 @@
 #include "tab/suggest_movie.hpp"
 #include "view/recyling_video.hpp"
 #include "view/loading_spinner.hpp"
-#include "api/plex.hpp"
 #include "api/backend.hpp"
+#include "utils/config.hpp"
 
 SuggestMovie::SuggestMovie(const std::string id) : itemId(id) {
     // same layout as the show suggestions: hub rows
@@ -17,7 +17,6 @@ void SuggestMovie::onCreate() { this->doHubs(); }
 void SuggestMovie::doHubs() {
     this->spinner->setSpinning(true);
     ASYNC_RETAIN
-    // section hubs: replaces /Movies/Recommendations (no Plex equivalent)
     AppConfig::instance().backend().getSectionHubs(this->itemId, 20,
         [ASYNC_TOKEN](const media::Container<media::Hub>& r) {
             ASYNC_RELEASE
@@ -28,7 +27,7 @@ void SuggestMovie::doHubs() {
                 RecylingVideo* row = new RecylingVideo();
                 row->setTitle(hub.title);
                 // landscape thumbnails for episodes/clips, posters otherwise
-                if (hub.type == plex::mediaTypeEpisode || hub.type == plex::mediaTypeClip) {
+                if (hub.type == media::mediaTypeEpisode || hub.type == media::mediaTypeClip) {
                     row->setFrameHeight(brls::getStyle()["app/card/wide/row"]);
                     row->setItemWidth(brls::getStyle()["app/card/wide/width"]);
                 } else {

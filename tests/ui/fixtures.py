@@ -224,6 +224,15 @@ class FixtureServer:
             def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
                 path = self._record_path()
                 body = self._read_json()
+                if path == "/api/login":
+                    if body.get("email") != "tvtest@example.invalid" or body.get("password") != "fixture-password":
+                        self._send_json({"error": {"code": 1, "message": "fixture credentials rejected"}}, 401)
+                        return
+                    self._send_json({"result": {
+                        "authKey": "fixture-login-token",
+                        "user": {"_id": "tvtest-login", "email": body["email"], "fullname": "Fixture Login"},
+                    }})
+                    return
                 if path == "/api/addonCollectionGet":
                     self._send_json({"result": {"addons": [{"transportUrl": fixture.base + "/manifest.json"}]}})
                     return

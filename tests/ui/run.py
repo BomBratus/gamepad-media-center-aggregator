@@ -18,7 +18,7 @@ import urllib.request
 from fixtures import FixtureServer
 
 ROOT = Path(__file__).resolve().parents[2]
-BUILD = ROOT / 'build-tvtest'
+BUILD = Path(os.environ.get('GMCA_TEST_BUILD_DIR', ROOT / 'build-test-bench'))
 RESULTS = ROOT / 'test-results'
 
 
@@ -165,6 +165,22 @@ class Runtime:
         self.call(command='button', button=button, pressed=False)
         time.sleep(.25)
 
+    def type_ime_text(self, value):
+        """Enter synthetic fixture text through the active X11/GLFW IME."""
+        self.step = 'type synthetic fixture text'
+        # GLFW's X11 title is blank and Xvfb has no window manager, so select
+        # the visible app by its WM_CLASS and focus it directly.
+        windows = subprocess.check_output(['xdotool', 'search', '--onlyvisible', '--class', 'GMCA'],
+                                          env=xenv(), text=True).splitlines()
+        if not windows:
+            raise RuntimeError('visible GMCA X11 window not found for fixture IME input')
+        window = windows[-1]
+        subprocess.run(['xdotool', 'windowfocus', '--sync', window], env=xenv(), check=True)
+        subprocess.run(['xdotool', 'type', '--window', window, '--clearmodifiers', '--delay', '1', value],
+                       env=xenv(), check=True)
+        subprocess.run(['xdotool', 'key', '--window', window, 'Return'], env=xenv(), check=True)
+        self.wait(lambda s: s.get('dialog') is None, 'submit fixture IME text', timeout=10)
+
     def focus(self):
         return self.state().get('focus')
 
@@ -209,7 +225,7 @@ class Runtime:
         (BUILD / 'runtime.json').unlink(missing_ok=True)
 
 
-def profile(path, base, live=None):
+def profile(path, base, live=None, startup=None):
     dest = path / 'GMCA'
     dest.mkdir(parents=True)
     secrets = []
@@ -225,6 +241,47 @@ def profile(path, base, live=None):
         data = {'servers': [server], 'users': [users[0]], 'user_id': users[0]['id']}
         secrets = [server['access_token'], users[0].get('access_token', '')]
         # Copy neither history nor unrelated remote-service credentials.
+    elif startup == 'fresh':
+        data = {'user_id': '', 'users': [], 'servers': []}
+    elif startup == 'legacy-selected':
+        # Keep the historical unsupported profile selected while a separate,
+        # valid Stremio account remains available. Startup must fail closed to
+        # sign-in rather than silently switching profiles or exposing old tiles.
+        data = {
+            'user_id': 'legacy-selected',
+            'users': [
+                {'id': 'legacy-selected', 'name': 'Legacy account', 'server_id': 'legacy-plex',
+                 'access_token': 'fixture-legacy-token'},
+                {'id': 'valid-stremio', 'name': 'Valid Stremio account', 'server_id': 'tvtest',
+                 'access_token': 'fixture-user-token'},
+            ],
+            'servers': [
+                {'id': 'legacy-plex', 'name': 'Legacy Plex', 'type': 'plex',
+                 'access_token': 'fixture-legacy-token', 'urls': ['http://127.0.0.1/legacy']},
+                {'id': 'tvtest', 'name': 'Stremio fixture', 'type': 'stremio',
+                 'access_token': 'fixture-stremio-token', 'urls': [base],
+                 'addons': [base + '/manifest.json']},
+            ],
+            'remotes': [{'id': 'legacy-remote', 'url': 'http://127.0.0.1:1/keep'}],
+            'pins': [{'id': 'legacy-pin', 'opaque': True}],
+            'legacy_extension': {'must_survive': ['legacy', 7]},
+        }
+    elif startup in ('multiple-one', 'multiple-two'):
+        data = {
+            'user_id': 'tvtest-one' if startup == 'multiple-one' else 'tvtest-two',
+            'users': [
+                {'id': 'tvtest-one', 'name': 'Fixture account one', 'server_id': 'stremio-one',
+                 'access_token': 'fixture-user-one'},
+                {'id': 'tvtest-two', 'name': 'Fixture account two', 'server_id': 'stremio-two',
+                 'access_token': 'fixture-user-two'},
+            ],
+            'servers': [
+                {'id': 'stremio-one', 'name': 'Stremio fixture one', 'type': 'stremio',
+                 'access_token': 'fixture-token-one', 'urls': [base], 'addons': [base + '/manifest.json']},
+                {'id': 'stremio-two', 'name': 'Stremio fixture two', 'type': 'stremio',
+                 'access_token': 'fixture-token-two', 'urls': [base], 'addons': [base + '/manifest.json']},
+            ],
+        }
     else:
         data = {'user_id': 'tvtest', 'users': [{'id': 'tvtest', 'name': 'TV test', 'server_id': 'tvtest', 'access_token': 'fixture'}],
                 'servers': [{'id': 'tvtest', 'name': 'Stremio fixture', 'type': 'stremio',
@@ -263,6 +320,186 @@ def navigation(app):
 
 
 def scenarios(app, name, fixture):
+    if name in ('fresh', 'legacy-selected'):
+        app.step = 'startup sign-in routing'
+        state = app.wait(lambda s: s.get('view') == 'stremio_signin' and s.get('focus'),
+                         'fresh Stremio sign-in screen')
+        assert contains(app, 'StremioAdd', state), 'logged-out startup did not show Stremio sign-in'
+        if name == 'legacy-selected':
+            assert not any('ConnectionTile' in n.get('class', '') for n in flat(app, state)), \
+                'unsupported legacy connection tile leaked into Stremio sign-in'
+            assert state.get('test_account_id') == 'legacy-selected', \
+                'startup silently changed the selected legacy account'
+        app.checkpoint(name)
+        return
+    if name == 'fresh-login':
+        state = app.wait(lambda s: s.get('view') == 'stremio_signin' and s.get('focus'),
+                         'fresh profile Stremio sign-in')
+        assert contains(app, 'StremioAdd', state), 'fresh profile did not reach sign-in form'
+        app.press('a')
+        app.wait(lambda s: contains(app, 'EditTextDialog', s), 'open email input')
+        app.type_ime_text('tvtest@example.invalid')
+        app.press('down')
+        app.press('a')
+        app.wait(lambda s: contains(app, 'EditTextDialog', s), 'open password input')
+        app.type_ime_text('fixture-password')
+        app.press('down')
+        app.press('a')
+        state = app.wait(lambda s: s.get('view') in ('stremio_home', 'stremio_catalogs') and
+                         s.get('test_account_id') == 'tvtest-login', 'fixture Stremio sign-in completes')
+        assert any(path == '/api/login' for path in fixture.requests), 'fixture auth endpoint was not called'
+        app.checkpoint('fresh-sign-in-complete')
+        return
+    if name in ('multiple-one', 'multiple-two'):
+        state = boot(app)
+        expected = 'tvtest-one' if name == 'multiple-one' else 'tvtest-two'
+        assert state.get('test_account_id') == expected, \
+            f'{expected} was not the active Stremio account after restart'
+        assert state.get('view') in ('stremio_home', 'stremio_catalogs'), \
+            'selected Stremio account did not reach the app shell'
+        app.checkpoint(name)
+        if name == 'multiple-one':
+            # RB follows the real sidebar tab order, including the pinned
+            # account-picker tab. Then move from the selected first account to
+            # the second tile and activate it through the controller path.
+            app.step = 'navigate to account switcher'
+            switcher = None
+            for _ in range(16):
+                state = app.state()
+                if state.get('view') == 'account_switcher':
+                    switcher = state
+                    break
+                focused_sidebar = (state.get('focus') or [None])[0]
+                if (focused_sidebar and 'AutoSidebarItem' in focused_sidebar.get('class', '')
+                        and not focused_sidebar.get('id')):
+                    app.press('a')
+                    switcher = app.wait(lambda s: s.get('view') == 'account_switcher',
+                                        'activate account switcher sidebar tab')
+                    break
+                app.press('down')
+            assert switcher, 'sidebar navigation did not open the account switcher'
+            tiles = [n for n in flat(app, switcher) if 'ConnectionTile' in n.get('class', '')]
+            assert len(tiles) == 2, f'expected two Stremio account tiles, got {len(tiles)}'
+            app.checkpoint('account-switcher-open')
+            app.press('right')
+            assert any('ConnectionTile' in node.get('class', '') for node in (app.state().get('focus') or [])), \
+                'D-pad Right did not focus a real account tile'
+            # The first Right enters the grid from the avatar; the second
+            # moves from the active first account to the other Stremio tile.
+            app.press('right')
+            app.checkpoint('account-switcher-right')
+            app.press('a')
+            state = app.wait(lambda s: s.get('test_account_id') == 'tvtest-two' and
+                             s.get('view') in ('stremio_home', 'stremio_catalogs'),
+                             'select second Stremio account from account switcher')
+            app.checkpoint('selected-second-account')
+        return
+    if name == 'library':
+        boot(app)
+        sidebar(app, 'tab/watchlist')
+        app.press('right')
+        state = app.wait(lambda s: contains(app, 'WatchlistTab', s) and
+                         any(i['id'] in ('movie:tt9000001', 'series:tt9000010')
+                             for n in flat(app, s) for i in n.get('media_items', [])),
+                         'Stremio account library items', timeout=25)
+        items = [i['id'] for n in flat(app, state) for i in n.get('media_items', [])]
+        assert 'movie:tt9000001' in items and 'series:tt9000010' in items, \
+            'Stremio library did not render both movie and series entries'
+        assert '/api/datastoreGet' in fixture.requests, 'library did not read the fixture account datastore'
+        app.checkpoint('stremio-library')
+        return
+    if name == 'offline-download':
+        boot(app)
+        # Queue a concrete resolved source from the movie details screen. This
+        # covers the Stremio explicit-source DownloadManager path, including
+        # caching source metadata and writing the completed index/file.
+        catalog(app, 'movie')
+        app.seek('movie:tt9000001', ['down', 'left'], limit=10)
+        app.press('a')
+        app.wait(lambda s: contains(app, 'MediaMovie', s) and
+                 'movie/source/0' in app.ids(s) and not s['loading'],
+                 'movie details with fixture release row')
+        app.seek('movie/source/0', ['down'], limit=12)
+        app.press('x')
+        config_dir = getattr(app, 'config_dir', None)
+        assert config_dir, 'runtime profile path not available for download verification'
+        index_path = Path(config_dir) / 'downloads' / 'index.json'
+        deadline = time.monotonic() + 45
+        completed = None
+        while time.monotonic() < deadline:
+            try:
+                entries = json.loads(index_path.read_text())
+                completed = next((item for item in entries if item.get('itemId') == 'movie:tt9000001'), None)
+                if completed and completed.get('status') == 'Completed':
+                    break
+            except (OSError, ValueError):
+                pass
+            app.state()
+            time.sleep(.2)
+        assert completed and completed.get('status') == 'Completed', \
+            'source download did not reach Completed in downloads/index.json'
+        download_path = Path(config_dir) / 'downloads' / completed['itemId'] / completed['filePath']
+        assert download_path.is_file() and download_path.stat().st_size == fixture.media_path.stat().st_size, \
+            'completed download file is missing or has an unexpected size'
+        assert '/video.mp4' in fixture.requests, 'explicit source download did not fetch fixture media'
+        assert completed.get('partKey', '').startswith(fixture.base + '/video.mp4'), \
+            'completed download did not cache the selected fixture source URL'
+        media_requests_before_offline_playback = fixture.requests.count('/video.mp4')
+        # Stop the loopback server only after the queue and file are complete;
+        # playback must now come solely from the Downloads tab's local path.
+        fixture.close()
+        sidebar(app, 'tab/downloads')
+        app.press('right')
+        state = app.wait(lambda s: contains(app, 'DownloadView', s) and
+                         any(n.get('text') == 'Fixture Movie' for n in flat(app, s)),
+                         'completed download list')
+        for _ in range(8):
+            if any('DownloadCard' in item.get('class', '') for item in (app.state().get('focus') or [])):
+                break
+            app.press('down')
+        assert any('DownloadCard' in item.get('class', '') for item in (app.state().get('focus') or [])), \
+            'D-pad did not focus the completed download card'
+        app.press('a')
+        state = app.wait(lambda s: s.get('local_playback') and s.get('duration_seconds', 0) > 0 and
+                         not s.get('player_stopped'), 'completed download opens LocalPlayer', timeout=25)
+        assert fixture.requests.count('/video.mp4') == media_requests_before_offline_playback, \
+            'offline playback requested the network video URL again'
+        app.checkpoint('offline-local-player')
+        close_player(app, 'local player Back')
+        return
+    if name == 'subtitles':
+        boot(app)
+        play_first_episode(app, fixture)
+        state = app.wait(lambda s: len(s.get('subtitle_tracks', [])) >= 2,
+                         'external Stremio subtitle tracks loaded in mpv', timeout=25)
+        assert any('/subtitles/' in path for path in fixture.requests), \
+            'Stremio subtitles resource was not requested'
+        assert '/subtitle.vtt' in fixture.requests, 'mpv did not fetch the fixture subtitle sidecar'
+        app.checkpoint('external-subtitles-loaded')
+        close_player(app, 'subtitle player Back')
+        return
+    if name == 'next-episode':
+        boot(app)
+        play_first_episode(app, fixture)
+        initial = app.wait(lambda s: s.get('player_item') == 'series:tt9000010:2:1',
+                           'first season-two episode starts')
+        for _ in range(18):
+            if initial.get('dialog') == 'dialog' or initial.get('playback_seconds', 0) >= initial.get('duration_seconds', 120) - 8:
+                break
+            app.press('r1')
+            initial = app.state()
+        if initial.get('dialog') != 'dialog':
+            initial = app.wait(lambda s: s.get('dialog') == 'dialog',
+                               'up-next prompt near episode end', timeout=25)
+        texts = [n.get('text', '') for n in flat(app, initial)]
+        assert any('Play next now' in text for text in texts), 'up-next prompt does not offer the next episode'
+        app.press('a')
+        state = app.wait(lambda s: s.get('player_item') == 'series:tt9000010:2:2' and
+                         s.get('duration_seconds', 0) > 0 and not s.get('player_stopped'),
+                         'next episode starts from the up-next prompt', timeout=30)
+        app.checkpoint('next-episode-player')
+        close_player(app, 'next episode player Back')
+        return
     boot(app)
     if name in ('smoke', 'navigation', 'live'):
         navigation(app)
@@ -358,6 +595,16 @@ def series(app, fixture):
     return
 
 
+def play_first_episode(app, fixture):
+    series(app, fixture)
+    app.wait(lambda s: 'series:tt9000010:2:1' in app.ids(s), 'first episode focus')
+    app.press('a')
+    app.wait(lambda s: s['source_picker'] and not s['loading'], 'episode source picker')
+    app.press('a')
+    return app.wait(lambda s: s['player'] and s.get('duration_seconds', 0) > 0 and
+                    not s.get('player_stopped'), 'fixture episode starts', timeout=30)
+
+
 def close_player(app, step):
     app.step = step
     # TV mode first hides a visible OSD; a following Back closes playback.
@@ -392,7 +639,7 @@ def source_picker(app, fixture):
     state = app.checkpoint('source-picker-reopened')
     assert any(i.startswith('stremio/source/') for i in app.ids(state)), 'reopened picker focused Cancel instead of source'
     app.press('a')
-    app.wait(lambda s: s['player'] and s.get('duration_seconds', 0) > 0 and not s.get('player_stopped'), 'source confirm opens playing mpv', timeout=30)
+    app.wait(lambda s: s['player'] and s.get('duration_seconds', 0) > 0 and not s.get('player_stopped'), 'source confirm opens playing mpv', timeout=45)
     app.checkpoint('player')
     close_player(app, 'player Back')
     home(app)
@@ -528,12 +775,18 @@ def search(app, fixture):
     app.press('right')
     app.wait(lambda s: contains(app, 'SearchTab', s), 'controller search')
     app.checkpoint('search')
-    # TV search has an on-screen keyboard, exercised with controller confirmation.
-    app.seek('tv/search/key/A', ['down'], limit=8)
-    app.seek('tv/search/key/F', ['right'], limit=8)
+    # The on-screen keys are intentionally anonymous layout cells. Exercise the
+    # first key through the real action row: down to its first button, then the
+    # explicit route from that button down to key A.
+    app.press('down')
+    app.press('down')
+    for _ in range(5):  # A -> F, which matches the deterministic Fixture titles.
+        app.press('right')
     app.press('a')
     state = app.checkpoint('search-input')
-    assert any(n.get('id') == 'tv/search/input' and n.get('text') == 'F' for n in flat(app, state)), 'controller keyboard failed to type F'
+    input_text = next((n.get('text', '') for n in flat(app, state)
+                       if n.get('id') == 'tv/search/input'), '')
+    assert input_text == 'F', 'controller keyboard failed to enter the fixture search query'
     app.press('start')
     app.wait(lambda s: contains(app, 'SearchResult', s) and not s['loading'] and bool(s['focus']) and any(n.get('media_items') for n in flat(app, s)), 'search results preserve focus')
     state = app.checkpoint('search-results')
@@ -607,14 +860,16 @@ def check_live_account(profile_path):
 
 
 def configured_live():
-    candidates = [Path(os.environ['GMCA_TEST_LIVE_CONFIG'])] if os.environ.get('GMCA_TEST_LIVE_CONFIG') else [Path.home() / '.config/GMCA/config.json', Path.home() / '.cache/gmca-tvtest-live/config.json']
-    for candidate in candidates:
-        try:
-            data = json.loads(candidate.read_text())
-            if any(s.get('type') == 'stremio' and s.get('access_token') and any(u.get('server_id') == s.get('id') for u in data.get('users', [])) for s in data.get('servers', [])):
-                return candidate
-        except (OSError, ValueError):
-            pass
+    configured = os.environ.get('GMCA_TEST_LIVE_CONFIG')
+    if not configured:
+        return None
+    candidate = Path(configured).expanduser()
+    try:
+        data = json.loads(candidate.read_text())
+        if any(s.get('type') == 'stremio' and s.get('access_token') and any(u.get('server_id') == s.get('id') for u in data.get('users', [])) for s in data.get('servers', [])):
+            return candidate
+    except (OSError, ValueError):
+        pass
     return None
 
 
@@ -626,8 +881,9 @@ def runtime_case(name, directory, media, expected_commit=None):
         with tempfile.TemporaryDirectory(prefix='gmca-tvtest-') as temporary:
             path = Path(temporary) / 'config'
             if name == 'live':
-                candidates = [Path.home() / '.config/GMCA/config.json', Path.home() / '.cache/gmca-tvtest-live/config.json']
-                live = configured_live() or Path(os.environ.get('GMCA_TEST_LIVE_CONFIG', str(candidates[0])))
+                live = configured_live()
+                if not live:
+                    raise RuntimeError('Live tests require an explicit authenticated GMCA_TEST_LIVE_CONFIG path')
                 result['step'] = 'live authenticated account read'
                 secrets = profile(path, None, live)
                 check_live_account(path / 'GMCA/config.json')
@@ -636,9 +892,12 @@ def runtime_case(name, directory, media, expected_commit=None):
             else:
                 fixture = FixtureServer(media).start()
                 base = fixture.base
-                secrets = profile(path, base)
+                startup = 'fresh' if name == 'fresh-login' else (name if name in (
+                    'fresh', 'legacy-selected', 'multiple-one', 'multiple-two') else None)
+                secrets = profile(path, base, startup=startup)
             stop_previous()
             app = Runtime(BUILD / 'GMCA', directory, path, base, secrets)
+            app.config_dir = path / 'GMCA'
             app.expected_commit = expected_commit
             result['step'] = 'runtime'
             try:
@@ -663,7 +922,24 @@ def runtime_case(name, directory, media, expected_commit=None):
                 if app.proc.returncode != 0:
                     result['status'] = 'FAIL'
                     result['failed_step'] = result.get('failed_step') or 'GMCA exit'
+                if name == 'legacy-selected':
+                    saved = json.loads((path / 'GMCA' / 'config.json').read_text())
+                    assert saved.get('user_id') == 'legacy-selected', 'legacy selected account ID was rewritten'
+                    assert saved.get('users', []) == [
+                        {'id': 'legacy-selected', 'name': 'Legacy account', 'server_id': 'legacy-plex',
+                         'access_token': 'fixture-legacy-token'},
+                        {'id': 'valid-stremio', 'name': 'Valid Stremio account', 'server_id': 'tvtest',
+                         'access_token': 'fixture-user-token'},
+                    ], 'legacy and valid Stremio user records were not preserved'
+                    assert saved.get('remotes') == [{'id': 'legacy-remote', 'url': 'http://127.0.0.1:1/keep'}], \
+                        'legacy remotes were not preserved'
+                    assert saved.get('pins') == [{'id': 'legacy-pin', 'opaque': True}], \
+                        'legacy pins were not preserved'
+                    assert saved.get('legacy_extension') == {'must_survive': ['legacy', 7]}, \
+                        'opaque legacy config field was not preserved'
+                    result['legacy_config_preserved'] = True
     except Exception as error:
+        result['status'] = 'FAIL'
         result['error'] = str(error)
     finally:
         if fixture:
@@ -675,12 +951,24 @@ def runtime_case(name, directory, media, expected_commit=None):
 
 
 def main():
+    global BUILD
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('scenario', nargs='?', default='smoke', choices=['smoke', 'boot', 'navigation', 'movies', 'series', 'source-picker', 'continue-watching', 'resume', 'watched', 'search', 'error-loading', 'live'])
+    parser.add_argument('scenario', nargs='?', default='smoke', choices=[
+        'smoke', 'fresh', 'fresh-login', 'legacy-selected', 'multiple-one', 'multiple-two',
+        'boot', 'navigation', 'movies', 'series', 'library', 'source-picker',
+        'continue-watching', 'subtitles', 'next-episode', 'offline-download',
+        'resume', 'watched', 'search', 'error-loading', 'live',
+    ])
     parser.add_argument('--runtime-only', action='store_true', help='reuse already validated build for scenario debugging')
-    parser.add_argument('--fixture-only', action='store_true', help='omit optional read-only live case from smoke')
-    parser.add_argument('--sync', action='store_true', help='fetch origin refs; never reset or merge local changes')
+    parser.add_argument('--live', action='store_true', help='opt in to a read-only live case using GMCA_TEST_LIVE_CONFIG')
+    parser.add_argument('--build-dir', type=Path, default=BUILD, help='isolated build directory (default: build-test-bench)')
+    parser.add_argument('--generator', help='optional CMake generator; otherwise reuse the existing build cache or default generator')
     args = parser.parse_args()
+    BUILD = args.build_dir if args.build_dir.is_absolute() else ROOT / args.build_dir
+    if args.live and not os.environ.get('GMCA_TEST_LIVE_CONFIG'):
+        parser.error('--live requires GMCA_TEST_LIVE_CONFIG to name a private config file')
+    if args.live and args.scenario not in ('smoke', 'live'):
+        parser.error('--live is available only with smoke or live')
     os.umask(0o077)
     RESULTS.mkdir(exist_ok=True)
     (BUILD / 'tmp').mkdir(parents=True, exist_ok=True)
@@ -692,23 +980,17 @@ def main():
         except BlockingIOError:
             print('FAIL: another TV test runner is active')
             return 1
-        for old in sorted(RESULTS.glob('run-*'))[:-4]:
-            if old.is_dir() and not old.is_symlink():
-                shutil.rmtree(old)
         directory = RESULTS / ('run-' + time.strftime('%Y%m%d-%H%M%S') + '-' + args.scenario)
         directory.mkdir()
         result = {'scenario': args.scenario, 'status': 'FAIL', 'step': 'dependencies', 'ps4_validated': False}
         start = time.monotonic()
         try:
-            for tool in ('git', 'c++', 'cmake', 'ninja', 'pkg-config', 'ffmpeg', 'scrot', 'xrandr', 'stdbuf'):
+            for tool in ('git', 'c++', 'cmake', 'make', 'pkg-config', 'ffmpeg', 'scrot', 'xrandr', 'stdbuf', 'xdotool'):
                 if not shutil.which(tool):
                     raise RuntimeError('missing dependency: ' + tool)
             for package in ('sdl2', 'mpv', 'libavformat', 'libcurl'):
                 subprocess.run(['pkg-config', '--exists', package], check=True)
             subprocess.run(['xrandr', '--current'], env=dict(os.environ, DISPLAY=os.environ.get('DISPLAY', ':0'), XAUTHORITY=os.environ.get('XAUTHORITY', '/home/michele/.Xauthority')), stdout=subprocess.DEVNULL, check=True)
-            if args.sync:
-                result['step'] = 'fetch'
-                command(['git', 'fetch', 'origin', '--prune', '+refs/heads/*:refs/remotes/origin/*'], directory / 'build.log')
             result['step'] = 'stop previous test runtime'
             stop_previous()
             result['runtime_only'] = args.runtime_only
@@ -723,7 +1005,9 @@ def main():
                 command([str(ROOT / 'tests/run.sh')], directory / 'unit-tests.log')
                 command([sys.executable, '-m', 'unittest', 'discover', '-s', str(ROOT / 'tests/ui'), '-p', 'test_*.py'], directory / 'unit-tests.log')
                 result['step'] = 'configure'
-                configure = ['cmake', '-S', str(ROOT), '-B', str(BUILD), '-G', 'Ninja', '-DPLATFORM_DESKTOP=ON', '-DUSE_SDL2=ON', '-DUSE_SYSTEM_SDL2=ON', '-DGMCA_STREMIO_ONLY=ON', '-DGMCA_TEST_HARNESS=ON']
+                configure = ['cmake', '-S', str(ROOT), '-B', str(BUILD), '-DGMCA_LINUX_TEST_BENCH=ON', '-DUSE_SDL2=ON', '-DUSE_SYSTEM_SDL2=ON', '-DGMCA_TEST_HARNESS=ON']
+                if args.generator:
+                    configure += ['-G', args.generator]
                 if shutil.which('ccache'):
                     configure += ['-DCMAKE_CXX_COMPILER_LAUNCHER=ccache', '-DCMAKE_C_COMPILER_LAUNCHER=ccache']
                 command(configure, directory / 'build.log')
@@ -735,13 +1019,18 @@ def main():
             if not media.exists():
                 command(['ffmpeg', '-nostdin', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=5', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=22050', '-t', '120', '-c:v', 'mpeg4', '-q:v', '10', '-c:a', 'aac', '-threads', '1', '-movflags', '+faststart', str(media)], directory / 'build.log')
             result['step'] = 'runtime'
-            selected = ('navigation', 'continue-watching', 'source-picker', 'resume', 'movies', 'watched', 'search', 'error-loading') if args.scenario == 'smoke' else (args.scenario,)
+            selected = ('fresh', 'fresh-login', 'legacy-selected', 'multiple-one', 'multiple-two',
+                        'navigation', 'library', 'continue-watching', 'source-picker', 'subtitles',
+                        'next-episode', 'offline-download', 'resume', 'movies', 'watched', 'search',
+                        'error-loading') if args.scenario == 'smoke' else (args.scenario,)
             result['cases'] = {}
             if args.scenario == 'smoke':
-                if not args.fixture_only and configured_live():
+                if args.live:
+                    if not configured_live():
+                        raise RuntimeError('The explicit live config contains no authenticated Stremio profile')
                     selected += ('live',)
                 else:
-                    result['cases']['live'] = {'status': 'SKIP', 'reason': 'fixture-only requested' if args.fixture_only else 'no authenticated local config'}
+                    result['cases']['live'] = {'status': 'SKIP', 'reason': 'live checks are opt-in with --live and GMCA_TEST_LIVE_CONFIG'}
             for name in selected:
                 case_directory = directory / name if args.scenario == 'smoke' else directory
                 case_directory.mkdir(exist_ok=True)

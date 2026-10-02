@@ -1,19 +1,6 @@
 /*
-    GMCA — per-backend theme palettes.
-
-    The accent surface of the UI follows the connected server's brand. Before a
-    server is connected (server list, server-type chooser, sign-in/add screens,
-    loading) the neutral pleNx DEFAULT palette is used. AppConfig::applyTheme()
-    writes one of these palettes onto the two borealis Theme singletons; only the
-    VARIANT tokens change — the structural chrome (background, surface, scrim,
-    greys...) stays constant. See MULTI_BACKEND.md.
-
-    Brand colors are verified (official sites / brand repos), see the
-    multi-backend-theming memo:
-      Plex     #EBAF00  (current "Corn" gold, Aug-2024 logo redesign)
-      Jellyfin #00A4DC  (official accent; #AA5CC3 = logo-gradient purple)
-      Emby     #52B54B  (official green, from Emby's own dark skin)
-      Stremio  #7B5BF5  (vivid logo-gradient purple)
+    GMCA theme palettes: neutral before sign-in, Stremio purple when connected.
+    AppConfig applies the accent tokens to both light and dark Borealis themes.
 */
 
 #pragma once

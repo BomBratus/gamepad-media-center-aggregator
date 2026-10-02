@@ -1,5 +1,12 @@
 # pleNx — Refonte UI/UX « Salle obscure »
 
+> **Archive de conception.** Ce document décrit l'ancien cycle de refonte et
+> ses audits sur desktop. La cible de développement actuelle est GMCA PS4 avec
+> Stremio. Linux sert uniquement de banc de test partagé, avec
+> `GMCA_LINUX_TEST_BENCH=ON` et deux jobs maximum. Voir le
+> [README courant](README.md) et le [guide des tests UI](tests/ui/README.md)
+> pour les commandes actuelles.
+
 > Document de référence de la refonte visuelle et ergonomique. Méthode : audit
 > par captures → design system → implémentation par lots, chaque lot étant
 > vérifié par re-capture (scénarios `scripts/ui-audit/`).

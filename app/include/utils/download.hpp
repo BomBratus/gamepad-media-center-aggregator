@@ -19,8 +19,6 @@ NLOHMANN_JSON_SERIALIZE_ENUM(DownloadStatus, {
     {DownloadStatus::Failed, "Failed"},
 })
 
-/// Download in ORIGINAL quality only (PLEX_MIGRATION.md D2):
-/// URL = {base}{partKey}?download=1&X-Plex-Token=...
 struct DownloadItem {
     std::string itemId;  // ratingKey
     std::string name;

@@ -1,6 +1,7 @@
+#include "utils/config.hpp"
 #include "activity/player_view.hpp"
 #include "activity/gallery_activity.hpp"
-#include "api/plex.hpp"
+#include "api/backend.hpp"
 #include "api/backend.hpp"
 #include "api/stremio/types.hpp"
 #include "api/stremio/backend.hpp"
@@ -12,7 +13,7 @@
 #include "tab/playlist_view.hpp"
 #include "tab/hub_view.hpp"
 #include "view/music_now_playing.hpp"
-#include "tab/remote_view.hpp"
+#include "activity/local_player.hpp"
 #include "utils/misc.hpp"
 #include "utils/download.hpp"
 #include "utils/media_source.hpp"
@@ -142,12 +143,12 @@ RecyclingGridItem* VideoDataSource::cellForRow(RecyclingView* recycler, size_t i
     cell->picture->clear();
     // music items get a note placeholder (not the video-camera glyph) when they
     // have no cover art; reset per-cell for recycling (issue #11)
-    bool isMusicCard = item.type == plex::mediaTypeArtist || item.type == plex::mediaTypeAlbum ||
-                       item.type == plex::mediaTypeTrack;
+    bool isMusicCard = item.type == media::mediaTypeArtist || item.type == media::mediaTypeAlbum ||
+                       item.type == media::mediaTypeTrack;
     if (auto* ph = dynamic_cast<SVGImage*>(cell->getView("video/card/placeholder")))
         ph->setImageFromSVGRes(isMusicCard ? "icon/ico-audio.svg" : "icon/ico-media.svg");
 
-    if (item.type == plex::mediaTypeEpisode) {
+    if (item.type == media::mediaTypeEpisode) {
         if (item.grandparentTitle.empty()) {
             cell->labelTitle->setVisibility(brls::Visibility::GONE);
         } else {
@@ -164,12 +165,12 @@ RecyclingGridItem* VideoDataSource::cellForRow(RecyclingView* recycler, size_t i
         } else if (!item.thumb.empty()) {
             Image::load(cell->picture, item.thumb, 325);
         }
-    } else if (item.type == plex::mediaTypeSeason) {
+    } else if (item.type == media::mediaTypeSeason) {
         // a season announces itself by its show: title = show, subtitle = season
         cell->labelTitle->setText(item.parentTitle.empty() ? item.title : item.parentTitle);
         cell->labelExt->setText(item.parentTitle.empty() ? "" : item.title);
         Image::load(cell->picture, item.thumb.empty() ? item.parentThumb : item.thumb, 325);
-    } else if (item.type == plex::mediaTypeArtist) {
+    } else if (item.type == media::mediaTypeArtist) {
         // artist: name + album count (square cover, cf. grid geometry)
         cell->labelTitle->setText(item.title);
         if (item.childCount > 0)
@@ -178,7 +179,7 @@ RecyclingGridItem* VideoDataSource::cellForRow(RecyclingView* recycler, size_t i
         else
             cell->labelExt->setVisibility(brls::Visibility::GONE);
         if (!item.thumb.empty()) Image::load(cell->picture, item.thumb, 325);
-    } else if (item.type == plex::mediaTypeAlbum) {
+    } else if (item.type == media::mediaTypeAlbum) {
         // album: title + artist (fallback year); square cover
         cell->labelTitle->setText(item.title);
         if (!item.parentTitle.empty())
@@ -188,7 +189,7 @@ RecyclingGridItem* VideoDataSource::cellForRow(RecyclingView* recycler, size_t i
         else
             cell->labelExt->setVisibility(brls::Visibility::GONE);
         if (!item.thumb.empty()) Image::load(cell->picture, item.thumb, 325);
-    } else if (item.type == plex::mediaTypeTrack) {
+    } else if (item.type == media::mediaTypeTrack) {
         // track: title + artist (fallback duration)
         cell->labelTitle->setText(item.title);
         if (!item.grandparentTitle.empty())
@@ -202,18 +203,18 @@ RecyclingGridItem* VideoDataSource::cellForRow(RecyclingView* recycler, size_t i
     } else {
         cell->labelTitle->setText(item.title);
 
-        if (item.type == plex::mediaTypePlaylist && item.leafCount > 0) {
+        if (item.type == media::mediaTypePlaylist && item.leafCount > 0) {
             // same meta as the Playlists tab — and the label area keeps its
             // standard height (55), a condition of the square render in rows
             cell->labelExt->setText(fmt::format("{} {}", item.leafCount,
                 item.leafCount > 1 ? "main/playlist/items"_i18n : "main/playlist/item"_i18n));
             cell->labelExt->setVisibility(brls::Visibility::VISIBLE);
-        } else if (item.type == plex::mediaTypeCollection || item.type == plex::mediaTypePlaylist ||
+        } else if (item.type == media::mediaTypeCollection || item.type == media::mediaTypePlaylist ||
                    item.type.empty()) {
             cell->labelExt->setVisibility(brls::Visibility::GONE);
-        } else if (item.type == plex::mediaTypeClip) {
+        } else if (item.type == media::mediaTypeClip) {
             cell->labelExt->setText(misc::sec2Time(item.duration / 1000));
-        } else if (this->stremioContinueWatching && item.type == plex::mediaTypeShow) {
+        } else if (this->stremioContinueWatching && item.type == media::mediaTypeShow) {
             stremio::ParsedId episode = stremio::parseId(item.key);
             std::string progress;
             if (episode.season >= 0 && episode.episode >= 0)
@@ -240,7 +241,7 @@ RecyclingGridItem* VideoDataSource::cellForRow(RecyclingView* recycler, size_t i
         // the composite mosaic generated by the server
         if (!item.thumb.empty()) {
             Image::load(cell->picture, item.thumb, 325);
-        } else if (item.type == plex::mediaTypePlaylist && !item.composite.empty()) {
+        } else if (item.type == media::mediaTypePlaylist && !item.composite.empty()) {
             Image::load(cell->picture, item.composite, 325);
         }
     }
@@ -262,19 +263,19 @@ RecyclingGridItem* VideoDataSource::cellForRow(RecyclingView* recycler, size_t i
     // A-button hint + focus overlay reflect what selecting the card DOES: it
     // PLAYS for items that start playback on select (episode/clip — incl. the
     // continue-watching row), and OPENS a detail page otherwise.
-    bool plays = (item.type == plex::mediaTypeEpisode || item.type == plex::mediaTypeClip ||
-                  item.type == plex::mediaTypeTrack ||
-                  (item.type == plex::mediaTypePlaylist && item.playlistType == "audio"));
+    bool plays = (item.type == media::mediaTypeEpisode || item.type == media::mediaTypeClip ||
+                  item.type == media::mediaTypeTrack ||
+                  (item.type == media::mediaTypePlaylist && item.playlistType == "audio"));
     cell->setPlayOverlay(plays);
     cell->updateActionHint(brls::BUTTON_A, plays ? "main/media/play"_i18n : "main/media/open"_i18n);
 
     // "downloaded" badge: leaves (movie/episode/clip) by file presence,
     // shows/seasons by catalog membership (persisted iff a child is downloaded)
     bool downloaded = false;
-    if (item.type == plex::mediaTypeMovie || item.type == plex::mediaTypeEpisode ||
-        item.type == plex::mediaTypeClip)
+    if (item.type == media::mediaTypeMovie || item.type == media::mediaTypeEpisode ||
+        item.type == media::mediaTypeClip)
         downloaded = DownloadManager::instance().isDownloaded(item.ratingKey);
-    else if (item.type == plex::mediaTypeShow || item.type == plex::mediaTypeSeason)
+    else if (item.type == media::mediaTypeShow || item.type == media::mediaTypeSeason)
         downloaded = OfflineLibrary::instance().hasItem(item.ratingKey);
     cell->badgeDownload->setVisibility(downloaded ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
 
@@ -288,7 +289,7 @@ void VideoDataSource::onItemSelected(brls::Box* recycler, size_t index) {
     }
     auto& item = this->list.at(index);
 
-    if (item.type == plex::mediaTypeShow) {
+    if (item.type == media::mediaTypeShow) {
         if (this->stremioContinueWatching && AppConfig::instance().backend().type() == media::BackendType::Stremio) {
             stremio::ParsedId episode = stremio::parseId(item.key);
             if ((episode.stremioType == "series" || episode.stremioType == "anime") && !episode.stremioId.empty() && item.key != item.ratingKey) {
@@ -297,21 +298,21 @@ void VideoDataSource::onItemSelected(brls::Box* recycler, size_t index) {
             }
         }
         ui::presentDetail(recycler, new MediaSeries(item, this->localContext));
-    } else if (item.type == plex::mediaTypeMovie) {
+    } else if (item.type == media::mediaTypeMovie) {
         if (this->stremioContinueWatching && item.viewOffset > 0 &&
             AppConfig::instance().backend().type() == media::BackendType::Stremio) {
             showStremioResumeDialog(recycler, item);
             return;
         }
         ui::presentDetail(recycler, new MediaMovie(item, this->localContext));
-    } else if (item.type == plex::mediaTypeSeason) {
+    } else if (item.type == media::mediaTypeSeason) {
         ui::presentDetail(recycler, new MediaSeries(item, this->localContext));
-    } else if (item.type == plex::mediaTypeCollection) {
-        ui::presentDetail(recycler, new MediaCollection(item.ratingKey, plex::mediaTypeCollection));
-    } else if (item.type == plex::mediaTypeClip) {
+    } else if (item.type == media::mediaTypeCollection) {
+        ui::presentDetail(recycler, new MediaCollection(item.ratingKey, media::mediaTypeCollection));
+    } else if (item.type == media::mediaTypeClip) {
         PlayerView* view = new PlayerView(item);
         view->setTitie(item.year ? fmt::format("{} ({})", item.title, item.year) : item.title);
-    } else if (item.type == plex::mediaTypeEpisode) {
+    } else if (item.type == media::mediaTypeEpisode) {
         // downloads area / offline: play the local file; ONLINE library keeps
         // streaming from the server (no online regression)
         auto& dm = DownloadManager::instance();
@@ -319,26 +320,25 @@ void VideoDataSource::onItemSelected(brls::Box* recycler, size_t index) {
                                 ? dm.getLocalPath(item.ratingKey)
                                 : "";
         if (!local.empty()) {
-            RemoteView::play(local, fmt::format("S{}E{} - {}", item.parentIndex, item.index, item.title), "Local");
+            LocalPlayer::play(local, fmt::format("S{}E{} - {}", item.parentIndex, item.index, item.title), "Local");
             return;
         }
         PlayerView* view = new PlayerView(item);
         view->setTitie(fmt::format("S{}E{} - {}", item.parentIndex, item.index, item.title));
         if (!item.grandparentRatingKey.empty()) view->setSeries(item.grandparentRatingKey);
-    } else if (item.type == plex::mediaTypePlaylist) {
+    } else if (item.type == media::mediaTypePlaylist) {
         // audio playlist -> music queue; video playlist -> PlaylistView (issue #11)
         ui::presentPlaylist(recycler, item);
-    } else if (item.type == plex::mediaTypePhoto) {
-        // photo: original file served by the Part (PLEX_MIGRATION.md §2.5)
+    } else if (item.type == media::mediaTypePhoto) {
         if (!item.media.empty() && !item.media.front().parts.empty()) {
             std::string url = AppConfig::instance().backend().imageUrl(item.media.front().parts.front().key);
             brls::Application::pushActivity(new GalleryActivity(url));
         }
-    } else if (item.type == plex::mediaTypeArtist) {
+    } else if (item.type == media::mediaTypeArtist) {
         ui::presentDetail(recycler, new MediaArtist(item));
-    } else if (item.type == plex::mediaTypeAlbum) {
+    } else if (item.type == media::mediaTypeAlbum) {
         ui::presentDetail(recycler, new MediaAlbum(item));
-    } else if (item.type == plex::mediaTypeTrack) {
+    } else if (item.type == media::mediaTypeTrack) {
         // a lone track (search/hub): play it as a one-item queue
         MusicNowPlaying::present({item}, 0, false);
     } else {

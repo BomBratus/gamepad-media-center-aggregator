@@ -1,125 +1,77 @@
-# Linux TV runtime tests
+# Linux Stremio UI smoke tests
 
-Run from the GMCA checkout on Debian/Xorg:
+This harness launches the real GMCA C++/Borealis/SDL/mpv app under X11 and
+drives a virtual controller through its SDL input path. Its default `smoke`
+scenario is fixture-only and does not read local account or credential files.
 
 ```sh
-./scripts/test-tvbox.sh smoke --sync
+./scripts/test-tvbox.sh smoke
 ./scripts/test-tvbox.sh boot
 ./scripts/test-tvbox.sh navigation
-./scripts/test-tvbox.sh movies
-./scripts/test-tvbox.sh series
-./scripts/test-tvbox.sh continue-watching
-./scripts/test-tvbox.sh resume
-./scripts/test-tvbox.sh source-picker
-./scripts/test-tvbox.sh watched
-./scripts/test-tvbox.sh search
-./scripts/test-tvbox.sh error-loading
 ```
 
-`--sync` fetches origin refs. It never resets, merges, commits or pushes working
-changes. Check the current dev and PRs before making code changes. Without this
-flag the runner tests exactly the local candidate, including uncommitted changes.
-`--runtime-only` skips unit tests and build for debugging an already built candidate;
-it is not a complete validation gate.
+The `smoke` suite includes fresh sign-in, a selected unsupported legacy account
+with another valid Stremio account present, and two separate restarts with
+different selected Stremio accounts. These check the actual startup view and
+active account reported by the runtime harness. The harness also identifies
+the real `ConnectionSwitcher` view as `account_switcher` when opened through UI
+navigation. It then runs the playback, navigation, search, and error cases.
 
-The full command runs existing standalone unit tests, configures Ninja, builds
-incrementally with at most two jobs, then launches the real GMCA C++/Borealis/SDL/
-libmpv application on `DISPLAY=:0`, with `XAUTHORITY=/home/michele/.Xauthority`.
-These can be overridden in the environment. No Debian packaging step or build
-cleanup occurs. ccache is selected when available. Build temporaries go onto the
-build filesystem instead of Debian's small `/tmp` tmpfs.
+The runner performs the existing standalone tests, fixture protocol checks,
+configures `GMCA_LINUX_TEST_BENCH=ON`, and builds with at most two jobs. It does
+not force a CMake generator: an existing build cache is reused, otherwise CMake
+uses its default. Set `GMCA_TEST_BUILD_DIR` or pass `--build-dir` to select a
+different build tree; pass `--generator` only when you need to choose one
+explicitly. It does not clean build outputs or package the app.
 
-One-time Debian dependencies (runtime tests never need sudo):
+One-time Debian packages for the runtime harness:
 
 ```sh
-sudo apt-get install --no-install-recommends build-essential cmake ninja-build \
-  pkg-config libsdl2-dev libmpv-dev libavformat-dev libcurl4-openssl-dev \
-  libdbus-1-dev libwebp-dev libgl-dev libegl-dev libgles-dev scrot ccache
+sudo apt-get install --no-install-recommends build-essential cmake pkg-config \
+  libsdl2-dev libmpv-dev libavformat-dev libcurl4-openssl-dev libdbus-1-dev \
+  libwebp-dev libgl-dev libegl-dev libgles-dev scrot ffmpeg xdotool
 ```
 
-SDL >= 2.24 is needed for `SDL_JoystickAttachVirtualEx`. A game-controller virtual
-joystick is created **inside GMCA**, after Borealis's SDL input manager is ready.
-Every required button is sampled through Borealis's input manager at startup.
-Scenario inputs use SDL virtual button state and axes; they never call a UI
-click/focus/navigation method, use xdotool, or require a physical gamepad/uinput.
-The socket cannot open screens or set focus. Its only commands are state, button,
-axis and quit. UI introspection runs on the main thread after each normal loop.
+The runner applies the read-only Borealis observer patch only in the local
+submodule worktree. Its Unix socket accepts only state, button, axis, and quit
+commands. UI state is sampled on the normal main loop; commands cannot open a
+screen, set focus, or call a UI navigation method.
 
-The test build requires Linux + `PLATFORM_DESKTOP` + SDL. The normal desktop build
-keeps its defaults (GLFW, multiple backends, no harness). PS4 cannot enable the
-harness. The small Borealis observer patch adds read-only inline accessors guarded
-by `GMCA_TEST_HARNESS`; there is no production observer thread or socket.
+## Fixture isolation
 
-## Isolation and artifacts
+Each case uses a fresh private config/cache directory and an ephemeral loopback
+Stremio addon/account fixture. A short local video supports playback cases.
+Fixture mode exercises the real Stremio request parsing, views, source choice,
+and mpv path without contacting streaming providers. Test HTTP requests are
+restricted to loopback. Temporary config, history, cache, downloads, and
+Stremio watch/progress state are discarded after that run.
 
-Each scenario creates a fresh private temporary `XDG_CONFIG_HOME` and `XDG_CACHE_HOME`.
-Config migration therefore sees only this isolated directory, never the real
-GMCA/pleNx/Switchlex folders. Config, search history, image cache, downloads,
-`stremio-watched.json`, `stremio-progress.json`, and `stremio-playback.json` all use
-the isolated profile. Cleanup removes only that run's temporary directory.
+Each startup profile uses synthetic IDs and fake fixture tokens. The legacy
+case intentionally leaves a Plex profile selected alongside a valid Stremio
+profile; startup must show Stremio sign-in rather than choosing another account
+implicitly. Multiple-account checks use one selected ID per isolated restart.
+Fresh sign-in types only synthetic email/password values through the Linux IME;
+the loopback fixture accepts those values and never forwards them to Stremio.
 
-Fixtures use an ephemeral loopback HTTP addon and fake account datastore. They
-exercise real Stremio parsing, async requests, history, views, source resolution,
-and libmpv, with a generated local test video. Fixture builds reject external
-HTTP requests. They do not query real streaming providers. The HTTP test hook is
-compiled out of production. The account/datastore fixture is not a second UI or
-a mock media backend.
-
-A process ownership record lets the next run terminate a stale **test** instance
-only after matching executable and process start time. A runner lock prevents
-concurrent launches/builds. Production GMCA instances are never killed by name.
-
-`test-results/run-<timestamp>-<scenario>/` contains PNG screenshots from the real X
-root window, semantic JSON checkpoints, sanitized `gmca.log`, unit/build logs,
-request paths, and `result.json`. Smoke checkpoints/logs are grouped in one subdirectory per scenario; the root
-result lists every completed case and the exact failed step. Five recent runs are retained. Logs are bounded;
-fixture snapshots include labels, while live snapshots include only IDs/classes.
-Files are created with private permissions. A failed assertion records its precise step and the last semantic state.
-
-## Live integration
-
-Smoke automatically adds the read-only live case when an authenticated local
-config is available; otherwise its result records an explicit SKIP. Use
-`smoke --fixture-only` for deterministic offline checks. An expired account
-remains a live FAIL rather than being silently replaced with fixture results.
+Live account coverage is an explicit opt-in. Supply a private config path and
+use `--live`; the runner reads only that file and copies one authenticated
+Stremio profile into the isolated runtime:
 
 ```sh
-GMCA_TEST_LIVE_CONFIG=/private/path/config.json ./scripts/test-tvbox.sh live
+GMCA_TEST_LIVE_CONFIG=/private/path/config.json ./scripts/test-tvbox.sh smoke --live
 ```
 
-The default candidate is `~/.config/GMCA/config.json`, with an optional private
-local copy at `~/.cache/gmca-tvtest-live/config.json` as fallback. The runner copies only one
-authenticated Stremio server/user into its private profile. It does not copy
-history, downloads, caches, other backend credentials, or account progress files.
-An absent authenticated config makes the live scenario fail explicitly; it does
-not silently replace live validation with fixtures. The live scenario first confirms an authenticated datastore read without retaining
-its response, then browses Home and Movies without playback or watched changes. The test HTTP guard permits the
-account read APIs and rejects account writes. Tokens and signed URLs are removed
-before stdout/stderr is persisted, and are never placed into result artifacts.
-Live screenshots are allowlisted to Home and Movies catalog views without an
-open dialog. Failed live boots outside those views suppress screenshots. No
-login/settings/token form or live progress datastore is exported.
+Live checks browse Home and Movies without playback or account writes. Without
+`--live`, the runner never probes the default GMCA config paths.
 
-## PS4 equivalence and limits
+## Results and limits
 
-The Stremio-only CMake profile is shared and defaults OFF. Episode source-picker
-layout, controller focus, resume reuse and grid restoration were moved from the
-PS4 source patches into shared C++ for this profile. Italian-audio badges use the
-existing classifier; subtitles-only ITA must never count as Italian audio.
-PS4 package metadata and the safety source ordering remain in the PS4 patches.
-Search debounce and stale-response guards also compile from shared C++ in the
-Stremio-only profile; the PS4 AWK step recognizes this and passes current source
-through unchanged. It retains its legacy transform for older source trees. The
-normal multi-backend search retains its prior behavior. This profile still must
-not be described as an exact effective PS4 source tree.
+Screenshots, semantic checkpoints, redacted logs, fixture request paths, and
+`result.json` are stored in a private `test-results/run-*` directory. A lock
+prevents concurrent runs. A stale test process is stopped only if its recorded
+PID, executable, and process start time still match the owned test instance.
 
-Changes to shared code must pass the real **build PS4 Stremio-only** workflow:
-safe-source patch, followup patch, search transform, Borealis patch, patched mpv
-0.36, OpenOrbis compile, PKG validation and artifact upload. Local patch application
-checks are useful but are not an OpenOrbis build. Linux uses mpv 0.40 and cannot
-validate Piglet, PS4 rendering/FBO/shaders, custom libmpv or subtitle rendering,
-PS4 memory/TLS, PKG updater/lifecycle, GoldHEN or installation. Those still need
-OpenOrbis CI and PS4 hardware.
-
-RSS peak and boot/navigation durations describe regressions on this box only.
-They do not predict PS4 performance.
+Linux checks shared behavior. It cannot verify PS4 graphics, input translation,
+TLS/memory limits, patched libmpv rendering, package contents, updater
+behavior, GoldHEN installation, or PS4 performance. Validate those with the
+PS4 Stremio-only package and console.

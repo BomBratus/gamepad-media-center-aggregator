@@ -4,8 +4,8 @@
     X/long-press context menu included (video_card.cpp).
 */
 
+#include "utils/config.hpp"
 #include "tab/playlist_view.hpp"
-#include "api/plex.hpp"
 #include "api/backend.hpp"
 #include "view/recycling_grid.hpp"
 #include "view/video_card.hpp"
@@ -15,7 +15,7 @@
 
 using namespace brls::literals;  // for _i18n
 
-PlaylistView::PlaylistView(const plex::Item& item) : playlistId(item.ratingKey), knownCount(item.leafCount) {
+PlaylistView::PlaylistView(const media::Item& item) : playlistId(item.ratingKey), knownCount(item.leafCount) {
     brls::Logger::debug("PlaylistView: create {} ({})", item.title, item.ratingKey);
     this->inflateFromXMLRes("xml/tabs/playlist.xml");
 
@@ -65,7 +65,6 @@ void PlaylistView::updateMeta(int64_t count, int64_t durationMs) {
 
 void PlaylistView::doRequest() {
     ASYNC_RETAIN
-    // requested offset, not r.StartIndex: Jellyfin/Emby omit StartIndex on an
     // empty past-the-end page (it parses to 0) and would wipe a filled grid
     size_t reqStart = this->startIndex;
     AppConfig::instance().backend().getPlaylistItems(this->playlistId, this->startIndex, this->pageSize,

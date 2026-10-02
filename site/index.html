@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GMCA — a gamepad-first media client for every server, on the screens you forgot</title>
-  <meta name="description" content="GMCA (Gamepad Media Center Aggregator) is a native, controller-first client for Plex, Jellyfin, Emby, Stremio and file servers, running on the Nintendo Switch, PS Vita, a Raspberry Pi on the TV and the desktop. Free and open source.">
+  <title>GMCA — PS4 Stremio client</title>
+  <meta name="description" content="The current GMCA development profile is a native, controller-first Stremio client for PS4. Linux is an explicit shared-behavior test bench only.">
   <meta name="theme-color" content="#0d0d10">
   <link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32.png">
   <link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
@@ -12,15 +12,15 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="GMCA">
   <meta property="og:url" content="https://thcolin.github.io/gamepad-media-center-aggregator/">
-  <meta property="og:title" content="GMCA — every media server, on the screens you forgot">
-  <meta property="og:description" content="One controller-first app for Plex, Jellyfin, Emby and Stremio, on the Switch, PS Vita, a Raspberry Pi on the TV, and the desktop.">
+  <meta property="og:title" content="GMCA — PS4 Stremio client">
+  <meta property="og:description" content="The current GMCA development profile is a native, controller-first Stremio client for PS4. Linux is a test bench only.">
   <meta property="og:image" content="https://thcolin.github.io/gamepad-media-center-aggregator/assets/img/og.jpg">
   <meta property="og:image:width" content="1600">
   <meta property="og:image:height" content="840">
   <meta property="og:image:alt" content="GMCA — Gamepad Media Center Aggregator">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="GMCA — every media server, on the screens you forgot">
-  <meta name="twitter:description" content="One controller-first app for Plex, Jellyfin, Emby and Stremio, on the Switch, PS Vita, a Raspberry Pi on the TV, and the desktop.">
+  <meta name="twitter:title" content="GMCA — PS4 Stremio client">
+  <meta name="twitter:description" content="The current GMCA development profile is a native, controller-first Stremio client for PS4. Linux is a test bench only.">
   <meta name="twitter:image" content="https://thcolin.github.io/gamepad-media-center-aggregator/assets/img/og.jpg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -37,8 +37,8 @@
       <span class="wordmark">GMCA</span>
     </a>
     <nav class="nav-links" aria-label="Main">
-      <a href="#servers">Servers</a>
-      <a href="#devices">Devices</a>
+      <a href="#servers">Stremio</a>
+      <a href="#devices">PS4 &amp; Linux</a>
       <a href="#features">Features</a>
       <a href="#screens">Screens</a>
       <a href="#install">Install</a>
@@ -62,44 +62,23 @@
             <span class="center-name">
               <span class="center-wordmark">GMCA</span>
               <span class="center-baseline">Gamepad Media Center Aggregator</span>
-              <span class="center-tag">Controller-first client</span>
+              <span class="center-tag">PS4 · Stremio</span>
             </span>
           </div>
         </div>
 
-        <h1 class="hero-rotator center-rotator" aria-label="GMCA runs any media center on any device">
-          <span class="hl-line">Runs <span class="rot rot-mc">Plex</span></span>
+        <h1 class="hero-rotator center-rotator" aria-label="GMCA brings Stremio to PS4">
+          <span class="hl-line">Stremio</span>
           <span class="hl-line">on your</span>
-          <span class="hl-line"><span class="rot rot-dev">Nintendo&nbsp;Switch</span></span>
+          <span class="hl-line">PS4</span>
         </h1>
 
-        <figure class="hero-media center-media reveal">
-          <div class="hero-stage" id="hero-stage">
-            <!-- 12 combos = every device x every media center. Order = rotation
-                 cycle: device advances (switch/vita/pi) and media center advances
-                 (plex/jellyfin/emby/stremio) at each step, covering all 12. -->
-            <img class="dev-img on" src="assets/img/hero/switch-plex.webp" alt="GMCA playing a media center on a repurposed game console" width="1280" height="640">
-            <img class="dev-img" src="assets/img/hero/vita-jellyfin.webp" alt="" aria-hidden="true" width="1280" height="640">
-            <img class="dev-img" src="assets/img/hero/tv-emby.webp" alt="" aria-hidden="true" width="1280" height="640">
-            <img class="dev-img" src="assets/img/hero/switch-stremio.webp" alt="" aria-hidden="true" width="1280" height="640">
-            <img class="dev-img" src="assets/img/hero/vita-plex.webp" alt="" aria-hidden="true" width="1280" height="640">
-            <img class="dev-img" src="assets/img/hero/tv-jellyfin.webp" alt="" aria-hidden="true" width="1280" height="640">
-            <img class="dev-img" src="assets/img/hero/switch-emby.webp" alt="" aria-hidden="true" width="1280" height="640">
-            <img class="dev-img" src="assets/img/hero/vita-stremio.webp" alt="" aria-hidden="true" width="1280" height="640">
-            <img class="dev-img" src="assets/img/hero/tv-plex.webp" alt="" aria-hidden="true" width="1280" height="640">
-            <img class="dev-img" src="assets/img/hero/switch-jellyfin.webp" alt="" aria-hidden="true" width="1280" height="640">
-            <img class="dev-img" src="assets/img/hero/vita-emby.webp" alt="" aria-hidden="true" width="1280" height="640">
-            <img class="dev-img" src="assets/img/hero/tv-stremio.webp" alt="" aria-hidden="true" width="1280" height="640">
-          </div>
-          <figcaption><span class="tag" id="hero-cap-mc">Plex</span> · <span id="hero-cap-dev">Nintendo Switch</span></figcaption>
-        </figure>
-
-        <p class="hero-sub">GMCA is one gamepad-first <strong>client</strong>. Point it at any <strong>media center</strong>, and run it on any <strong>device</strong> you left in a drawer.</p>
+        <p class="hero-sub">A native, gamepad-first <strong>Stremio client</strong> for <strong>PS4</strong>.</p>
         <div class="hero-cta">
-          <a class="btn btn-primary" href="https://github.com/thcolin/gamepad-media-center-aggregator/releases/latest"><span class="btn-glyph">A</span> Download <span data-version>v1.1.0</span></a>
+          <a class="btn btn-primary" href="https://github.com/thcolin/gamepad-media-center-aggregator/actions/workflows/build-ps4-stremio-only.yml"><span class="btn-glyph">A</span> PS4 workflow artifacts</a>
           <a class="btn btn-ghost" href="https://github.com/thcolin/gamepad-media-center-aggregator"><span class="btn-glyph">B</span> View on GitHub</a>
         </div>
-        <p class="center-note">Free &amp; open source · Not affiliated with Plex · Jellyfin · Emby · Stremio</p>
+        <p class="center-note">Current development profile · Linux is a shared-behavior test bench only</p>
       </div>
     </section>
 
@@ -121,10 +100,7 @@
         <div class="spec spec-builds">
           <dt>Builds</dt>
           <dd class="builds">
-            <span class="fmt" data-b="switch">NRO</span>
-            <span class="fmt" data-b="vita">VPK</span>
-            <span class="fmt" data-b="pi">Flatpak</span>
-            <span class="fmt" data-b="desktop">DMG · 7z</span>
+            <span class="fmt">PS4 PKG</span>
           </dd>
         </div>
       </dl>
@@ -136,56 +112,24 @@
         <div class="section-head reveal">
           <div class="lead">
             <span class="sec-num">01</span>
-            <span class="sec-kicker">Five sources · one interface</span>
-            <h2>One app, every server</h2>
-            <p>Point GMCA at whatever you already run. Each source brings its own colour and its own tabs — but the way you browse, search and play never changes.</p>
+            <span class="sec-kicker">Current PS4 profile</span>
+            <h2>Stremio on PS4</h2>
+            <p>This development build uses Stremio for sign-in, catalogues and playback. Configure the account and add-ons you want to use in Stremio.</p>
           </div>
           <div class="aside">Tabs adapt<br>to each server</div>
         </div>
 
         <div class="channels reveal">
-          <div class="channel" data-b="plex">
-            <span class="bar" aria-hidden="true"></span>
-            <span class="no">01</span>
-            <div class="body">
-              <span class="name">Plex</span><span class="kind">Media server</span>
-              <span class="desc">Sign in with plex.tv: your server, Home profiles, Watchlist, hubs and transcode.</span>
-            </div>
-          </div>
-          <div class="channel" data-b="jellyfin">
-            <span class="bar" aria-hidden="true"></span>
-            <span class="no">02</span>
-            <div class="body">
-              <span class="name">Jellyfin</span><span class="kind">Media server</span>
-              <span class="desc">Just your URL and Quick Connect, no account. Resume, Next Up and favourites.</span>
-            </div>
-          </div>
-          <div class="channel" data-b="emby">
-            <span class="bar" aria-hidden="true"></span>
-            <span class="no">03</span>
-            <div class="body">
-              <span class="name">Emby</span><span class="kind">Media server</span>
-              <span class="desc">Jellyfin's close cousin, same deal: libraries, collections, genres and resume.</span>
-            </div>
-          </div>
           <div class="channel" data-b="stremio">
             <span class="bar" aria-hidden="true"></span>
-            <span class="no">04</span>
+              <span class="no">01</span>
             <div class="body">
               <span class="name">Stremio</span><span class="kind">Add-ons</span>
               <span class="desc">One login syncs your add-on catalogues and library, debrid streams included.</span>
             </div>
           </div>
-          <div class="channel" data-b="files">
-            <span class="bar" aria-hidden="true"></span>
-            <span class="no">05</span>
-            <div class="body">
-              <span class="name">File servers</span><span class="kind">No server needed</span>
-              <span class="desc">Browse and play straight from WebDAV, FTP, SFTP and HTTP(S) shares.</span>
-            </div>
-          </div>
         </div>
-        <p class="channels-note">Connection switcher · every server and profile side by side, no re-login</p>
+        <p class="channels-note">Sign in with your Stremio account to sync its library and add-ons.</p>
       </div>
     </section>
 
@@ -195,43 +139,24 @@
         <div class="section-head reveal">
           <div class="lead">
             <span class="sec-num">02</span>
-            <span class="sec-kicker">The devices you already own</span>
-            <h2>The screens you forgot</h2>
-            <p>The big media-server apps stop at phones, TVs and computers. GMCA goes further — to the game consoles in the drawer and the Raspberry Pi wired to the TV — with a native, gamepad-first build for each.</p>
+            <span class="sec-kicker">Current target and test bench</span>
+            <h2>PS4 delivery, Linux checks</h2>
+            <p>PS4 is the delivery platform for this development profile. Linux is selected explicitly for shared-behavior checks and is not a delivery target.</p>
           </div>
         </div>
 
         <div class="devices">
-          <article class="device reveal" data-b="switch">
-            <div class="device-shot"><img src="assets/img/device-switch.webp" alt="GMCA showing a Plex home screen on a Nintendo Switch" width="3335" height="1419" loading="lazy"></div>
-            <p class="tagline"><span class="t1">Handheld</span> · <span class="t2">docked</span></p>
-            <h3>Nintendo Switch</h3>
-            <p>The console in the drawer becomes a full media center. A native build on Atmosphère CFW, docked to the TV or handheld in bed.</p>
-            <div class="meta"><span>Homebrew</span><span>Joy-Con</span><span>1080p docked</span></div>
+          <article class="device reveal" data-b="ps4">
+            <p class="tagline"><span class="t1">Delivery platform</span></p>
+            <h3>PS4 · Stremio</h3>
+            <p>The workflow builds the GMCA PS4 package with the Stremio-only connection flow. Device checks are required for PS4-specific behavior.</p>
+            <div class="meta"><span>Native PKG</span><span>Gamepad</span><span>Stremio</span></div>
           </article>
-
-          <article class="device reveal" data-b="vita" style="--i:1">
-            <div class="device-shot"><img src="assets/img/device-vita.webp" alt="GMCA showing a Jellyfin home screen on a PS Vita" width="1280" height="578" loading="lazy"></div>
-            <p class="tagline"><span style="color:#5f6470">Pocket</span> · <span style="color:#3ec98a">O</span><span style="color:#e5484d">L</span><span style="color:#4c7ff0">E</span><span style="color:#e7509f">D</span></p>
-            <h3>PS Vita</h3>
-            <p>That gorgeous OLED finally earns its keep again. A native player, tuned to what the Vita's hardware can really do.</p>
-            <div class="meta"><span>VPK</span><span>Touch + pad</span><span>Offline sync</span></div>
-          </article>
-
-          <article class="device reveal" data-b="pi" style="--i:2">
-            <div class="device-shot"><img src="assets/img/device-tv.webp" alt="GMCA showing an Emby home screen on a Raspberry Pi wired to a TV" width="1839" height="1370" loading="lazy"></div>
-            <p class="tagline"><span class="t1">Living</span> <span class="t2">room</span></p>
-            <h3>Raspberry Pi on the TV</h3>
-            <p>A Pi wired to the television plus any controller turns into a couch-ready media box. Flatpak for arm64 and x86_64.</p>
-            <div class="meta"><span>Flatpak</span><span>ARM64 · x86</span><span>HDMI</span></div>
-          </article>
-
-          <article class="device reveal" data-b="desktop" style="--i:3">
-            <div class="device-shot"><img src="assets/img/device-laptop.webp" alt="GMCA showing a Stremio catalogue on a laptop" width="1776" height="1241" loading="lazy"></div>
-            <p class="tagline"><span class="t1">Desktop</span> · <span class="t2">laptop</span></p>
-            <h3>Windows · macOS · Linux</h3>
-            <p>The same app, on the computer you use every day. Plug in a pad, or drive the whole thing from the keyboard.</p>
-            <div class="meta"><span>Win</span><span>macOS</span><span>Linux</span></div>
+          <article class="device reveal" data-b="linux" style="--i:1">
+            <p class="tagline"><span class="t1">Runtime test bench</span></p>
+            <h3>Linux</h3>
+            <p>Opt in with <code>GMCA_LINUX_TEST_BENCH=ON</code> to check shared behavior. Cap local builds at two jobs; Linux does not validate PS4 runtime or packaging.</p>
+            <div class="meta"><span>Explicit opt-in</span><span>Max 2 jobs</span><span>Not delivery</span></div>
           </article>
         </div>
       </div>
@@ -243,17 +168,17 @@
         <div class="section-head reveal">
           <div class="lead">
             <span class="sec-num">03</span>
-            <span class="sec-kicker">Every feature, designed for a gamepad</span>
-            <h2>Native, down to the metal</h2>
-            <p>No browser, no web view. Compiled straight to each platform, with hardware playback, per-server theming and offline downloads.</p>
+            <span class="sec-kicker">PS4 Stremio profile</span>
+            <h2>Built for the controller</h2>
+            <p>Native C++ interface, controller navigation, Stremio catalogues, and mpv playback on PS4.</p>
           </div>
         </div>
 
         <div class="features reveal">
           <div class="feature">
             <svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z"/></svg>
-            <h3>Native &amp; fast</h3>
-            <p>Compiled per platform. No Electron, no browser tab. Cold-starts in a blink, even on nine-year-old silicon.</p>
+            <h3>Native PS4 app</h3>
+            <p>GMCA is built as a native PS4 package with Borealis and mpv.</p>
           </div>
           <div class="feature">
             <svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="6"/><path d="M7 10v4M5 12h4"/><circle cx="16" cy="11" r="1"/><circle cx="18.5" cy="13.5" r="1"/></svg>
@@ -262,33 +187,33 @@
           </div>
           <div class="feature">
             <svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M10 9l5 3-5 3V9Z" fill="currentColor" stroke="none"/></svg>
-            <h3>MPV playback</h3>
-            <p>The mpv engine under the hood: hardware decode, subtitles and the formats that just work.</p>
+            <h3>mpv playback</h3>
+            <p>Video playback runs through mpv. Validate PS4-specific media behavior on the console.</p>
           </div>
           <div class="feature">
             <svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16"/></svg>
-            <h3>Downloads &amp; offline</h3>
-            <p>Pull episodes to the device and watch on the train. Watch-state syncs back when you reconnect.</p>
+            <h3>Stremio library</h3>
+            <p>Sign in with your Stremio account to see its synced library and configured catalogues.</p>
           </div>
           <div class="feature">
             <svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18Z"/></svg>
-            <h3>14 languages</h3>
-            <p>Fully translated across fourteen locales. Every string, never machine-guessed.</p>
+            <h3>Controller controls</h3>
+            <p>Navigate and control playback with the PS4 pad. See the playback table in the guide.</p>
           </div>
           <div class="feature">
             <svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>
-            <h3>Per-server theming</h3>
-            <p>The accent follows the source: Plex amber, Jellyfin cyan, Emby green, Stremio violet.</p>
+            <h3>Stremio styling</h3>
+            <p>The current PS4 profile presents Stremio as its connection source.</p>
           </div>
           <div class="feature">
             <svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M2 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 4l4 3-4 3M20 7h-6"/></svg>
-            <h3>Connection switcher</h3>
-            <p>Keep every server and account side by side. Hop between them from one avatar, no re-login.</p>
+            <h3>Verified update package</h3>
+            <p>The updater checks the rolling manifest and package hash, then leaves the package for manual installation.</p>
           </div>
           <div class="feature">
             <svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="5" rx="1"/><rect x="3" y="12" width="11" height="8" rx="1"/><path d="M18 13v6M15 16h6"/></svg>
-            <h3>Tabs that adapt</h3>
-            <p>The interface changes with the server. Watchlist, favourites and collections show up only where they exist.</p>
+            <h3>Linux test bench</h3>
+            <p>Linux is an explicit shared-behavior test bench only; keep local compilation at two jobs.</p>
           </div>
         </div>
       </div>
@@ -300,108 +225,24 @@
         <div class="section-head reveal">
           <div class="lead">
             <span class="sec-num">04</span>
-            <span class="sec-kicker">Captured on the desktop build</span>
-            <h2>See it running</h2>
-            <p>One interface across every source. The same layout serves a Plex library, a Jellyfin series, an Emby film and a Stremio catalogue.</p>
+            <span class="sec-kicker">Stremio interface captures</span>
+            <h2>Browse the interface</h2>
+            <p>These captures show GMCA's Stremio catalogue, library, detail, and playback-related screens.</p>
           </div>
-          <div class="aside">Full-frame captures<br>from the desktop build</div>
+          <div class="aside">Historical<br>screenshots</div>
         </div>
       </div>
 
       <div class="rail-wrap wrap">
-        <!-- One control flips every card between servers: same screen, same
-             layout, different source — that IS the point of the section. -->
-        <div class="mc-switch reveal" role="tablist" aria-label="Choose a media center">
-          <span class="mc-switch-label">Same app, every server</span>
-          <div class="mc-tabs">
-            <button class="mc-tab is-on" data-mc="plex" role="tab" aria-selected="true">Plex</button>
-            <button class="mc-tab" data-mc="jellyfin" role="tab" aria-selected="false">Jellyfin</button>
-            <button class="mc-tab" data-mc="emby" role="tab" aria-selected="false">Emby</button>
-            <button class="mc-tab" data-mc="stremio" role="tab" aria-selected="false">Stremio</button>
-          </div>
-        </div>
-
-        <div class="rail screens-rail reveal" data-mc="plex">
-          <figure class="scr" data-screen="Home">
-            <div class="scr-stack">
-              <img class="scr-img on" data-mc="plex" src="assets/img/gallery/scr-home-plex.webp" alt="The Home screen — identical layout on Plex, Jellyfin, Emby and Stremio" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="jellyfin" src="assets/img/gallery/scr-home-jellyfin.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="emby" src="assets/img/gallery/scr-home-emby.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="stremio" src="assets/img/gallery/scr-home-stremio.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-            </div>
-            <figcaption><span class="pin"></span> Home <span class="scr-na"></span></figcaption>
-          </figure>
-          <figure class="scr" data-screen="Library">
-            <div class="scr-stack">
-              <img class="scr-img on" data-mc="plex" src="assets/img/gallery/scr-library-plex.webp" alt="A library grid — the same layout across every server" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="jellyfin" src="assets/img/gallery/scr-library-jellyfin.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="emby" src="assets/img/gallery/scr-library-emby.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="stremio" src="assets/img/gallery/scr-library-stremio.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-            </div>
-            <figcaption><span class="pin"></span> Library <span class="scr-na"></span></figcaption>
-          </figure>
-          <figure class="scr" data-screen="Movie detail">
-            <div class="scr-stack">
-              <img class="scr-img on" data-mc="plex" src="assets/img/gallery/scr-movie-plex.webp" alt="A movie detail page — the same layout across every server" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="jellyfin" src="assets/img/gallery/scr-movie-jellyfin.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="emby" src="assets/img/gallery/scr-movie-emby.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="stremio" src="assets/img/gallery/scr-movie-stremio.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-            </div>
-            <figcaption><span class="pin"></span> Movie detail <span class="scr-na"></span></figcaption>
-          </figure>
-          <figure class="scr" data-screen="Series">
-            <div class="scr-stack">
-              <img class="scr-img on" data-mc="plex" src="assets/img/gallery/scr-series-plex.webp" alt="A series detail page — the same layout across every server" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="jellyfin" src="assets/img/gallery/scr-series-jellyfin.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="emby" src="assets/img/gallery/scr-series-emby.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="stremio" src="assets/img/gallery/scr-series-stremio.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-            </div>
-            <figcaption><span class="pin"></span> Series <span class="scr-na"></span></figcaption>
-          </figure>
-          <figure class="scr" data-screen="Season">
-            <div class="scr-stack">
-              <img class="scr-img on" data-mc="plex" src="assets/img/gallery/scr-season-plex.webp" alt="A season with its episodes — the same layout across every server that has seasons" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="jellyfin" src="assets/img/gallery/scr-season-jellyfin.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="emby" src="assets/img/gallery/scr-season-emby.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-            </div>
-            <figcaption><span class="pin"></span> Season <span class="scr-na"></span></figcaption>
-          </figure>
-          <figure class="scr" data-screen="Genres">
-            <div class="scr-stack">
-              <img class="scr-img on" data-mc="plex" src="assets/img/gallery/scr-genres-plex.webp" alt="The genre browser — the same layout across every server" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="jellyfin" src="assets/img/gallery/scr-genres-jellyfin.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="emby" src="assets/img/gallery/scr-genres-emby.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="stremio" src="assets/img/gallery/scr-genres-stremio.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-            </div>
-            <figcaption><span class="pin"></span> Genres <span class="scr-na"></span></figcaption>
-          </figure>
-          <figure class="scr" data-screen="Search">
-            <div class="scr-stack">
-              <img class="scr-img on" data-mc="plex" src="assets/img/gallery/scr-search-plex.webp" alt="The on-screen search keyboard — the same layout across every server" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="jellyfin" src="assets/img/gallery/scr-search-jellyfin.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="emby" src="assets/img/gallery/scr-search-emby.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="stremio" src="assets/img/gallery/scr-search-stremio.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-            </div>
-            <figcaption><span class="pin"></span> Search <span class="scr-na"></span></figcaption>
-          </figure>
-          <figure class="scr" data-screen="Downloads">
-            <div class="scr-stack">
-              <img class="scr-img on" data-mc="plex" src="assets/img/gallery/scr-downloads-plex.webp" alt="Offline downloads — the same layout across every server" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="jellyfin" src="assets/img/gallery/scr-downloads-jellyfin.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="emby" src="assets/img/gallery/scr-downloads-emby.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="stremio" src="assets/img/gallery/scr-downloads-stremio.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-            </div>
-            <figcaption><span class="pin"></span> Downloads <span class="scr-na"></span></figcaption>
-          </figure>
-          <figure class="scr" data-screen="Quick actions">
-            <div class="scr-stack">
-              <img class="scr-img on" data-mc="plex" src="assets/img/gallery/scr-quickactions-plex.webp" alt="The quick-actions context menu — the same layout across every server" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="jellyfin" src="assets/img/gallery/scr-quickactions-jellyfin.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="emby" src="assets/img/gallery/scr-quickactions-emby.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-              <img class="scr-img" data-mc="stremio" src="assets/img/gallery/scr-quickactions-stremio.webp" alt="" aria-hidden="true" loading="lazy" width="1280" height="720">
-            </div>
-            <figcaption><span class="pin"></span> Quick actions <span class="scr-na"></span></figcaption>
-          </figure>
+        <div class="rail screens-rail reveal">
+          <figure class="scr" data-screen="Home"><div class="scr-stack"><img class="scr-img on" src="assets/img/gallery/scr-home-stremio.webp" alt="GMCA Home screen with Stremio" loading="lazy" width="1280" height="720"></div><figcaption><span class="pin"></span> Home</figcaption></figure>
+          <figure class="scr" data-screen="Library"><div class="scr-stack"><img class="scr-img on" src="assets/img/gallery/scr-library-stremio.webp" alt="GMCA Stremio library" loading="lazy" width="1280" height="720"></div><figcaption><span class="pin"></span> Library</figcaption></figure>
+          <figure class="scr" data-screen="Movie detail"><div class="scr-stack"><img class="scr-img on" src="assets/img/gallery/scr-movie-stremio.webp" alt="GMCA Stremio movie detail" loading="lazy" width="1280" height="720"></div><figcaption><span class="pin"></span> Movie detail</figcaption></figure>
+          <figure class="scr" data-screen="Series"><div class="scr-stack"><img class="scr-img on" src="assets/img/gallery/scr-series-stremio.webp" alt="GMCA Stremio series detail" loading="lazy" width="1280" height="720"></div><figcaption><span class="pin"></span> Series</figcaption></figure>
+          <figure class="scr" data-screen="Genres"><div class="scr-stack"><img class="scr-img on" src="assets/img/gallery/scr-genres-stremio.webp" alt="GMCA Stremio genre browser" loading="lazy" width="1280" height="720"></div><figcaption><span class="pin"></span> Genres</figcaption></figure>
+          <figure class="scr" data-screen="Search"><div class="scr-stack"><img class="scr-img on" src="assets/img/gallery/scr-search-stremio.webp" alt="GMCA Stremio search" loading="lazy" width="1280" height="720"></div><figcaption><span class="pin"></span> Search</figcaption></figure>
+          <figure class="scr" data-screen="Downloads"><div class="scr-stack"><img class="scr-img on" src="assets/img/gallery/scr-downloads-stremio.webp" alt="GMCA Stremio downloads screen" loading="lazy" width="1280" height="720"></div><figcaption><span class="pin"></span> Downloads</figcaption></figure>
+          <figure class="scr" data-screen="Quick actions"><div class="scr-stack"><img class="scr-img on" src="assets/img/gallery/scr-quickactions-stremio.webp" alt="GMCA Stremio quick actions" loading="lazy" width="1280" height="720"></div><figcaption><span class="pin"></span> Quick actions</figcaption></figure>
         </div>
       </div>
     </section>
@@ -412,36 +253,35 @@
         <div class="section-head reveal">
           <div class="lead">
             <span class="sec-num">05</span>
-            <span class="sec-kicker">Pick your platform · point at your server</span>
-            <h2>Three steps to play</h2>
+            <span class="sec-kicker">PS4 Stremio profile</span>
+            <h2>Build, sign in, play</h2>
           </div>
         </div>
 
         <div class="steps reveal">
           <div class="step">
             <span class="step-num">1</span>
-            <h3>Get your build</h3>
-            <p>Grab the release for your device from GitHub. Every tag ships builds for all supported platforms.</p>
-            <p class="mono">SWITCH · VITA · PI · DESKTOP</p>
+            <h3>Get the package</h3>
+            <p>Download the verified PS4 PKG and update manifest from a successful Stremio-only workflow run.</p>
+            <p class="mono">PS4 · PKG · SHA-256</p>
           </div>
           <div class="step">
             <span class="step-num">2</span>
-            <h3>Point it at your server</h3>
-            <p>Add Plex, Jellyfin, Emby or Stremio, or a plain file share. Add as many as you like.</p>
-            <p class="mono">PLEX · JELLYFIN · EMBY · STREMIO</p>
+            <h3>Sign in to Stremio</h3>
+            <p>Use the account where your library and add-ons are configured.</p>
+            <p class="mono">STREMIO</p>
           </div>
           <div class="step">
             <span class="step-num">3</span>
-            <h3>Grab a controller</h3>
-            <p>Pick up any gamepad and press A — you're in, browsing a couch-ready interface.</p>
-            <p class="mono">GAMEPAD-FIRST</p>
+            <h3>Use the PS4 pad</h3>
+            <p>Browse with the controller and use the playback controls in the guide.</p>
+            <p class="mono">PS4 GAMEPAD</p>
           </div>
         </div>
 
         <div class="install-cta">
-          <a class="btn btn-primary" href="https://github.com/thcolin/gamepad-media-center-aggregator/releases/latest"><span class="btn-glyph">A</span> Download latest release</a>
+          <a class="btn btn-primary" href="https://github.com/thcolin/gamepad-media-center-aggregator/actions/workflows/build-ps4-stremio-only.yml"><span class="btn-glyph">A</span> PS4 workflow artifacts</a>
           <a class="btn btn-ghost" href="guide.html">Read the guide</a>
-          <a class="btn btn-ghost" href="https://nightly.link/thcolin/gamepad-media-center-aggregator/workflows/build.yaml/dev">Nightly builds</a>
         </div>
       </div>
     </section>
@@ -455,8 +295,8 @@
       <time id="clock">00:00:00</time>
     </div>
     <div class="cb-right">
-      <a class="cb-hint" href="#servers"><span class="btn-glyph">B</span> Servers</a>
-      <a class="cb-hint" href="https://github.com/thcolin/gamepad-media-center-aggregator/releases/latest"><span class="btn-glyph btn-glyph-a">A</span> Download</a>
+      <a class="cb-hint" href="#servers"><span class="btn-glyph">B</span> Stremio</a>
+      <a class="cb-hint" href="https://github.com/thcolin/gamepad-media-center-aggregator/actions/workflows/build-ps4-stremio-only.yml"><span class="btn-glyph btn-glyph-a">A</span> Build artifacts</a>
     </div>
   </div>
 
@@ -465,7 +305,7 @@
     <div class="footer-inner">
       <div class="footer-brand">
         <span class="wordmark-footer">GMCA</span>
-        <p>Gamepad Media Center Aggregator: a native, controller-first client for Plex, Jellyfin, Emby and Stremio.<br>
+        <p>Gamepad Media Center Aggregator: a native, controller-first PS4 client for Stremio.<br>
            Free and open source, forked from
            <a href="https://github.com/dragonflylee/switchfin">Switchfin</a>, built on
            <a href="https://github.com/natinusala/borealis">borealis</a> and
@@ -474,8 +314,7 @@
       <nav class="footer-col" aria-label="Project">
         <h3>Project</h3>
         <a href="https://github.com/thcolin/gamepad-media-center-aggregator">GitHub</a>
-        <a href="https://github.com/thcolin/gamepad-media-center-aggregator/releases">Releases</a>
-        <a href="https://nightly.link/thcolin/gamepad-media-center-aggregator/workflows/build.yaml/dev">Nightly builds</a>
+        <a href="https://github.com/thcolin/gamepad-media-center-aggregator/actions/workflows/build-ps4-stremio-only.yml">PS4 workflow artifacts</a>
         <a href="https://github.com/thcolin/gamepad-media-center-aggregator/issues">Issues</a>
       </nav>
       <nav class="footer-col" aria-label="Help">
@@ -487,8 +326,7 @@
       </nav>
     </div>
     <p class="footer-legal">
-      GMCA is an independent, third-party project, not affiliated with or endorsed by Plex, Jellyfin, Emby or Stremio.
-      Nintendo Switch is a trademark of Nintendo; PS Vita is a trademark of Sony. ·
+      GMCA is an independent, third-party project, not affiliated with or endorsed by Stremio. PS4 is a trademark of Sony. ·
       <span data-version>v1.1.0</span> · <a href="https://github.com/thcolin/gamepad-media-center-aggregator/blob/dev/CHANGELOG.md">Changelog</a>
     </p>
   </footer>

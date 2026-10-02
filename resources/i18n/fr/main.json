@@ -3,8 +3,8 @@
     "title": "pleNx devient GMCA",
     "intro": "La même app, en plus grand. pleNx est devenu GMCA — le Gamepad Media Center Aggregator — et il en fait désormais bien plus.",
     "whats_new": "CE QUI CHANGE",
-    "feature_backends": "Une seule app, tous vos serveurs — Plex, Jellyfin, Emby et Stremio",
-    "feature_music": "Votre musique, aux côtés des films et des séries",
+    "feature_backends": "Stremio catalogs, library and playback on PS4",
+    "feature_music": "Multiple Stremio accounts, with your own library and history",
     "feature_offline": "Téléchargements hors-ligne pour regarder partout, sans connexion",
     "feature_updates": "Des mises à jour régulières, livrées directement dans l'app",
     "reassure": "Vos connexions, réglages et téléchargements ont été repris automatiquement — rien à reconfigurer. Bon visionnage !",
@@ -16,8 +16,7 @@
     "suggest": "Suggestions",
     "search": "Recherche",
     "downloads": "Téléchargements",
-    "setting": "Paramètres",
-    "remote": "Serveurs"
+    "setting": "Paramètres"
   },
   "home": {
     "resume": "Lecture",
@@ -90,7 +89,8 @@
     "seasons_title": "Saisons",
     "go_series": "Aller à la série",
     "go_season": "Aller à la saison",
-    "director": "Réalisation"
+    "director": "Réalisation",
+    "type": "Type"
   },
   "search": {
     "hint": "Prise en charge des mots-clés et des premières lettres des mots-clés",
@@ -159,41 +159,6 @@
     "availability": "Disponibilité",
     "on_server": "Sur le serveur",
     "not_on_server": "Pas sur le serveur"
-  },
-  "remote": {
-    "empty_title": "Aucun fichier",
-    "empty_sub": "Parcours le stockage local et tes serveurs WebDAV, FTP ou SFTP.",
-    "local": "Fichiers",
-    "folder": "Dossier",
-    "up": "Dossier parent",
-    "bluray": "Lire le Blu-ray",
-    "add_server": "Ajouter un serveur",
-    "edit_server": "Modifier le serveur",
-    "manage": "Gérer le serveur",
-    "edit": "Modifier",
-    "delete": "Supprimer",
-    "delete_confirm": "Supprimer « {} » ?",
-    "type": "Type",
-    "name": "Nom",
-    "host": "Hôte",
-    "port": "Port",
-    "username": "Utilisateur",
-    "password": "Mot de passe",
-    "path": "Chemin de départ",
-    "optional": "Facultatif",
-    "save": "Tester et enregistrer",
-    "test_failed": "Connexion impossible : {}",
-    "retry": "Réessayer ?",
-    "required": "Renseigne au moins le nom et l'hôte.",
-    "sort": "Trier les fichiers",
-    "date": "Date de modification",
-    "size": "Taille",
-    "pin": "Épingler aux Fichiers",
-    "unpin": "Retirer des Fichiers",
-    "pinned": "Épinglé aux Fichiers",
-    "unpinned": "Retiré des Fichiers",
-    "already_pinned": "Déjà épinglé",
-    "pin_missing": "Ce dossier n'est plus disponible. Le retirer des Fichiers ?"
   },
   "download": {
     "start": "Télécharger",
@@ -394,44 +359,20 @@
     "hint_confirm": "L'installation du forwarder NSP peut entraîner un bannissement de la console. Veuillez confirmer à nouveau",
     "remove_old": "GMCA est sur ton menu HOME. Si une ancienne tuile pleNx y figure encore, supprime-la depuis Réglages système > Gestion des données > Supprimer un logiciel."
   },
-  "plex": {
-    "title": "Connectez-vous à votre compte Plex",
-    "generating": "Génération du code…",
-    "waiting": "En attente de validation…",
-    "connected": "Connecté !",
-    "expired": "Le code a expiré, veuillez réessayer",
-    "step1": "1. Sur votre téléphone ou ordinateur, ouvrez plex.tv/link",
-    "step2": "2. Connectez-vous à votre compte Plex",
-    "step3": "3. Saisissez le code affiché ci-dessus",
-    "regenerate": "Générer un nouveau code",
-    "choose_server": "Choisir un serveur",
-    "choose_profile": "Choisir un profil",
-    "profile_pin": "Code PIN du profil",
-    "wrong_pin": "Code PIN incorrect",
-    "no_server": "Aucun serveur trouvé sur ce compte",
-    "connecting": "Connexion au serveur…",
-    "connecting_slow": "Cela prend plus de temps que d'habitude — on essaie toujours de joindre votre serveur. Encore un instant…",
-    "unreachable": "Serveur injoignable"
-  },
   "server": {
     "choose_type": "Choisissez le type de connexion",
     "switch_title": "Connexions",
     "add": "Ajouter",
-    "jellyfin": {
-      "title_jellyfin": "Connexion à Jellyfin",
-      "title_emby": "Connexion à Emby",
-      "url": "Adresse du serveur",
-      "username": "Nom d'utilisateur",
-      "password": "Mot de passe",
-      "connect": "Se connecter"
-    },
     "stremio": {
       "title": "Connexion à Stremio",
       "email": "Adresse e-mail",
       "password": "Mot de passe",
       "connect": "Se connecter",
       "invalid": "Saisissez votre adresse e-mail et votre mot de passe"
-    }
+    },
+    "connecting": "Connexion au serveur…",
+    "connecting_slow": "Cela prend plus de temps que d'habitude — on essaie toujours de joindre votre serveur. Encore un instant…",
+    "unreachable": "Serveur injoignable"
   },
   "empty": {
     "title": "Rien à afficher",

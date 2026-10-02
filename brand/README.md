@@ -1,4 +1,9 @@
-# Brand source assets
+# Archived: historical brand source assets
+
+> This guide documents earlier Switch and Vita identity assets and is retained
+> as project history. Current GMCA development and delivery target PS4 with
+> Stremio only; Linux is an explicit shared-behavior test bench. See the
+> [current README](../README.md) for active product guidance.
 
 Master art the shipped brand derivatives are generated from. Keep the masters
 here so app icons and site logos stay regenerable.

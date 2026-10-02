@@ -1,4 +1,9 @@
-# SPEC — Navigation hors-ligne des téléchargements (issue #19)
+# Archived: SPEC — Navigation hors-ligne des téléchargements (issue #19)
+
+> Historical Plex-focused feature specification, retained as project history.
+> Current GMCA development and delivery target PS4 with Stremio only; Linux is
+> an explicit shared-behavior test bench. Do not use this draft as current
+> implementation guidance.
 
 > Fork pleNx (client Plex natif, gamepad-first, C++/Borealis — Switch, Vita, PS4,
 > desktop). Cette spec couvre la fonctionnalité « Offline Download Browsing »

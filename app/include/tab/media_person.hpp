@@ -6,13 +6,13 @@
 #pragma once
 
 #include <borealis.hpp>
-#include <api/plex/types.hpp>
+#include <api/media/types.hpp>
 
 class RecylingVideo;
 
 class MediaPerson : public brls::Box {
 public:
-    MediaPerson(const plex::Role& role);
+    MediaPerson(const media::Role& role);
     ~MediaPerson() override;
 
 private:

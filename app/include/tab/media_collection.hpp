@@ -11,12 +11,6 @@ class MediaFilter;
 
 class MediaCollection : public AttachedView {
 public:
-    /// @param itemId section key OR collection ratingKey
-    /// @param itemType Plex type: "movie" | "show" | "photo" | "collection"
-    /// @param genresId Plex genre key (genre= filter)
-    /// @param title library display name (library mode only): replaces the
-    ///        first tab's "Accueil" label with the library's own name; empty
-    ///        keeps "Accueil"
     explicit MediaCollection(const std::string& itemId, const std::string& itemType = "",
         const std::string& genresId = "", const std::string& title = "");
 
@@ -56,10 +50,6 @@ private:
     static std::map<std::string, std::string> customPrefs;
 };
 
-/// Stremio library section (Films / Séries): Discover shows addon catalogs
-/// as vertical hub shelves, Top IMDb exposes the cached all-time IMDb Top 250,
-/// and Genres remains a separate browsing mode. Used instead of MediaCollection.
-/// Kept separate so the Plex/Jellyfin MediaCollection path is untouched.
 class StremioCatalogs : public AttachedView {
 public:
     StremioCatalogs(const std::string& sectionKey, const std::string& sectionType);

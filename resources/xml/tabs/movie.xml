@@ -253,11 +253,7 @@
                         fontSize="15"
                         textColor="@theme/font/grey" />
 
-                    <!-- Stremio sources (BELOW the synopsis): one focusable row
-                         per playable release (A = play, X = download) + one
-                         summary row per non-playable group (torrents/links).
-                         Stays GONE for backends that play a single resolved file
-                         (Plex/Jellyfin). Built in C++ (media_movie.cpp::buildSources). -->
+
                     <brls:Box
                         id="movie/sources"
                         axis="column"

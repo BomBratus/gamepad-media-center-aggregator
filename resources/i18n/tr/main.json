@@ -3,8 +3,8 @@
     "title": "pleNx artık GMCA",
     "intro": "Aynı uygulama, ama büyüdü. pleNx artık GMCA oldu — Gamepad Media Center Aggregator — ve çok daha fazlasını yapıyor.",
     "whats_new": "YENİLİKLER",
-    "feature_backends": "Tek uygulama, tüm sunucular — Plex, Jellyfin, Emby ve Stremio",
-    "feature_music": "Filmlerin ve dizilerin yanında müzik kitaplığın",
+    "feature_backends": "Stremio catalogs, library and playback on PS4",
+    "feature_music": "Multiple Stremio accounts, with your own library and history",
     "feature_offline": "Bağlantı olmadan her yerde izlemek için çevrimdışı indirmeler",
     "feature_updates": "Doğrudan uygulamaya gelen düzenli güncellemeler",
     "reassure": "Girişlerin, ayarların ve indirmelerin otomatik olarak taşındı — yeniden ayarlamana gerek yok. İyi seyirler!",
@@ -16,8 +16,7 @@
     "suggest": "Öneriler",
     "search": "Arama",
     "downloads": "İndirilenler",
-    "setting": "Ayarlar",
-    "remote": "Sunucular"
+    "setting": "Ayarlar"
   },
   "home": {
     "resume": "İzlemeye Devam Et",
@@ -86,7 +85,8 @@
     "go_series": "Diziye git",
     "go_season": "Sezona git",
     "director": "Yönetmen",
-    "open": "Aç"
+    "open": "Aç",
+    "type": "Type"
   },
   "search": {
     "hint": "Anahtar kelimeleri ve baş harflerini destekler",
@@ -147,41 +147,6 @@
     "on_server": "Sunucuda",
     "not_on_server": "Sunucuda değil"
   },
-  "remote": {
-    "empty_title": "Dosya yok",
-    "empty_sub": "Yerel depolamayı ve WebDAV, FTP veya SFTP sunucularınızı keşfedin.",
-    "local": "Dosyalar",
-    "folder": "Klasör",
-    "up": "Üst Dizin",
-    "bluray": "Blu-ray oynat",
-    "add_server": "Sunucu ekle",
-    "edit_server": "Sunucuyu düzenle",
-    "manage": "Sunucuyu yönet",
-    "edit": "Düzenle",
-    "delete": "Sil",
-    "delete_confirm": "“{}” silinsin mi?",
-    "type": "Tür",
-    "name": "Ad",
-    "host": "Ana makine",
-    "port": "Bağlantı noktası",
-    "username": "Kullanıcı adı",
-    "password": "Parola",
-    "path": "Başlangıç yolu",
-    "optional": "İsteğe bağlı",
-    "save": "Test et ve kaydet",
-    "test_failed": "Bağlantı başarısız: {}",
-    "retry": "Yeniden denensin mi?",
-    "required": "En azından bir ad ve ana makine girin.",
-    "sort": "Dosyaları sırala",
-    "date": "Değiştirilme tarihi",
-    "size": "Boyut",
-    "pin": "Dosyalar'a sabitle",
-    "unpin": "Dosyalar'dan kaldır",
-    "pinned": "Dosyalar'a sabitlendi",
-    "unpinned": "Dosyalar'dan kaldırıldı",
-    "already_pinned": "Zaten sabitlenmiş",
-    "pin_missing": "Bu klasör artık kullanılamıyor. Dosyalar'dan kaldırılsın mı?"
-  },
   "download": {
     "start": "İndir",
     "cancel": "İndirmeyi İptal Et",
@@ -212,8 +177,7 @@
     "section_done": "İndirildi",
     "remove_all": "Tümünü kaldır",
     "confirm_remove_all": "Tüm indirmeler kaldırılsın mı?",
-    "empty_sub": "İndirilen filmler ve bölümler çevrimdışı izlemek için burada görünür.",
-    "eta": "{} kaldı"
+    "empty_sub": "İndirilen filmler ve bölümler çevrimdışı izlemek için burada görünür."
   },
   "setting": {
     "quit_hint": "Uygulamadan çıkış yapmak üzeresiniz. Değiştirilen ayarlar bir sonraki başlangıçtan sonra uygulanacak",
@@ -382,25 +346,6 @@
     "hint_confirm": "NSP yönlendiricisini kurmak konsolunuzun çevrim içi özelliklerden yasaklanmasına neden olabilir\n\nLütfen tekrar onaylayın",
     "remove_old": "GMCA, HOME menünüzde. Eski bir pleNx kutucuğu hâlâ varsa Sistem Ayarları > Veri Yönetimi > Yazılım Sil'den kaldırın."
   },
-  "plex": {
-    "title": "Plex hesabınıza giriş yapın",
-    "generating": "Kod oluşturuluyor…",
-    "waiting": "Onay bekleniyor…",
-    "connected": "Bağlandı!",
-    "expired": "Kodun süresi doldu, lütfen tekrar deneyin",
-    "step1": "1. Telefonunuzda veya bilgisayarınızda plex.tv/link adresini açın",
-    "step2": "2. Plex hesabınıza giriş yapın",
-    "step3": "3. Yukarıda gösterilen kodu girin",
-    "regenerate": "Yeni bir kod oluştur",
-    "choose_server": "Bir sunucu seçin",
-    "choose_profile": "Bir profil seçin",
-    "profile_pin": "Profil PIN'i",
-    "wrong_pin": "Yanlış PIN",
-    "no_server": "Bu hesapta sunucu bulunamadı",
-    "connecting": "Sunucuya bağlanılıyor…",
-    "unreachable": "Sunucuya ulaşılamıyor",
-    "connecting_slow": "Bu alışılmadık kadar uzun sürüyor — sunucunuza ulaşmaya çalışıyoruz. Biraz daha bekleyin…"
-  },
   "empty": {
     "title": "Gösterilecek bir şey yok",
     "error": "Yüklenemedi"
@@ -422,21 +367,16 @@
     "choose_type": "Bağlantı türünü seçin",
     "switch_title": "Bağlantılar",
     "add": "Ekle",
-    "jellyfin": {
-      "title_jellyfin": "Jellyfin'e Giriş Yap",
-      "title_emby": "Emby'ye Giriş Yap",
-      "url": "Sunucu adresi",
-      "username": "Kullanıcı adı",
-      "password": "Şifre",
-      "connect": "Bağlan"
-    },
     "stremio": {
       "title": "Stremio'ya Giriş Yap",
       "email": "E-posta",
       "password": "Şifre",
       "connect": "Bağlan",
       "invalid": "E-postanızı ve şifrenizi girin"
-    }
+    },
+    "connecting": "Sunucuya bağlanılıyor…",
+    "unreachable": "Sunucuya ulaşılamıyor",
+    "connecting_slow": "Bu alışılmadık kadar uzun sürüyor — sunucunuza ulaşmaya çalışıyoruz. Biraz daha bekleyin…"
   },
   "stremio": {
     "subtitle": {

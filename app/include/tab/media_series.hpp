@@ -5,7 +5,7 @@
 #pragma once
 
 #include <borealis.hpp>
-#include <api/plex/types.hpp>
+#include <api/media/types.hpp>
 #include <view/presenter.hpp>
 #include <view/svg_image.hpp>
 
@@ -22,7 +22,7 @@ public:
     /// and the wanted season is opened on top of the page once listed).
     /// localContext = opened from the offline downloads area (render locally
     /// even when a server is reachable, SPEC AC6).
-    MediaSeries(const plex::Item& item, bool localContext = false);
+    MediaSeries(const media::Item& item, bool localContext = false);
     ~MediaSeries() override;
 
     void doRequest() override;
@@ -83,7 +83,7 @@ private:
     /// show summary: fallback for season headers without their own summary
     std::string seriesSummary;
     /// next episode to play (OnDeck); empty ratingKey = no OnDeck
-    plex::Item onDeck;
+    media::Item onDeck;
     /// next episode has a playable source (Stremio); false -> Play is muted and
     /// explains on click instead of launching a player that would fail.
     bool nextPlayable = true;

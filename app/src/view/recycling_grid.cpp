@@ -147,10 +147,6 @@ void RecyclingView::removeCell(brls::View* view) {
 
 RecyclingGridDataSource* RecyclingView::getDataSource() const { return this->dataSource; }
 
-#ifdef GMCA_TEST_HARNESS
-bool RecyclingView::testLoading() const { return dynamic_cast<DataSourceSkeleton*>(dataSource) != nullptr && dataSource->getItemCount() > 0; }
-#endif
-
 void RecyclingView::showSkeleton(unsigned int num) { this->setDataSource(new DataSourceSkeleton(num)); }
 
 /// RecyclingGrid
@@ -494,13 +490,6 @@ void RecyclingGrid::setEmpty(std::string title, std::string subtitle, std::strin
     this->hintSub->setText(subtitle);
     this->clearData();
 }
-
-#ifdef GMCA_TEST_HARNESS
-bool RecyclingGrid::testError() const {
-    return dataSource && dataSource->getItemCount() == 0 && hintLabel &&
-        hintLabel->getFullText() == brls::getStr("main/empty/error");
-}
-#endif
 
 void RecyclingGrid::setError(std::string error) {
     this->hintImage->setImageFromSVGRes("icon/ico-cloud.svg");
@@ -881,3 +870,13 @@ RecyclingGridContentBox::RecyclingGridContentBox(RecyclingView* recycler) : Box(
 brls::View* RecyclingGridContentBox::getNextFocus(brls::FocusDirection direction, brls::View* currentView) {
     return this->recycler->getNextCellFocus(direction, currentView);
 }
+
+#ifdef GMCA_TEST_HARNESS
+bool RecyclingView::testLoading() const {
+    return dynamic_cast<DataSourceSkeleton*>(dataSource) != nullptr && dataSource->getItemCount() > 0;
+}
+bool RecyclingGrid::testError() const {
+    return dataSource && dataSource->getItemCount() == 0 && hintLabel &&
+           hintLabel->getFullText() == brls::getStr("main/empty/error");
+}
+#endif

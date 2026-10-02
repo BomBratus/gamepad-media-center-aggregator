@@ -3,7 +3,7 @@
 #include "utils/config.hpp"
 #include "utils/misc.hpp"
 #include "api/http.hpp"
-#include "api/plex.hpp"
+#include "api/backend.hpp"
 
 #include <mutex>
 #include <unordered_set>
@@ -55,14 +55,13 @@ bool store(const std::string& pathOrUrl) {
     } catch (...) {
     }
 
-    // relative Plex path -> original file on the server (no transcode, one file
     // per path whatever the requested display size). Absolute URL stays as-is.
     std::string url;
     if (pathOrUrl.rfind("http", 0) == 0) {
         url = pathOrUrl;
     } else {
         auto& conf = AppConfig::instance();
-        url = plex::withToken(conf.getUrl() + pathOrUrl, conf.getToken());
+        url = conf.backend().imageUrl(pathOrUrl);
     }
 
     try {

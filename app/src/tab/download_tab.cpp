@@ -1,5 +1,5 @@
 #include "tab/download_tab.hpp"
-#include "tab/remote_view.hpp"
+#include "activity/local_player.hpp"
 #include "view/recycling_grid.hpp"
 #include "view/svg_image.hpp"
 #include "view/video_view.hpp"
@@ -124,8 +124,7 @@ public:
             appBytes > 0 ? misc::formatSize(appBytes) : "0GB", count,
             count == 1 ? "main/playlist/item"_i18n : "main/playlist/items"_i18n));
 
-        // capacity/available: std::filesystem::space and boost::filesystem::space
-        // expose the same fields (macOS/Linux/Windows/Switch)
+        // std::filesystem::space and boost::filesystem::space expose the same fields.
         bool spaceOk = false;
         fs::space_info space{};
         try {
@@ -228,16 +227,10 @@ public:
         this->progressTrack->addView(this->progressBar);
     }
 
-    // The thumb load is async on GXM (withLocal): drop any in-flight request
-    // and reset to the placeholder before this cell is reused for another row,
-    // else a late completion would paint the previous item's poster. Matches
-    // the media grid cells (media_series/media_movie).
+    // Drop any in-flight thumb request before this cell is reused for another
+    // row, else a late completion would paint the previous item's poster.
     void prepareForReuse() override { this->thumb->setImageFromRes("img/video-card-bg.png"); }
-    void cacheForReuse() override {
-#ifdef BOREALIS_USE_GXM
-        Image::cancel(this->thumb);
-#endif
-    }
+    void cacheForReuse() override { Image::cancel(this->thumb); }
 
     void setItem(const DownloadItem& item, const std::string& downloadDir) {
         auto theme = brls::Application::getTheme();
@@ -245,12 +238,9 @@ public:
         this->thumb->setImageFromRes("img/video-card-bg.png");
         std::string thumbPath = downloadDir + "/" + item.itemId + "/thumb.png";
         if (fs::exists(thumbPath)) {
-#ifdef BOREALIS_USE_GXM
-            // GXM: decode+downscale+DXT to the 76x114 card size instead of
-            // uploading thumb.png at its native resolution, uncompressed. The
-            // thumbnail is fetched with no resize (download.cpp) so it can be a
-            // full-size poster — the same GPU-memory concern as Image::load.
-            // withLocal is async, so cancel on reuse (cacheForReuse below).
+#ifdef __PS4__
+            // Decode/downscale through the PS4 image path so a full-size saved
+            // poster does not become an oversized texture in the download list.
             Image::withLocal(this->thumb, thumbPath, 76, 114);
 #else
             this->thumb->setImageFromFile(thumbPath);
@@ -448,7 +438,7 @@ public:
             } else {
                 detail = item.name;
             }
-            RemoteView::play(path, detail, "Local");
+            LocalPlayer::play(path, detail, "Local");
         } else if (item.status == DownloadStatus::Downloading) {
             std::string id = item.itemId;
             Dialog::cancelable("main/download/confirm_cancel"_i18n, [id]() {

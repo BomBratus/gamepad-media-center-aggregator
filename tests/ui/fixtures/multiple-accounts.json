@@ -1,0 +1,34 @@
+{
+  "user_id": "user-one",
+  "servers": [
+    {
+      "id": "plex-one",
+      "type": "plex",
+      "access_token": "fixture-plex-token"
+    },
+    {
+      "id": "stremio-one",
+      "type": "stremio",
+      "access_token": "fixture-stremio-token"
+    },
+    {
+      "id": "stremio-two",
+      "type": "stremio",
+      "access_token": "fixture-second-token"
+    }
+  ],
+  "users": [
+    {
+      "id": "user-one",
+      "name": "Fixture account one",
+      "server_id": "stremio-one",
+      "access_token": "fixture-user-token"
+    },
+    {
+      "id": "user-two",
+      "name": "Fixture account two",
+      "server_id": "stremio-two",
+      "access_token": "fixture-second-user-token"
+    }
+  ]
+}

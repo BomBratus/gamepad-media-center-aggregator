@@ -1,11 +1,11 @@
 #pragma once
 
 #include <view/recycling_grid.hpp>
-#include <api/plex/types.hpp>
+#include <api/media/types.hpp>
 
 class VideoDataSource : public RecyclingGridDataSource {
 public:
-    using MediaList = std::vector<plex::Item>;
+    using MediaList = std::vector<media::Item>;
 
     explicit VideoDataSource(const MediaList& r);
     explicit VideoDataSource(const MediaList& r, const std::string& parentId);

@@ -3,8 +3,8 @@
     "title": "pleNx 现已成为 GMCA",
     "intro": "还是那个应用，只是更强大了。pleNx 已升级为 GMCA（Gamepad Media Center Aggregator），如今能做的事情多得多。",
     "whats_new": "全新功能",
-    "feature_backends": "一个应用，连接所有服务器 — Plex、Jellyfin、Emby 和 Stremio",
-    "feature_music": "在电影和剧集之外，还有你的音乐库",
+    "feature_backends": "Stremio catalogs, library and playback on PS4",
+    "feature_music": "Multiple Stremio accounts, with your own library and history",
     "feature_offline": "离线下载，无需联网随时随地观看",
     "feature_updates": "定期更新，直接推送到应用内",
     "reassure": "你的登录、设置和下载都已自动迁移 — 无需重新设置。祝观影愉快！",
@@ -16,8 +16,7 @@
     "suggest": "建议",
     "search": "搜索",
     "downloads": "下载",
-    "setting": "设置",
-    "remote": "服务器"
+    "setting": "设置"
   },
   "home": {
     "resume": "继续观看",
@@ -86,7 +85,8 @@
     "go_series": "前往节目",
     "go_season": "前往季",
     "director": "导演",
-    "open": "打开"
+    "open": "打开",
+    "type": "Type"
   },
   "search": {
     "hint": "支持关键字及关键字首字母",
@@ -147,47 +147,12 @@
     "on_server": "在服务器上",
     "not_on_server": "不在服务器上"
   },
-  "remote": {
-    "empty_title": "暂无文件",
-    "empty_sub": "浏览本地存储以及你的 WebDAV、FTP 或 SFTP 服务器。",
-    "local": "文件",
-    "folder": "文件夹",
-    "up": "上一级",
-    "bluray": "播放蓝光",
-    "add_server": "添加服务器",
-    "edit_server": "编辑服务器",
-    "manage": "管理服务器",
-    "edit": "编辑",
-    "delete": "删除",
-    "delete_confirm": "删除“{}”？",
-    "type": "类型",
-    "name": "名称",
-    "host": "主机",
-    "port": "端口",
-    "username": "用户名",
-    "password": "密码",
-    "path": "起始路径",
-    "optional": "可选",
-    "save": "测试并保存",
-    "test_failed": "连接失败：{}",
-    "retry": "重试？",
-    "required": "请至少填写名称和主机。",
-    "sort": "文件排序",
-    "date": "修改日期",
-    "size": "大小",
-    "pin": "固定到文件",
-    "unpin": "从文件中移除",
-    "pinned": "已固定到文件",
-    "unpinned": "已从文件中移除",
-    "already_pinned": "已固定",
-    "pin_missing": "该文件夹已不可用。要从文件中移除吗？"
-  },
   "download": {
     "start": "开始下载",
     "cancel": "取消下载",
     "remove": "移除下载",
     "downloading": "下载中...",
-    "eta": "剩余 {}",
+    "eta": "还剩 {}",
     "completed": "已完成",
     "failed": "下载失败",
     "queued": "下载任务提交成功",
@@ -212,8 +177,7 @@
     "section_done": "已下载",
     "remove_all": "全部删除",
     "confirm_remove_all": "删除全部下载内容？",
-    "empty_sub": "下载的电影和剧集会显示在这里，可离线观看。",
-    "eta": "还剩 {}"
+    "empty_sub": "下载的电影和剧集会显示在这里，可离线观看。"
   },
   "setting": {
     "quit_hint": "即将退出应用, 设置内容将在下次启动后生效",
@@ -382,25 +346,6 @@
     "hint_confirm": "安装桌面图标可能导致ban机\n请再次确认",
     "remove_old": "GMCA 已在 HOME 菜单中。如果旧的 pleNx 磁贴仍然存在，请在 系统设置 > 数据管理 > 删除软件 中删除它。"
   },
-  "plex": {
-    "title": "登录你的 Plex 账户",
-    "generating": "正在生成代码…",
-    "waiting": "等待确认…",
-    "connected": "已连接！",
-    "expired": "代码已过期，请重试",
-    "step1": "1. 在手机或电脑上打开 plex.tv/link",
-    "step2": "2. 登录你的 Plex 账户",
-    "step3": "3. 输入上方显示的代码",
-    "regenerate": "生成新代码",
-    "choose_server": "选择服务器",
-    "choose_profile": "选择用户",
-    "profile_pin": "用户 PIN",
-    "wrong_pin": "PIN 错误",
-    "no_server": "该账户下未找到服务器",
-    "connecting": "正在连接服务器…",
-    "unreachable": "无法连接服务器",
-    "connecting_slow": "连接耗时比平时更长 — 仍在尝试连接服务器，请稍候…"
-  },
   "empty": {
     "title": "暂无内容",
     "error": "无法加载"
@@ -422,21 +367,16 @@
     "choose_type": "选择连接类型",
     "switch_title": "连接",
     "add": "添加",
-    "jellyfin": {
-      "title_jellyfin": "登录 Jellyfin",
-      "title_emby": "登录 Emby",
-      "url": "服务器地址",
-      "username": "用户名",
-      "password": "密码",
-      "connect": "连接"
-    },
     "stremio": {
       "title": "登录 Stremio",
       "email": "邮箱",
       "password": "密码",
       "connect": "连接",
       "invalid": "请输入邮箱和密码"
-    }
+    },
+    "connecting": "正在连接服务器…",
+    "unreachable": "无法连接服务器",
+    "connecting_slow": "连接耗时比平时更长 — 仍在尝试连接服务器，请稍候…"
   },
   "stremio": {
     "subtitle": {

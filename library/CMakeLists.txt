@@ -1,24 +1,3 @@
-if (GMCA_TEST_HARNESS)
-    set(_observer_patch "${CMAKE_CURRENT_LIST_DIR}/../scripts/patches/borealis-test-observers.patch")
-    execute_process(COMMAND git apply --check "${_observer_patch}"
-        WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/borealis" RESULT_VARIABLE _observer_apply
-        OUTPUT_QUIET ERROR_QUIET)
-    if (_observer_apply EQUAL 0)
-        execute_process(COMMAND git apply "${_observer_patch}"
-            WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/borealis" RESULT_VARIABLE _observer_result)
-        if (NOT _observer_result EQUAL 0)
-            message(FATAL_ERROR "Failed to apply Borealis test observers")
-        endif ()
-    else ()
-        execute_process(COMMAND git apply --reverse --check "${_observer_patch}"
-            WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/borealis" RESULT_VARIABLE _observer_present
-            OUTPUT_QUIET ERROR_QUIET)
-        if (NOT _observer_present EQUAL 0)
-            message(FATAL_ERROR "Borealis test observer patch drift")
-        endif ()
-    endif ()
-endif ()
-
 cmake_minimum_required(VERSION 3.15)
 
 # Apply the small UI patch here as well as the platform-wide Borealis patch
@@ -64,8 +43,5 @@ add_subdirectory(borealis/library)
 
 if (PLATFORM_PS4)
     list(APPEND APP_PLATFORM_LIB SceNet mbedcrypto mbedtls mbedx509)
-    set(APP_PLATFORM_LIB ${APP_PLATFORM_LIB} PARENT_SCOPE)
-elseif (PLATFORM_PSV)
-    list(APPEND APP_PLATFORM_LIB SceVshBridge_stub SceAppMgr_stub)
     set(APP_PLATFORM_LIB ${APP_PLATFORM_LIB} PARENT_SCOPE)
 endif ()

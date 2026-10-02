@@ -1,3 +1,10 @@
+# Archived: historical multi-backend design
+
+> This document describes a superseded design. Current GMCA development and
+> delivery target PS4 with Stremio only; Linux is an explicit shared-behavior
+> test bench. The material below is retained as project history, not current
+> product or build guidance.
+
 # pleNx — Architecture multi-backend (Plex · Jellyfin/Emby · Stremio)
 
 > **But** : permettre de connecter pleNx à un serveur **Plex**, **Emby/Jellyfin** ou **Stremio**, en

@@ -3,8 +3,8 @@
     "title": "Aus pleNx wird GMCA",
     "intro": "Dieselbe App, nur größer. Aus pleNx ist GMCA geworden — der Gamepad Media Center Aggregator — und kann jetzt noch viel mehr.",
     "whats_new": "DAS IST NEU",
-    "feature_backends": "Eine App, alle Server — Plex, Jellyfin, Emby und Stremio",
-    "feature_music": "Deine Musikbibliothek, direkt neben Filmen und Serien",
+    "feature_backends": "Stremio catalogs, library and playback on PS4",
+    "feature_music": "Multiple Stremio accounts, with your own library and history",
     "feature_offline": "Offline-Downloads, um überall ohne Verbindung zu schauen",
     "feature_updates": "Regelmäßige Updates, direkt in die App geliefert",
     "reassure": "Deine Anmeldungen, Einstellungen und Downloads wurden automatisch übernommen — nichts neu einzurichten. Viel Spaß!",
@@ -16,8 +16,7 @@
     "suggest": "Vorschläge",
     "search": "Suche",
     "downloads": "Downloads",
-    "setting": "Einstellungen",
-    "remote": "Server"
+    "setting": "Einstellungen"
   },
   "home": {
     "resume": "Weiterschauen",
@@ -86,7 +85,8 @@
     "go_series": "Zur Serie",
     "go_season": "Zur Staffel",
     "director": "Regie",
-    "open": "Öffnen"
+    "open": "Öffnen",
+    "type": "Type"
   },
   "search": {
     "hint": "Unterstützt Stichwörter und ihre Anfangsbuchstaben",
@@ -147,41 +147,6 @@
     "on_server": "Auf dem Server",
     "not_on_server": "Nicht auf dem Server"
   },
-  "remote": {
-    "empty_title": "Keine Dateien",
-    "empty_sub": "Durchsuche den lokalen Speicher und deine WebDAV-, FTP- oder SFTP-Server.",
-    "local": "Dateien",
-    "folder": "Ordner",
-    "up": "Hoch",
-    "bluray": "Blu-ray abspielen",
-    "add_server": "Server hinzufügen",
-    "edit_server": "Server bearbeiten",
-    "manage": "Server verwalten",
-    "edit": "Bearbeiten",
-    "delete": "Löschen",
-    "delete_confirm": "„{}“ löschen?",
-    "type": "Typ",
-    "name": "Name",
-    "host": "Host",
-    "port": "Port",
-    "username": "Benutzername",
-    "password": "Passwort",
-    "path": "Startpfad",
-    "optional": "Optional",
-    "save": "Testen und speichern",
-    "test_failed": "Verbindung fehlgeschlagen: {}",
-    "retry": "Erneut versuchen?",
-    "required": "Gib mindestens einen Namen und einen Host an.",
-    "sort": "Dateien sortieren",
-    "date": "Änderungsdatum",
-    "size": "Größe",
-    "pin": "An Dateien anheften",
-    "unpin": "Von Dateien entfernen",
-    "pinned": "An Dateien angeheftet",
-    "unpinned": "Von Dateien entfernt",
-    "already_pinned": "Bereits angeheftet",
-    "pin_missing": "Dieser Ordner ist nicht mehr verfügbar. Von Dateien entfernen?"
-  },
   "download": {
     "start": "Herunterladen",
     "cancel": "Download abbrechen",
@@ -212,8 +177,7 @@
     "section_done": "Heruntergeladen",
     "remove_all": "Alle entfernen",
     "confirm_remove_all": "Alle Downloads entfernen?",
-    "empty_sub": "Heruntergeladene Filme und Episoden erscheinen hier, offline abspielbar.",
-    "eta": "{} verbleibend"
+    "empty_sub": "Heruntergeladene Filme und Episoden erscheinen hier, offline abspielbar."
   },
   "setting": {
     "quit_hint": "Du bist dabei, die Applikation zu beenden. Die Einstellungen treten beim nächsten Start in Kraft.",
@@ -382,25 +346,6 @@
     "hint_confirm": "Die Installation des NSP-Forwarders kann zu einer Sperre führen\nBitte erneut bestätigen",
     "remove_old": "GMCA ist in deinem HOME-Menü. Falls noch eine alte pleNx-Kachel vorhanden ist, entferne sie über Systemeinstellungen > Datenverwaltung > Software löschen."
   },
-  "plex": {
-    "title": "Bei deinem Plex-Konto anmelden",
-    "generating": "Code wird generiert…",
-    "waiting": "Warte auf Bestätigung…",
-    "connected": "Verbunden!",
-    "expired": "Der Code ist abgelaufen, bitte versuche es erneut",
-    "step1": "1. Öffne auf deinem Telefon oder Computer plex.tv/link",
-    "step2": "2. Melde dich bei deinem Plex-Konto an",
-    "step3": "3. Gib den oben angezeigten Code ein",
-    "regenerate": "Neuen Code generieren",
-    "choose_server": "Server auswählen",
-    "choose_profile": "Profil auswählen",
-    "profile_pin": "Profil-PIN",
-    "wrong_pin": "Falsche PIN",
-    "no_server": "Kein Server für dieses Konto gefunden",
-    "connecting": "Verbindung zum Server wird hergestellt…",
-    "unreachable": "Server nicht erreichbar",
-    "connecting_slow": "Das dauert länger als gewöhnlich – wir versuchen weiterhin, deinen Server zu erreichen. Noch einen Moment…"
-  },
   "empty": {
     "title": "Nichts anzuzeigen",
     "error": "Laden fehlgeschlagen"
@@ -422,21 +367,16 @@
     "choose_type": "Wähle deinen Verbindungstyp",
     "switch_title": "Verbindungen",
     "add": "Hinzufügen",
-    "jellyfin": {
-      "title_jellyfin": "In Jellyfin anmelden",
-      "title_emby": "In Emby anmelden",
-      "url": "Serveradresse",
-      "username": "Benutzername",
-      "password": "Passwort",
-      "connect": "Verbinden"
-    },
     "stremio": {
       "title": "In Stremio anmelden",
       "email": "E-Mail",
       "password": "Passwort",
       "connect": "Verbinden",
       "invalid": "Gib deine E-Mail-Adresse und dein Passwort ein"
-    }
+    },
+    "connecting": "Verbindung zum Server wird hergestellt…",
+    "unreachable": "Server nicht erreichbar",
+    "connecting_slow": "Das dauert länger als gewöhnlich – wir versuchen weiterhin, deinen Server zu erreichen. Noch einen Moment…"
   },
   "stremio": {
     "subtitle": {

@@ -2,8 +2,7 @@
     width="auto"
     height="auto">
 
-    <!-- insets inside the scroll: cards up to the edges (collection.xml pattern).
-         Square cards: Plex composite = 1:1 mosaic -->
+
     <RecyclingGrid
         grow="1"
         wireframe="false"

@@ -1,3 +1,4 @@
+#include "utils/config.hpp"
 #include "activity/player_view.hpp"
 #include "tab/media_movie.hpp"
 #include "view/h_recycling.hpp"
@@ -7,8 +8,7 @@
 #include "view/people_source.hpp"
 #include "view/recyling_video.hpp"
 #include "view/mpv_core.hpp"
-#include "api/plex.hpp"
-#include "api/plex/watchlist.hpp"
+#include "api/backend.hpp"
 #include "api/backend.hpp"
 #include "api/stremio/types.hpp"
 #include "api/stremio/source_audio.hpp"
@@ -20,7 +20,7 @@
 #include "utils/media_source.hpp"
 #include "utils/offline_library.hpp"
 #include "utils/network_state.hpp"
-#include "tab/remote_view.hpp"
+#include "activity/local_player.hpp"
 #include <fmt/ranges.h>
 
 using namespace brls::literals;  // for _i18n
@@ -87,7 +87,7 @@ public:
 
 }  // namespace
 
-MediaMovie::MediaMovie(const plex::Item& item, bool localContext)
+MediaMovie::MediaMovie(const media::Item& item, bool localContext)
     : itemId(item.ratingKey), localContext(localContext) {
     brls::Logger::debug("Tab MediaMovie: create");
     // Inflate the tab from the XML file
@@ -96,7 +96,7 @@ MediaMovie::MediaMovie(const plex::Item& item, bool localContext)
     // Backs playback before doMovie resolves; non-Stremio backends are always
     // playable (Stremio defers until its sources are resolved).
     this->movieItem = item;
-    bool stremioBackend = AppConfig::instance().backend().type() == media::BackendType::Stremio;
+    bool stremioBackend = !media::preferLocal(this->localContext);
     this->hasPlayableSource = !stremioBackend;
     // Stremio has no Lire/version buttons — the inline source list is the play
     // UI. Hide them up front so they never flash before doMovie resolves.
@@ -130,7 +130,7 @@ MediaMovie::MediaMovie(const plex::Item& item, bool localContext)
             std::string title = this->movieItem.year
                                      ? fmt::format("{} ({})", this->movieItem.title, this->movieItem.year)
                                      : this->movieItem.title;
-            RemoteView::play(local, title, "Local");
+            LocalPlayer::play(local, title, "Local");
             return true;
         }
         // Enabled: play the best source. Muted (Stremio, no playable source):
@@ -216,7 +216,6 @@ void MediaMovie::initWatchlist(const media::Item& item) {
     // gated by the backend's personal-list capability + per-item applicability
     if (be.caps().listKind == media::ListKind::None || !be.canList(item)) return;
     this->listItem = item;
-    // label matches the backend's personal list: Plex → Watchlist, Jellyfin/Emby → Favoris
     this->btnWatchlist->setText(be.caps().listKind == media::ListKind::Favorites
                                     ? "main/favorites/title"_i18n
                                     : "main/watchlist/title"_i18n);
@@ -267,7 +266,6 @@ void MediaMovie::toggleWatchlist() {
 }
 
 void MediaMovie::updateWatchlistButton() {
-    // filled bookmark = already in the Watchlist (Plex convention)
     this->btnWatchlist->setIcon(
         this->watchlisted ? "@res/icon/ico-bookmark-fill-light.svg" : "@res/icon/ico-bookmark-light.svg");
 }
@@ -439,7 +437,7 @@ void MediaMovie::buildSources(const media::Item& item) {
                                      : sourcePill("main/stremio/source/uncached"_i18n, pillBg, greyCol));
         else
             cells.push_back(sourcePill("main/stremio/source/direct"_i18n, pillBg, textCol));
-#if defined(GMCA_STREMIO_ONLY) || defined(GMCA_PS4_SAFE_SOURCES)
+#if defined(GMCA_LINUX_TEST_BENCH) || defined(GMCA_PS4_SAFE_SOURCES)
         if (stremio::hasItalianAudio(m.sourceName + " " + m.sourceTitle))
             cells.push_back(sourcePill("main/stremio/source/italian_audio"_i18n, pillBg, textCol));
 #endif
@@ -545,11 +543,6 @@ void MediaMovie::applyMovie(const media::Item& item) {
             Image::load(this->imageLogo, item.clearLogo, 440, 120);
         }
     } else {
-        // no backdrop (e.g. an un-scanned Jellyfin/Emby item, or a poster-only
-        // offline snapshot): drop the banner AND the overlap margins that assumed
-        // it. The poster (marginTop 64 in XML, to rise into the banner) and the
-        // info column (marginTop 184, to clear it) must reset too, otherwise the
-        // title jams against the very top, misaligned with the poster.
         this->bannerBox->setVisibility(brls::Visibility::GONE);
         float topPad = brls::getStyle()["main/content_padding_top_bottom"];
         this->contentRow->setMarginTop(topPad);
@@ -603,7 +596,7 @@ void MediaMovie::applyMovie(const media::Item& item) {
     this->movieItem = item;  // resolved detail backs per-source playback
     this->viewOffsetMs = item.viewOffset;
 
-    if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
+    if (!media::preferLocal(this->localContext)) {
         // Stremio: no Lire/version buttons — the inline source list is the
         // play/download UI (built here; sets hasPlayableSource). Collapse
         // the now-empty buttons row so it leaves no gap between the genres
@@ -615,18 +608,9 @@ void MediaMovie::applyMovie(const media::Item& item) {
     } else {
         this->sourcesBox->setVisibility(brls::Visibility::GONE);
         this->hasPlayableSource = true;
-        // multiple versions (item.media[]): the selector remembers the choice
-        // but v1 playback always uses the first accessible version.
-        if (item.media.size() > 1) {
-            std::vector<std::string> names;
-            for (auto& m : item.media)
-                names.push_back(fmt::format("{} {} ({} kbps)", m.videoResolution, m.videoCodec, m.bitrate));
-            this->btnSource->init(
-                "main/setting/version"_i18n, names, 0, [this](int index) { this->selectedVersion = index; });
-            this->btnSource->setVisibility(brls::Visibility::VISIBLE);
-        } else {
-            this->btnSource->setVisibility(brls::Visibility::GONE);
-        }
+        this->btnPlay->setVisibility(brls::Visibility::VISIBLE);
+        if (this->btnPlay->getParent()) this->btnPlay->getParent()->setVisibility(brls::Visibility::VISIBLE);
+        this->btnSource->setVisibility(brls::Visibility::GONE);
         this->btnPlay->setMuted(false);
         this->btnPlay->setText(
             this->viewOffsetMs > 0 ? misc::sec2Time(this->viewOffsetMs / 1000) : "main/media/play"_i18n);
@@ -644,10 +628,6 @@ void MediaMovie::applyMovie(const media::Item& item) {
     ASYNC_RETAIN
     brls::sync([ASYNC_TOKEN]() {
         ASYNC_RELEASE
-        // Focus a VISIBLE target: the first selectable release (Stremio) or the
-        // Play button (Plex/Jellyfin). Stremio with zero sources hides btnPlay,
-        // so focusing it would strand the highlight; fall back to Favoris, else
-        // let borealis pick (cast/related).
         brls::View* target = this->firstSourceRow;
         if (!target && this->btnPlay->getVisibility() == brls::Visibility::VISIBLE) target = this->btnPlay;
         if (!target && this->btnWatchlist->getVisibility() == brls::Visibility::VISIBLE) target = this->btnWatchlist;

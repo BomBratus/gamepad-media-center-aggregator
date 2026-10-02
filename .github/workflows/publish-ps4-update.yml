@@ -5,27 +5,13 @@ on:
     branches: [ dev ]
     paths:
       - CMakeLists.txt
-      - app/src/main.cpp
-      - app/src/utils/version.cpp
-      - app/src/utils/ps4_update.cpp
-      - app/include/utils/config.hpp
-      - app/include/utils/ps4_update.hpp
-      - app/src/tab/setting_tab.cpp
-      - app/src/api/stremio/**
-      - app/include/api/stremio/**
-      - app/include/api/media/types.hpp
-      - app/src/view/video_source.cpp
-      - app/src/view/mpv_core.cpp
-      - app/src/activity/player_view.cpp
-      - app/include/view/video_source.hpp
-      - app/src/view/recyling_video.cpp
-      - app/include/view/recyling_video.hpp
-      - app/src/tab/home_tab.cpp
-      - app/src/tab/media_series.cpp
-      - resources/xml/view/episode_card.xml
-      - custom/ps4-safe-sources.patch
-      - custom/ps4-ui-followups.patch
-      - custom/apply-ps4-search-ui.awk
+      - cmake/**
+      - app/**
+      - library/**
+      - resources/**
+      - scripts/**
+      - tests/**
+      - .gitmodules
       - .github/workflows/build-ps4-stremio-only.yml
       - .github/workflows/publish-ps4-update.yml
 

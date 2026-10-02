@@ -10,9 +10,6 @@
 #include <ctime>
 #include <mutex>
 #include <string>
-#ifdef _WIN32
-#include <io.h>
-#endif
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -22,11 +19,7 @@ namespace stremio {
 namespace playback_history_detail {
 
 inline int syncFileDescriptor(int fd) {
-#ifdef _WIN32
-    return ::_commit(fd);
-#else
     return ::fsync(fd);
-#endif
 }
 
 inline std::string sourceUrl(const media::Media& source) {
@@ -188,11 +181,7 @@ public:
         const std::time_t time = static_cast<std::time_t>(seconds);
         if (static_cast<int64_t>(time) != seconds) return {};
         std::tm utc{};
-#if defined(_WIN32)
-        if (::gmtime_s(&utc, &time) != 0) return {};
-#else
         if (!::gmtime_r(&time, &utc)) return {};
-#endif
         const int year = utc.tm_year + 1900;
         if (year < 0 || year > 9999) return {};
 

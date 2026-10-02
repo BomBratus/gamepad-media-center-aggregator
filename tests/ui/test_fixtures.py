@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import urllib.error
 import urllib.request
+import urllib.error
 from fixtures import FixtureServer
 
 
@@ -57,6 +58,17 @@ class FixtureContracts(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as error:
             self.get('/catalog/movie/tvtest/genre=Drama.json')
         self.assertEqual(error.exception.code, 500)
+
+    def test_fake_login_accepts_only_fixture_credentials(self):
+        result = self.post('login', {'email': 'tvtest@example.invalid', 'password': 'fixture-password'})['result']
+        self.assertEqual(result['authKey'], 'fixture-login-token')
+        self.assertEqual(result['user']['_id'], 'tvtest-login')
+        request = urllib.request.Request(self.fixture.base + '/api/login',
+            json.dumps({'email': 'real@example.com', 'password': 'secret'}).encode(),
+            {'Content-Type': 'application/json'})
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(request, timeout=3)
+        self.assertEqual(error.exception.code, 401)
 
 
 if __name__ == '__main__':

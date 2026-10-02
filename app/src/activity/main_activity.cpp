@@ -9,7 +9,6 @@
 #include "tab/offline_collection.hpp"
 #include "utils/offline_library.hpp"
 #include "utils/network_state.hpp"
-#include "api/plex.hpp"
 #include "api/backend.hpp"
 #include <borealis/views/bottom_bar.hpp>
 #include <borealis/views/widgets/battery.hpp>
@@ -19,7 +18,6 @@
 using namespace brls::literals;  // for _i18n
 
 /// One-time "pleNx is now GMCA" welcome notice. Shown only to users whose data
-/// dir was just relocated from a legacy pleNx/Switchlex build (never on a fresh
 /// GMCA install), and only once (persistent RENAME_NOTICE_SHOWN flag). The flag
 /// is set before opening so an abrupt close never re-triggers it.
 static void maybeShowRenameNotice() {
@@ -168,7 +166,6 @@ void MainActivity::addSidebarStatus() {
 
 void MainTabFrame::applyCapabilities() {
     auto& caps = AppConfig::instance().backend().caps();
-    // personal-list tab: shown as Watchlist (Plex) or Favorites (Jellyfin/Emby);
     // removed entirely when the backend has neither
     if (caps.listKind == media::ListKind::None) this->removeTabById("tab/watchlist");
     if (!caps.playlists) this->removeTabById("tab/playlists");
@@ -197,7 +194,7 @@ void MainTabFrame::loadLibraries() {
         });
 }
 
-void MainTabFrame::addLibraryTabs(const std::vector<plex::Section>& sections) {
+void MainTabFrame::addLibraryTabs(const std::vector<media::Section>& sections) {
     // tabs are only built once per activity: ignore duplicate deliveries
     if (this->librariesLoaded) return;
     this->librariesLoaded = true;
@@ -208,8 +205,8 @@ void MainTabFrame::addLibraryTabs(const std::vector<plex::Section>& sections) {
     for (auto& s : sections) {
         if (s.hidden) continue;
         // music (artist) is now supported (issue #11); other types stay out of scope
-        if (s.type != plex::mediaTypeMovie && s.type != plex::mediaTypeShow && s.type != plex::mediaTypePhoto &&
-            s.type != plex::mediaTypeArtist)
+        if (s.type != media::mediaTypeMovie && s.type != media::mediaTypeShow && s.type != media::mediaTypePhoto &&
+            s.type != media::mediaTypeArtist)
             continue;
 
         this->libs_.push_back(s);
@@ -218,17 +215,17 @@ void MainTabFrame::addLibraryTabs(const std::vector<plex::Section>& sections) {
         item->setTabStyle(AutoTabBarStyle::ACCENT);
         // stable id so the item can be targeted (reorder / hide) by the manager
         item->setId("lib/" + s.key);
-        bool animeSection = AppConfig::instance().backend().type() == media::BackendType::Stremio && s.key == "anime";
+        bool animeSection = s.key == "anime";
         if (animeSection) {
             item->applyXMLAttribute("icon", "@res/icon/ico-media.svg");
             item->applyXMLAttribute("iconActivate", "@res/icon/ico-media-activate.svg");
-        } else if (s.type == plex::mediaTypeMovie) {
+        } else if (s.type == media::mediaTypeMovie) {
             item->applyXMLAttribute("icon", "@res/icon/ico-movie.svg");
             item->applyXMLAttribute("iconActivate", "@res/icon/ico-movie-activate.svg");
-        } else if (s.type == plex::mediaTypeShow) {
+        } else if (s.type == media::mediaTypeShow) {
             item->applyXMLAttribute("icon", "@res/icon/ico-tv.svg");
             item->applyXMLAttribute("iconActivate", "@res/icon/ico-tv-activate.svg");
-        } else if (s.type == plex::mediaTypeArtist) {
+        } else if (s.type == media::mediaTypeArtist) {
             item->applyXMLAttribute("icon", "@res/icon/ico-audio.svg");
             item->applyXMLAttribute("iconActivate", "@res/icon/ico-audio.svg");
         } else {
@@ -238,7 +235,6 @@ void MainTabFrame::addLibraryTabs(const std::vector<plex::Section>& sections) {
 
         std::string key = s.key, type = s.type, title = s.title;
         // Backends that expose catalog sub-tabs (Stremio) get a catalogs-as-tabs
-        // view; Plex/Jellyfin keep the standard MediaCollection.
         bool catalogTabs = animeSection || !AppConfig::instance().backend().sectionTabs(key).empty();
         this->addTab(
             item,
@@ -397,7 +393,7 @@ std::vector<MainTabFrame::SidebarEntry> MainTabFrame::getReorderableEntries() {
         } else {
             // "lib/<sectionKey>"
             std::string key = id.substr(4);
-            const plex::Section* sec = nullptr;
+            const media::Section* sec = nullptr;
             for (auto& s : this->libs_)
                 if (s.key == key) {
                     sec = &s;
@@ -405,11 +401,11 @@ std::vector<MainTabFrame::SidebarEntry> MainTabFrame::getReorderableEntries() {
                 }
             e.label = sec ? sec->title : key;
             std::string type = sec ? sec->type : std::string();
-            if (type == plex::mediaTypeMovie)
+            if (type == media::mediaTypeMovie)
                 e.icon = "@res/icon/ico-movie.svg";
-            else if (type == plex::mediaTypeShow)
+            else if (type == media::mediaTypeShow)
                 e.icon = "@res/icon/ico-tv.svg";
-            else if (type == plex::mediaTypeArtist)
+            else if (type == media::mediaTypeArtist)
                 e.icon = "@res/icon/ico-audio.svg";
             else
                 e.icon = "@res/icon/ico-media.svg";
@@ -427,7 +423,7 @@ void MainTabFrame::addOfflineLibraryTabs() {
     for (auto& s : OfflineLibrary::instance().sections()) {
         auto* item = new AutoSidebarItem();
         item->setTabStyle(AutoTabBarStyle::ACCENT);
-        if (s.type == plex::mediaTypeShow) {
+        if (s.type == media::mediaTypeShow) {
             item->applyXMLAttribute("icon", "@res/icon/ico-tv.svg");
             item->applyXMLAttribute("iconActivate", "@res/icon/ico-tv-activate.svg");
         } else {

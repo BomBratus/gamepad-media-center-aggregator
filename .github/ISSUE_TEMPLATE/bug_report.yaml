@@ -12,8 +12,8 @@ body:
       description: Steps to reproduce the behavior.
       value: |
         1. Go to '...'
-        2. Tap on '....'
-        3. Scroll down to '....'
+        2. Select '....' with the controller
+        3. Open '....'
         4. See error
   - type: textarea
     attributes:
@@ -21,12 +21,16 @@ body:
       description: If applicable, add screenshots to help explain your problem.
   - type: input
     attributes:
-      label: Operating system
-      description: e.g. 16.0.3|AMS 1.5.4|S
+      label: PS4 system software
+      description: Optional. PS4 system software version only (for example, 11.00).
   - type: input
     attributes:
-      label: Jellyfin Server
-      description: e.g. 10.8.10 Linux
+      label: GMCA version or package revision
+      description: For example, version 00.82 or the package revision shown in Settings.
+  - type: textarea
+    attributes:
+      label: Stremio add-on context
+      description: Add-on name/ID and catalog or source involved. Do not include account tokens or private URLs.
   - type: textarea
     attributes:
       label: Additional context

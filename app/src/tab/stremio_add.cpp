@@ -13,6 +13,7 @@
     and popActivity the whole ServerList).
 */
 
+#include <algorithm>
 #include "tab/stremio_add.hpp"
 #include "activity/main_activity.hpp"
 #include "api/stremio/auth.hpp"
@@ -60,7 +61,7 @@ void StremioAdd::submit() {
         return;
     }
 
-    this->labelStatus->setText("main/plex/connecting"_i18n);
+    this->labelStatus->setText("main/server/connecting"_i18n);
     this->btnConnect->setVisibility(brls::Visibility::GONE);
     this->spinner->setVisibility(brls::Visibility::VISIBLE);
     brls::Application::blockInputs();
@@ -93,6 +94,10 @@ void StremioAdd::finish(const stremio::Account& a) {
     AppServer s;
     s.type = "stremio";
     s.id = a.userId;
+    const auto& existingServers = AppConfig::instance().getServers();
+    while (std::any_of(existingServers.begin(), existingServers.end(), [&s](const AppServer& existing) {
+        return existing.id == s.id && !supportedStremioAccount(existing);
+    })) s.id = "stremio:" + s.id;
     s.name = "Stremio";
     s.access_token = a.authKey;
     s.urls = {"https://api.strem.io"};
@@ -103,7 +108,7 @@ void StremioAdd::finish(const stremio::Account& a) {
     u.id = a.userId;
     u.name = a.userName;
     u.access_token = a.authKey;
-    u.server_id = a.userId;
+    u.server_id = s.id;
     u.thumb = "";
     AppConfig::instance().addUser(u, s.urls.front());
 

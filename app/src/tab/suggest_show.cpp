@@ -1,8 +1,8 @@
 #include "tab/suggest_show.hpp"
 #include "view/recyling_video.hpp"
 #include "view/loading_spinner.hpp"
-#include "api/plex.hpp"
 #include "api/backend.hpp"
+#include "utils/config.hpp"
 
 SuggestShow::SuggestShow(const std::string& id) : itemId(id) {
     this->inflateFromXMLRes("xml/tabs/suggest_show.xml");
@@ -28,7 +28,7 @@ void SuggestShow::doRequest() {
                 RecylingVideo* row = new RecylingVideo();
                 row->setTitle(hub.title);
                 // landscape thumbnails for episodes/clips, posters otherwise
-                if (hub.type == plex::mediaTypeEpisode || hub.type == plex::mediaTypeClip) {
+                if (hub.type == media::mediaTypeEpisode || hub.type == media::mediaTypeClip) {
                     row->setFrameHeight(brls::getStyle()["app/card/wide/row"]);
                     row->setItemWidth(brls::getStyle()["app/card/wide/width"]);
                 } else {

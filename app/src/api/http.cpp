@@ -1,74 +1,11 @@
-#include "api/http.hpp"
 #ifdef GMCA_TEST_HARNESS
 #include "harness.hpp"
 #endif
+#include "api/http.hpp"
 #include "utils/config.hpp"
 #include <borealis/core/logger.hpp>
 #include <curl/curl.h>
 #include <mutex>
-#if defined(BOREALIS_USE_GXM)
-#include <mbedtls/platform.h>
-#include <psp2/gxm.h>
-#include <psp2/kernel/sysmem.h>
-static SceUID mempool_id = 0;
-static void* mempool_addr = nullptr;
-static size_t mempool_size = 20 * 1024 * 1024;
-static void* s_mspace = nullptr;
-int __attribute__((optimize("no-optimize-sibling-calls"))) malloc_finalize() {
-    if (s_mspace) sceClibMspaceDestroy(s_mspace);
-    if (mempool_addr) sceGxmUnmapMemory(mempool_addr);
-    if (mempool_id) sceKernelFreeMemBlock(mempool_id);
-    return 0;
-}
-
-int malloc_init() {
-    int res;
-    if (s_mspace) return 0;
-    mempool_id = sceKernelAllocMemBlock("curl", SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_RW, mempool_size, nullptr);
-    sceKernelGetMemBlockBase(mempool_id, &mempool_addr);
-    if (!mempool_addr) goto error;
-    res = sceGxmMapMemory(mempool_addr, mempool_size, SCE_GXM_MEMORY_ATTRIB_RW);
-    if (res != SCE_OK) goto error;
-    s_mspace = sceClibMspaceCreate(mempool_addr, mempool_size);
-    if (!s_mspace) goto error;
-
-    return 0;
-error:
-    malloc_finalize();
-    return 1;
-}
-
-void __attribute__((optimize("no-optimize-sibling-calls"))) * sce_malloc(size_t size) {
-    if (!s_mspace) malloc_init();
-    return sceClibMspaceMalloc(s_mspace, size);
-}
-
-void __attribute__((optimize("no-optimize-sibling-calls"))) sce_free(void* ptr) {
-    if (!ptr || !s_mspace) return;
-    sceClibMspaceFree(s_mspace, ptr);
-}
-
-void __attribute__((optimize("no-optimize-sibling-calls"))) * sce_calloc(size_t nelem, size_t size) {
-    if (!s_mspace) malloc_init();
-    return sceClibMspaceCalloc(s_mspace, nelem, size);
-}
-
-void __attribute__((optimize("no-optimize-sibling-calls"))) * sce_realloc(void* ptr, size_t size) {
-    if (!s_mspace) malloc_init();
-    return sceClibMspaceRealloc(s_mspace, ptr, size);
-}
-
-char __attribute__((optimize("no-optimize-sibling-calls"))) * sce_strdup(const char* str) {
-    size_t len;
-    char* newstr;
-    if (!str) return (char*)nullptr;
-    len = strlen(str) + 1;
-    newstr = (char*)sce_malloc(len);
-    if (!newstr) return (char*)nullptr;
-    sceClibMemcpy(newstr, str, len);
-    return newstr;
-}
-#endif
 
 #ifndef CURL_PROGRESSFUNC_CONTINUE
 #define CURL_PROGRESSFUNC_CONTINUE 0x10000001
@@ -110,13 +47,8 @@ static void curl_share_unlock_cb(CURL* /*handle*/, curl_lock_data data, void* /*
 HTTP::HTTP() : chunk(nullptr) {
     static struct Global {
         Global() {
-#ifdef BOREALIS_USE_GXM
-            mbedtls_platform_set_calloc_free(sce_calloc, sce_free);
-            curl_global_init_mem(CURL_GLOBAL_DEFAULT, sce_malloc, sce_free, sce_realloc, sce_strdup, sce_calloc);
-#else
             CURLcode rc = curl_global_init(CURL_GLOBAL_ALL);
             brls::Logger::debug("curl global init {}", std::to_string(rc));
-#endif
             this->share = curl_share_init();
             // Callbacks de verrouillage obligatoires pour un partage inter-threads sûr
             curl_share_setopt(share, CURLSHOPT_LOCKFUNC, curl_share_lock_cb);
@@ -143,13 +75,6 @@ HTTP::HTTP() : chunk(nullptr) {
     // enable all supported built-in compressions
     curl_easy_setopt(this->easy, CURLOPT_ACCEPT_ENCODING, "");
     curl_easy_setopt(this->easy, CURLOPT_VERBOSE, 0L);
-#if defined(__PS4__) && defined(GMCA_STREMIO_ONLY)
-    // Hardware-tested compatibility note: OpenOrbis libcurl is built against
-    // mbedTLS with /system/common/cert/CA_LIST.cer, but enabling peer/hostname
-    // verification against that store makes Stremio HTTPS requests fail on a
-    // real PS4 (00.73 regression). Keep the pre-00.73 behavior until GMCA ships
-    // a CA bundle that is validated on hardware.
-#endif
     curl_easy_setopt(this->easy, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(this->easy, CURLOPT_SSL_VERIFYHOST, 0L);
     // Every request runs from a background thread (ThreadPool / brls::async), so
@@ -157,7 +82,6 @@ HTTP::HTTP() : chunk(nullptr) {
     // only work on the main thread and are unsafe multi-threaded (curl docs:
     // "libcurl cannot function properly multi-threaded unless CURLOPT_NOSIGNAL
     // is set"). With NOSIGNAL, DNS timeouts rely solely on the async (threaded)
-    // resolver, which is why the Vita curl build must enable it.
     curl_easy_setopt(this->easy, CURLOPT_NOSIGNAL, 1L);
 #if LIBCURL_VERSION_NUM >= 0x071900 && !defined(__PS4__)
     curl_easy_setopt(this->easy, CURLOPT_TCP_KEEPALIVE, 1L);
@@ -228,12 +152,6 @@ void HTTP::set_option(const Cookies& cookies) {
     curl_easy_setopt(this->easy, CURLOPT_COOKIE, ss.str().c_str());
 }
 
-void HTTP::set_basic_auth(const std::string& user, const std::string& passwd) {
-    curl_easy_setopt(this->easy, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
-    curl_easy_setopt(this->easy, CURLOPT_USERNAME, user.c_str());
-    curl_easy_setopt(this->easy, CURLOPT_PASSWORD, passwd.c_str());
-}
-
 size_t HTTP::easy_write_cb(char* ptr, size_t size, size_t nmemb, void* userdata) {
     std::ostream* ctx = reinterpret_cast<std::ostream*>(userdata);
     size_t count = size * nmemb;
@@ -280,12 +198,6 @@ void HTTP::_get(const std::string& url, std::ostream* out) {
 }
 
 bool HTTP::getinfo(char** arg) { return curl_easy_getinfo(this->easy, CURLINFO_CONTENT_TYPE, arg) == CURLE_OK; }
-
-int HTTP::propfind(const std::string& url, std::ostream* out) {
-    curl_easy_setopt(this->easy, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(this->easy, CURLOPT_CUSTOMREQUEST, "PROPFIND");
-    return this->perform(out);
-}
 
 std::string HTTP::_post(const std::string& url, const std::string& data) {
 #ifdef GMCA_TEST_HARNESS

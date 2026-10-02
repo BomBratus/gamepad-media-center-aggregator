@@ -8,54 +8,14 @@ on:
     branches: [ dev ]
     paths:
       - CMakeLists.txt
-      - app/src/main.cpp
-      - app/src/utils/version.cpp
-      - app/src/utils/ps4_update.cpp
-      - app/src/utils/ps4_diagnostics.cpp
-      - scripts/ps4/updater/**
-      - scripts/ps4/libmpv/**
-      - cmake/bundle_ps4_updater_pkg.cmake
-      - cmake/gmca_ps4_pkg.cmake
-      - app/include/utils/config.hpp
-      - app/src/utils/config.cpp
-      - app/include/utils/image.hpp
-      - app/src/utils/image.cpp
-      - app/include/utils/ps4_diagnostics.hpp
-      - app/include/utils/ps4_update.hpp
-      - app/src/view/connection_switcher.cpp
-      - app/src/tab/server_type_choose.cpp
-      - app/src/tab/stremio_add.cpp
-      - app/src/tab/setting_tab.cpp
-      - app/include/tab/setting_tab.hpp
-      - app/src/tab/watchlist_tab.cpp
-      - resources/xml/tabs/settings.xml
-      - app/src/api/stremio/**
-      - app/include/api/stremio/**
-      - app/include/api/media/types.hpp
-      - app/src/view/video_source.cpp
-      - app/src/view/mpv_core.cpp
-      - app/include/view/mpv_core.hpp
-      - app/src/activity/player_view.cpp
-      - app/include/activity/player_view.hpp
-      - app/src/view/video_view.cpp
-      - app/include/view/video_view.hpp
-      - app/include/view/video_source.hpp
-      - app/src/view/recyling_video.cpp
-      - app/include/view/recyling_video.hpp
-      - app/src/tab/home_tab.cpp
-      - app/src/tab/media_series.cpp
-      - app/src/tab/media_collection.cpp
-      - app/include/tab/media_collection.hpp
-      - app/src/tab/suggest_movie.cpp
-      - app/src/tab/suggest_show.cpp
-      - resources/xml/tabs/stremio_catalogs.xml
-      - resources/xml/tabs/suggest_show.xml
-      - resources/xml/view/episode_card.xml
-      - custom/ps4-safe-sources.patch
-      - custom/ps4-ui-followups.patch
-      - custom/apply-ps4-search-ui.awk
+      - cmake/**
+      - app/**
+      - library/**
+      - resources/**
+      - scripts/**
+      - tests/**
+      - .gitmodules
       - .github/workflows/build-ps4-stremio-only.yml
-      - .github/workflows/publish-ps4-update.yml
   workflow_dispatch:
 
 jobs:
@@ -71,15 +31,15 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           submodules: recursive
 
-      - name: Resolve PS4 package version
+      - name: Resolve PS4 package identity
         id: ps4ver
         shell: bash
         run: |
           set -euo pipefail
-          version="$(sed -n 's/^+set(PS4_VERSION "\([0-9][0-9]\.[0-9][0-9]\)")$/\1/p' custom/ps4-safe-sources.patch | head -n1)"
+          version="$(sed -n 's/^set(PS4_VERSION "\([0-9][0-9]\.[0-9][0-9]\)")$/\1/p' CMakeLists.txt | head -n1)"
           test -n "$version"
           [[ "$version" =~ ^[0-9]{2}\.[0-9]{2}$ ]]
-          content_id="$(sed -n 's/^+set(PS4_CONTENT_ID "\([^"]*\)")$/\1/p' custom/ps4-safe-sources.patch | head -n1)"
+          content_id="$(sed -n 's/^set(PS4_CONTENT_ID "\([^"]*\)")$/\1/p' CMakeLists.txt | head -n1)"
           test -n "$content_id"
           [[ "$content_id" =~ ^[A-Z0-9]{6}-[A-Z0-9]{9}_00-[A-Z0-9]{16}$ ]]
           digits="${version/.}"
@@ -92,37 +52,9 @@ jobs:
           echo "Stable PS4 content ID: $content_id"
           echo "Expected PKG: $pkg"
 
-      - name: Apply PS4 recovery and safe-source UI
-        shell: bash
-        run: |
-          set -euxo pipefail
-          git config --global --add safe.directory '*'
-          printf '\n' >> custom/ps4-safe-sources.patch
-          printf '\n' >> custom/ps4-ui-followups.patch
-          git apply --check custom/ps4-safe-sources.patch
-          git apply --verbose custom/ps4-safe-sources.patch
-          git apply --check --recount --verbose custom/ps4-ui-followups.patch
-          git apply --verbose --recount custom/ps4-ui-followups.patch
-          awk -f custom/apply-ps4-search-ui.awk app/src/tab/search_tab.cpp > /tmp/search_tab.cpp
-          mv /tmp/search_tab.cpp app/src/tab/search_tab.cpp
-          grep -q "set(PS4_VERSION \"${{ steps.ps4ver.outputs.version }}\")" CMakeLists.txt
-          grep -q "set(PS4_CONTENT_ID \"${{ steps.ps4ver.outputs.content_id }}\")" CMakeLists.txt
-          grep -Fq 'gmca_add_pkg(${PROJECT_NAME}' CMakeLists.txt
-          grep -Fq 'GMCA_PS4_VERSION=${PS4_VERSION}' CMakeLists.txt
-          grep -Fq 'setByteCapacity(128 * 1024 * 1024)' app/src/utils/config.cpp
-          grep -Fq 'ps4_halve_rgba' app/src/utils/image.cpp
-          grep -Fq 'PLAYER_AUTOPLAY_NEXT' app/include/utils/config.hpp
-          grep -Fq 'main/stremio/playback/choose_another' app/src/activity/player_view.cpp
-          grep -Fq 'PS4 subtitle guard' app/src/activity/player_view.cpp
-          grep -Fq 'main/stremio/playback/restart_episode' app/src/view/video_source.cpp
-          grep -Fq 'selectedProgress' app/src/tab/watchlist_tab.cpp
-          grep -Fq 'main/stremio/source/italian_audio' app/src/tab/media_movie.cpp
-          grep -Fq 'orderPs4Sources(all)' app/src/api/stremio/backend.cpp
-          git checkout -- custom/ps4-safe-sources.patch custom/ps4-ui-followups.patch
-          git diff --check
-
       - name: Apply borealis patches
         run: |
+          git config --global --add safe.directory '*'
           git -C library/borealis apply --verbose ../../scripts/patches/borealis-fixes.patch
 
       - name: Update dependencies
@@ -143,9 +75,6 @@ jobs:
           OPENORBIS: /opt/pacbrew/ps4/openorbis
         run: |
           set -euxo pipefail
-
-          # Python is provided by actions/setup-python only for mpv's pinned waf build.
-
           work=/tmp/gmca-ps4-libmpv
           rm -rf "$work"
           mkdir -p "$work"
@@ -177,14 +106,13 @@ jobs:
           cd mpv-0.36.0
           patch -Np1 -i ../mpv.patch
           patch -Np1 -i ../gmca-bitmap-subs.patch
-
           ./bootstrap.py
           source "$OPENORBIS/ps4vars.sh"
           TARGET=x86_64 ./waf configure --prefix="$OPENORBIS/usr" \
             --disable-libmpv-shared --enable-libmpv-static --disable-cplayer \
             --disable-iconv --disable-jpeg --disable-libavdevice \
             --enable-sdl2 --enable-sdl2-audio --disable-sdl2-gamepad --disable-sdl2-video
-          ./waf build -j"$(nproc)"
+          ./waf build -j2
           ./waf install
 
           test -s "$OPENORBIS/usr/lib/libmpv.a"
@@ -199,9 +127,8 @@ jobs:
         run: |
           cmake -B build \
             -DPLATFORM_PS4=ON \
-            -DGMCA_STREMIO_ONLY=ON \
             -DVERSION_BUILD=${{ github.run_number }}
-          make -C build -j$(nproc)
+          make -C build -j2
 
       - name: Verify package and prepare update feed
         id: verify
@@ -213,17 +140,15 @@ jobs:
           pkg="build/${{ steps.ps4ver.outputs.pkg }}"
           stable_pkg="build/GMCA-PS4-Stremio-only.pkg"
           source_commit="$(git rev-parse HEAD)"
-
           test -f "$pkg"
           test -s "$pkg"
           test -s build/GMCA
           test -s build/ps4/resources/font/switch_font.ttf
+
           main_elf_size="$(stat -c '%s' build/GMCA)"
           pkg_size="$(stat -c '%s' "$pkg")"
           read_be64() {
-            local offset="$1"
-            local file="$2"
-            local hex
+            local offset="$1" file="$2" hex
             hex="$(dd if="$file" bs=1 skip="$offset" count=8 status=none | od -An -tx1 | tr -d ' \n')"
             test "${#hex}" -eq 16
             echo "$((16#$hex))"
@@ -235,34 +160,24 @@ jobs:
           pfs_size="$(read_be64 $((0x418)) "$pkg")"
           header_pkg_size="$(read_be64 $((0x430)) "$pkg")"
 
-          echo "PS4 payload sizes: ELF=$main_elf_size PFS=$pfs_size PKG=$pkg_size header-PKG=$header_pkg_size"
-          if [ "$header_pkg_size" -ne "$pkg_size" ]; then
-            echo "Invalid PS4 package: header package size does not match the actual file."
-            exit 1
-          fi
-          if [ "$pkg_size" -le "$main_elf_size" ] || [ "$pfs_size" -le "$main_elf_size" ]; then
-            echo "Invalid PS4 package: payload is not larger than the main GMCA ELF."
-            exit 1
-          fi
-
-          stat -c '%n %s bytes' build/GMCA
-          stat -c '%n %s bytes' build/ps4/resources/font/switch_font.ttf
-          stat -c '%n %s bytes' "$pkg"
+          test "$header_pkg_size" -eq "$pkg_size"
+          test "$pkg_size" -gt "$main_elf_size"
+          test "$pfs_size" -gt "$main_elf_size"
+          stat -c '%n %s bytes' build/GMCA build/ps4/resources/font/switch_font.ttf "$pkg"
           echo "PS4 package content ID: $header_content_id"
           env DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 \
             /opt/pacbrew/ps4/openorbis/bin/linux/PkgTool.Core pkg_validate --verbose "$pkg"
 
+          cp "$pkg" "$stable_pkg"
+          size="$pkg_size"
+          sha="$(sha256sum "$pkg" | awk '{print $1}')"
+          stable_sha="$(sha256sum "$stable_pkg" | awk '{print $1}')"
+          test "$sha" = "$stable_sha"
           (
             cd build
             sha256sum "${{ steps.ps4ver.outputs.pkg }}" | tee SHA256SUMS
             sha256sum -c SHA256SUMS
           )
-          cp "$pkg" "$stable_pkg"
-
-          size="$pkg_size"
-          sha="$(sha256sum "$pkg" | awk '{print $1}')"
-          stable_sha="$(sha256sum "$stable_pkg" | awk '{print $1}')"
-          test "$sha" = "$stable_sha"
           printf '%s  GMCA-PS4-Stremio-only.pkg\n' "$sha" > build/PS4-UPDATE-SHA256SUMS
           (cd build && sha256sum -c PS4-UPDATE-SHA256SUMS)
 
@@ -278,11 +193,27 @@ jobs:
           printf '  "commit": "%s",\n' "$source_commit" >> build/ps4-update.json
           printf '  "notes": "GMCA PS4 Stremio-only %s - commit %s"\n' "$version" "$source_commit" >> build/ps4-update.json
           printf '}\n' >> build/ps4-update.json
+          PS4_CONTENT_ID="$content_id" PS4_VERSION="$version" PS4_PKG_SHA256="$sha" \
+            python3 - build/ps4-update.json <<'PY'
+          import json
+          import os
+          import sys
 
-          grep -q "\"content_id\": \"$content_id\"" build/ps4-update.json
-          grep -q "\"version\": \"$version\"" build/ps4-update.json
-          grep -q "\"sha256\": \"$sha\"" build/ps4-update.json
-          cat build/ps4-update.json
+          with open(sys.argv[1], encoding="utf-8") as manifest_file:
+              manifest = json.load(manifest_file)
+          expected = {
+              "schema": 1,
+              "channel": "ps4-stremio-only",
+              "title_id": "GMCA00000",
+              "content_id": os.environ["PS4_CONTENT_ID"],
+              "version": os.environ["PS4_VERSION"],
+              "pkg_name": "GMCA-PS4-Stremio-only.pkg",
+              "sha256": os.environ["PS4_PKG_SHA256"],
+          }
+          for key, value in expected.items():
+              if manifest.get(key) != value:
+                  raise SystemExit(f"invalid update manifest field {key}")
+          PY
 
           echo "size=$size" >> "$GITHUB_OUTPUT"
           echo "sha256=$sha" >> "$GITHUB_OUTPUT"

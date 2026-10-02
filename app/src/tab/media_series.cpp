@@ -2,10 +2,10 @@
     Copyright 2023 dragonflylee
 */
 
+#include "utils/config.hpp"
 #include "activity/player_view.hpp"
 #include "activity/loading_overlay.hpp"
-#include "api/plex.hpp"
-#include "api/plex/watchlist.hpp"
+#include "api/backend.hpp"
 #include "api/backend.hpp"
 #include "api/stremio/types.hpp"
 #include "api/stremio/source_audio.hpp"
@@ -31,7 +31,7 @@
 #include "utils/offline_library.hpp"
 #include "utils/network_state.hpp"
 #include "api/stremio/backend.hpp"
-#include "tab/remote_view.hpp"
+#include "activity/local_player.hpp"
 #include <borealis/views/dialog.hpp>
 #include <borealis/views/label.hpp>
 #include <borealis/views/scrolling_frame.hpp>
@@ -39,7 +39,7 @@
 
 using namespace brls::literals;  // for _i18n
 
-#if defined(GMCA_STREMIO_ONLY) || defined(GMCA_PS4_SAFE_SOURCES)
+#if defined(GMCA_LINUX_TEST_BENCH) || defined(GMCA_PS4_SAFE_SOURCES)
 namespace {
 
 brls::Label* episodeSourceLabel(const std::string& text, float size, NVGcolor color, bool grow = false) {
@@ -109,14 +109,14 @@ struct EpisodePickerOrigin {
     float offset = 0;
 };
 
-std::string episodeDisplayTitle(const plex::Item& item) {
+std::string episodeDisplayTitle(const media::Item& item) {
     return item.grandparentTitle.empty()
                ? fmt::format("S{}E{} — {}", item.parentIndex, item.index, item.title)
                : fmt::format("{} · S{}E{} — {}", item.grandparentTitle, item.parentIndex, item.index, item.title);
 }
 
-void playResolvedEpisode(const plex::Item& item, int64_t seekMs, int mediaIndex) {
-    plex::Item episode = item;
+void playResolvedEpisode(const media::Item& item, int64_t seekMs, int mediaIndex) {
+    media::Item episode = item;
     episode.viewOffset = seekMs;
     PlayerView* view = new PlayerView(episode, seekMs, mediaIndex);
     view->setTitie(episodeDisplayTitle(item));
@@ -124,7 +124,7 @@ void playResolvedEpisode(const plex::Item& item, int64_t seekMs, int mediaIndex)
     brls::sync([view]() { brls::Application::giveFocus(view); });
 }
 
-void showEpisodeSourcePicker(const plex::Item& item, int64_t seekMs, EpisodePickerOrigin origin = {}) {
+void showEpisodeSourcePicker(const media::Item& item, int64_t seekMs, EpisodePickerOrigin origin = {}) {
     std::vector<int> playable;
     for (size_t i = 0; i < item.media.size(); ++i)
         if (item.media[i].playable()) playable.push_back((int)i);
@@ -240,7 +240,7 @@ void showEpisodeSourcePicker(const plex::Item& item, int64_t seekMs, EpisodePick
 }
 
 void resolveAndShowEpisodeSourcePicker(
-    const plex::Item& item, brls::Box* recycler = nullptr, size_t index = 0) {
+    const media::Item& item, brls::Box* recycler = nullptr, size_t index = 0) {
     const std::string id = item.ratingKey;
     const int64_t seekMs = item.viewOffset;
     EpisodePickerOrigin origin;
@@ -313,7 +313,7 @@ public:
         });
     }
 
-    void setItem(const plex::Item& item, const std::string& fallbackSummary) {
+    void setItem(const media::Item& item, const std::string& fallbackSummary) {
         this->picture->clear();
         const std::string& thumb = item.thumb.empty() ? item.parentThumb : item.thumb;
         if (!thumb.empty()) Image::load(this->picture, thumb, 225);
@@ -367,10 +367,10 @@ public:
     static constexpr float HEADER_HEIGHT = 255;  // cover 225 + air 30
     static constexpr float CARD_HEIGHT = 190;    // thumbnail 180 + padding 2x5
 
-    using MediaList = std::vector<plex::Item>;
+    using MediaList = std::vector<media::Item>;
 
     SeasonEpisodesDataSource(
-        const plex::Item& season, const std::string& fallback, const MediaList& episodes, bool localContext = false)
+        const media::Item& season, const std::string& fallback, const MediaList& episodes, bool localContext = false)
         : season(season), fallbackSummary(fallback), list(episodes), localContext(localContext) {}
 
     size_t getItemCount() override { return this->list.size() + 1; }
@@ -449,7 +449,7 @@ public:
                                     ? fmt::format("S{}E{} — {}", item.parentIndex, item.index, item.title)
                                     : fmt::format("{} · S{}E{} — {}", item.grandparentTitle, item.parentIndex,
                                           item.index, item.title);
-            RemoteView::play(local, title, "Local");
+            LocalPlayer::play(local, title, "Local");
             return;
         }
         // not downloaded: offline it is unavailable; online (downloads area) it
@@ -466,7 +466,7 @@ public:
             return;
         }
 
-#if defined(GMCA_STREMIO_ONLY) || defined(GMCA_PS4_SAFE_SOURCES)
+#if defined(GMCA_LINUX_TEST_BENCH) || defined(GMCA_PS4_SAFE_SOURCES)
         if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
             resolveAndShowEpisodeSourcePicker(item, recycler, index);
             return;
@@ -493,7 +493,7 @@ public:
     /// used at the next header bind
     void setFallbackSummary(const std::string& s) { this->fallbackSummary = s; }
 
-    const plex::Item& getSeason() const { return this->season; }
+    const media::Item& getSeason() const { return this->season; }
 
     void clearData() override { this->list.clear(); }
 
@@ -516,7 +516,7 @@ private:
         });
     }
 
-    plex::Item season;
+    media::Item season;
     std::string fallbackSummary;
     MediaList list;
     bool localContext;  // offline downloads area (grey non-downloaded episodes)
@@ -603,7 +603,7 @@ private:
 /// doRequest).
 class MediaSeason : public brls::Box, public Presenter {
 public:
-    MediaSeason(const plex::Item& item, const std::string& fallbackSummary, bool localContext = false)
+    MediaSeason(const media::Item& item, const std::string& fallbackSummary, bool localContext = false)
         : season(item), fallbackSummary(fallbackSummary), localContext(localContext) {
         this->inflateFromXMLRes("xml/tabs/seasons.xml");
 
@@ -691,7 +691,7 @@ private:
 
     BRLS_BIND(RecyclingGrid, recycler, "media/episodes");
 
-    plex::Item season;
+    media::Item season;
     std::string fallbackSummary;
     bool localContext;  // offline downloads area
 };
@@ -700,7 +700,7 @@ private:
 /// by the server + "N episodes"). Click -> stacked season view.
 class SeasonDataSource : public RecyclingGridDataSource {
 public:
-    using MediaList = std::vector<plex::Item>;
+    using MediaList = std::vector<media::Item>;
 
     /// `fallbackSummary` points to MediaSeries::seriesSummary (stable
     /// address, shared lifetime: the source dies with the page's recycler)
@@ -761,12 +761,12 @@ private:
     bool localContext;  // offline downloads area (propagated to the season view)
 };
 
-MediaSeries::MediaSeries(const plex::Item& item, bool localContext)
-    : seriesId(item.type == plex::mediaTypeSeason && !item.parentRatingKey.empty() ? item.parentRatingKey
+MediaSeries::MediaSeries(const media::Item& item, bool localContext)
+    : seriesId(item.type == media::mediaTypeSeason && !item.parentRatingKey.empty() ? item.parentRatingKey
                                                                                    : item.ratingKey)
     , localContext(localContext) {
     brls::Logger::debug("Tab MediaSeries: create");
-    if (item.type == plex::mediaTypeSeason) this->wantedSeason = item.ratingKey;
+    if (item.type == media::mediaTypeSeason) this->wantedSeason = item.ratingKey;
     // Inflate the tab from the XML file
     this->inflateFromXMLRes("xml/tabs/series.xml");
 
@@ -837,9 +837,9 @@ void MediaSeries::doPlay() {
     }
     // copy: "Replay" (finished show) forces the start at 0 — PlayerView
     // would otherwise resume at the episode's residual viewOffset (player_view.cpp:101)
-    plex::Item item = this->onDeck;
+    media::Item item = this->onDeck;
     if (this->replay) item.viewOffset = 0;
-#if defined(GMCA_STREMIO_ONLY) || defined(GMCA_PS4_SAFE_SOURCES)
+#if defined(GMCA_LINUX_TEST_BENCH) || defined(GMCA_PS4_SAFE_SOURCES)
     if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
         // PS4 resolves sources only on explicit Play. Avoid the old hidden
         // next-up prefetch while preserving the same picker/loading feedback.
@@ -889,7 +889,6 @@ void MediaSeries::initWatchlist(const media::Item& item) {
     auto& be = AppConfig::instance().backend();
     if (be.caps().listKind == media::ListKind::None || !be.canList(item)) return;
     this->listItem = item;
-    // label matches the backend's personal list: Plex → Watchlist, Jellyfin/Emby → Favoris
     this->btnWatchlist->setText(be.caps().listKind == media::ListKind::Favorites
                                     ? "main/favorites/title"_i18n
                                     : "main/watchlist/title"_i18n);
@@ -936,7 +935,6 @@ void MediaSeries::toggleWatchlist() {
 }
 
 void MediaSeries::updateWatchlistButton() {
-    // filled bookmark = already in the Watchlist (Plex convention)
     this->btnWatchlist->setIcon(
         this->watchlisted ? "@res/icon/ico-bookmark-fill-light.svg" : "@res/icon/ico-bookmark-light.svg");
 }
@@ -1061,7 +1059,7 @@ void MediaSeries::doSeason() {
                     // doSeason runs inside the constructor, before this view is
                     // attached; defer so presentDetail resolves the tab-frame
                     // detail stack (not the unattached-parent fallback)
-                    plex::Item season = it;
+                    media::Item season = it;
                     std::string summary = this->seriesSummary;
                     ASYNC_RETAIN
                     brls::sync([ASYNC_TOKEN, season, summary]() {
@@ -1133,7 +1131,7 @@ void MediaSeries::doNextup() {
 
             auto& be = AppConfig::instance().backend();
             if (be.type() == media::BackendType::Stremio) {
-#if defined(GMCA_PS4_SAFE_SOURCES) || defined(GMCA_STREMIO_ONLY)
+#if defined(GMCA_PS4_SAFE_SOURCES) || defined(GMCA_LINUX_TEST_BENCH)
                 // Stremio-only: do not resolve /stream just to decide whether Play should
                 // be enabled. That hidden prefetch competes with the series/meta
                 // requests and can make opening a show feel as slow as the source

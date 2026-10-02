@@ -56,7 +56,6 @@ const char* const kometaPosters[] = {
 
 /// Non-English labels (or variants) -> Kometa file name. Keys in ASCII
 /// lowercase, UTF-8 accents kept as-is (lowerAscii does not touch
-/// multi-byte bytes). Covers the French TMDB/Plex genres seen on a real
 /// server (sections 1 and 2, 2026-06-10) + standard TMDB translations;
 /// "Dramma" = Italian leftover observed on the server.
 const std::unordered_map<std::string, const char*> aliases = {

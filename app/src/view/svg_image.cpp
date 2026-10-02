@@ -2,6 +2,7 @@
 // Created by fang on 2022/9/17.
 //
 
+#include "utils/config.hpp"
 #include "view/svg_image.hpp"
 #include <borealis/core/cache_helper.hpp>
 #include <cstdio>
@@ -11,7 +12,6 @@
 namespace {
 
 /// "#RRGGBB" of the active app accent (theme token color/app). Brand icons bake
-/// the legacy Plex gold; this is what we recolor them to, so they follow the
 /// per-backend theme set by AppConfig::applyTheme().
 std::string svgAccentHex() {
     NVGcolor c = brls::Application::getTheme().getColor("color/app");

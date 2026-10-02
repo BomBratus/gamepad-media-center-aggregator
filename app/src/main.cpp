@@ -1,10 +1,9 @@
-#include <borealis.hpp>
 #ifdef GMCA_TEST_HARNESS
 #include "harness.hpp"
 #endif
+#include <borealis.hpp>
 
 #include "utils/config.hpp"
-#include "api/stremio/backend.hpp"
 #include "utils/download.hpp"
 #include "utils/offline_library.hpp"
 #include "utils/image_cache.hpp"
@@ -35,8 +34,7 @@
 #include "activity/loading_activity.hpp"
 #include "tab/home_tab.hpp"
 #include "tab/search_tab.hpp"
-#include "tab/remote_tab.hpp"
-#include "tab/remote_view.hpp"
+#include "tab/download_tab.hpp"
 #include "tab/setting_tab.hpp"
 #include "tab/playlists_tab.hpp"
 #include "tab/watchlist_tab.hpp"
@@ -47,74 +45,7 @@
 
 using namespace brls::literals;  // for _i18n
 
-#if defined(__SWITCH__) && defined(BUILTIN_NSP)
-#include <switch.h>
-
-/// Is the HOME tile (forwarder NSP, title id FORWARDER_TITLEID =
-/// PROJECT_TITLEID from CMakeLists.txt) already installed? Best effort: if
-/// the ns service fails we answer "no" (the prompt is only shown once
-/// anyway, cf. AppConfig::HINT_FORWARDER).
-static bool isForwarderInstalled() {
-    if (R_FAILED(nsInitialize())) return false;
-    bool found = false;
-    NsApplicationRecord record;
-    s32 count = 0;
-    for (s32 offset = 0; R_SUCCEEDED(nsListApplicationRecord(&record, 1, offset, &count)) && count > 0; offset++) {
-        if (record.application_id == FORWARDER_TITLEID) {
-            found = true;
-            break;
-        }
-    }
-    nsExit();
-    return found;
-}
-
-/// First launch in application mode: offers to install the HOME tile
-/// (launched from the tile itself or tile already there -> ns sees it -> nothing).
-static void proposeForwarderInstall() {
-    if (isForwarderInstalled()) return;  // a GMCA HOME tile is already present
-
-    auto& conf = AppConfig::instance();
-    // One-time GMCA-era nudge, keyed separately from HINT_FORWARDER on purpose:
-    // pleNx users who self-updated to GMCA are past the pleNx-era HINT_FORWARDER
-    // gate yet have no GMCA tile (fresh title id), so re-offer it exactly once.
-    if (conf.getItem(AppConfig::HINT_FORWARDER_GMCA, false)) return;
-    conf.setItem(AppConfig::HINT_FORWARDER_GMCA, true);
-    conf.setItem(AppConfig::HINT_FORWARDER, true);
-
-    auto dialog = new brls::Dialog("main/hints/prompt"_i18n);
-    dialog->addButton("hints/cancel"_i18n, []() {});
-    dialog->addButton("hints/ok"_i18n, []() { brls::Application::pushActivity(new HintActivity()); });
-    dialog->open();
-}
-#endif
-
-#ifdef GMCA_STREMIO_ONLY
-/// The lean PS4 build must never auto-enter a legacy Plex/Jellyfin connection
-/// just because it is still marked active in an existing GMCA config. Keep that
-/// data intact (a normal build can still use it), but force this profile back to
-/// the connection screen until a Stremio profile is selected.
-static bool activeConnectionIsStremio() {
-    auto& conf = AppConfig::instance();
-    const std::string& activeUserId = conf.getUserId();
-    if (activeUserId.empty()) return false;
-
-    for (const auto& user : conf.getUsers()) {
-        if (user.id != activeUserId) continue;
-        for (const auto& server : conf.getServers()) {
-            if (server.id == user.server_id) return server.type == "stremio";
-        }
-        return false;
-    }
-    return false;
-}
-#endif
-
 int main(int argc, char* argv[]) {
-#ifdef __SWITCH__
-    if (argc > 0 && argv[0]) AppVersion::nro_path = argv[0];
-#endif
-    std::vector<std::string> items;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "-d") == 0) {
             brls::Logger::setLogLevel(brls::LogLevel::LOG_DEBUG);
@@ -133,8 +64,6 @@ int main(int argc, char* argv[]) {
         } else if (std::strcmp(argv[i], "-version") == 0) {
             brls::Logger::info("{} {}", AppVersion::getDeviceName(), AppVersion::getCommit());
             return 0;
-        } else {
-            items.push_back(argv[i]);
         }
     }
 
@@ -166,17 +95,10 @@ int main(int argc, char* argv[]) {
     DownloadManager::instance().init();
     OfflineLibrary::instance().init();
 
-    // Return directly to the desktop when closing the application (only for NX)
+    // Return to the home shell when closing the application.
     brls::Application::getPlatform()->exitToHomeMode(true);
 
     brls::Application::createWindow(fmt::format("{} for {}", AppVersion::getPackageName(), AppVersion::getPlatform()));
-
-    // init() runs before Borealis is ready, so damaged-config recovery is
-    // surfaced only after the window exists instead of silently terminating.
-    if (conf.getRecoveryState() == AppConfig::RecoveryState::RestoredBackup)
-        brls::Application::notify("Settings were damaged and restored from backup.");
-    else if (conf.getRecoveryState() == AppConfig::RecoveryState::ResetDefaults)
-        brls::Application::notify("Settings were damaged and reset to defaults.");
 
     // Have the application register an action on every activity that will quit when you press BUTTON_START
     brls::Application::setGlobalQuit(false);
@@ -201,15 +123,13 @@ int main(int argc, char* argv[]) {
 
     brls::Application::registerXMLView("HomeTab", HomeTab::create);
     brls::Application::registerXMLView("SearchTab", SearchTab::create);
-    brls::Application::registerXMLView("RemoteTab", RemoteTab::create);
+    brls::Application::registerXMLView("DownloadTab", [] { return new DownloadView(); });
     brls::Application::registerXMLView("SettingTab", SettingTab::create);
     brls::Application::registerXMLView("PlaylistsTab", PlaylistsTab::create);
     brls::Application::registerXMLView("WatchlistTab", WatchlistTab::create);
 
     if (!brls::Application::getPlatform()->isApplicationMode()) {
         brls::Application::pushActivity(new HintActivity());
-    } else if (items.size() > 0) {
-        RemoteView::play(items.front());
     } else {
         // checkLogin() probes the remembered URLs of the active server
         // (config.cpp:checkLogin, now raced in parallel): called here on the
@@ -219,29 +139,11 @@ int main(int argc, char* argv[]) {
         brls::Application::pushActivity(new LoadingActivity(), brls::TransitionAnimation::NONE);
         brls::Application::blockInputs();
         brls::async([]() {
-#ifdef GMCA_STREMIO_ONLY
-            const bool supportedProfile = activeConnectionIsStremio();
-#else
-            const bool supportedProfile = true;
-#endif
-            const bool logged = supportedProfile && AppConfig::instance().checkLogin();
-            brls::sync([logged, supportedProfile]() {
+            const bool logged = AppConfig::instance().checkLogin();
+            brls::sync([logged]() {
                 brls::Application::unblockInputs();
                 brls::Application::clear();
                 if (logged) {
-                    brls::Application::pushActivity(new MainActivity(), brls::TransitionAnimation::NONE);
-#if defined(__SWITCH__) && defined(BUILTIN_NSP)
-                    proposeForwarderInstall();
-#endif
-                } else if (supportedProfile &&
-                           (!OfflineLibrary::instance().empty() || !AppConfig::instance().getServers().empty())) {
-                    // a supported server is remembered (just unreachable) and/or
-                    // downloads exist: enter the offline shell (browse downloads +
-                    // Retry) instead of the server picker (SPEC §4.4). In the lean
-                    // Stremio profile, an unsupported legacy active connection is
-                    // deliberately sent to ServerList so it cannot reopen another
-                    // backend through stale config.
-                    NetworkState::setOffline(true);
                     brls::Application::pushActivity(new MainActivity(), brls::TransitionAnimation::NONE);
                 } else {
                     brls::Application::pushActivity(new ServerList(), brls::TransitionAnimation::NONE);
@@ -251,19 +153,16 @@ int main(int argc, char* argv[]) {
     }
 
 #if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
-    // The PS4 updater still checks the lightweight rolling manifest on each
-    // launch so dismissing one release does not hide later 00.xx packages.
     AppVersion::checkUpdate();
 #else
     std::string v = conf.getItem(AppConfig::APP_UPDATE, std::string("NaN"));
     if (AppVersion::getVersion().compare(v)) AppVersion::checkUpdate();
 #endif
 
-    // Runtime automation is compiled only in the dedicated Linux test target.
+    // Run the app
 #ifdef GMCA_TEST_HARNESS
     gmca::test::Harness harness;
 #endif
-    // Run the app
     while (brls::Application::mainLoop()) {
 #ifdef GMCA_TEST_HARNESS
         harness.tick();
@@ -272,8 +171,6 @@ int main(int argc, char* argv[]) {
 
     ThreadPool::instance().stop();
 
-    // Restart may replace the process without running static destructors.
-    stremio::flushPlaybackHistory();
     conf.checkRestart(argv);
     // Exit
     return EXIT_SUCCESS;

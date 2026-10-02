@@ -15,6 +15,7 @@
 #include "view/recycling_grid.hpp"
 #include "view/video_source.hpp"
 #include "activity/player_view.hpp"
+#include "activity/local_player.hpp"
 #include "view/mpv_core.hpp"
 #include "utils/config.hpp"
 
@@ -76,11 +77,17 @@ void inspect(brls::View* view, json& out) {
     if (description.find("Skeleton") != std::string::npos) out["loading"] = true;
     const std::pair<const char*, const char*> screens[] = {
         {"HomeTab", "stremio_home"}, {"StremioCatalogs", "stremio_catalogs"},
+        {"WatchlistTab", "stremio_library"}, {"DownloadView", "downloads"},
         {"MediaMovie", "stremio_movie"}, {"MediaSeries", "stremio_series"},
         {"MediaSeason", "stremio_episodes"}, {"SearchTab", "search"},
         {"GenresTab", "genres"}, {"HubView", "catalog"}, {"MediaCollection", "catalog"}, {"SearchResult", "search_results"}};
     for (auto screen : screens)
         if (description.find(screen.first) != std::string::npos) out["view"] = screen.second;
+    // Startup/account routing is asserted by the real runtime smoke tests.
+    // Class names come from the live view tree; no test-only navigation hook
+    // can force either result.
+    if (description.find("StremioAdd") != std::string::npos) out["view"] = "stremio_signin";
+    if (description.find("ConnectionSwitcher") != std::string::npos) out["view"] = "account_switcher";
     if (description.find("ContextMenu") != std::string::npos) out["dialog"] = "context_menu";
     if (dynamic_cast<brls::Dialog*>(view)) out["dialog"] = "dialog";
     if (dynamic_cast<brls::Dropdown*>(view)) out["dialog"] = "dropdown";
@@ -89,6 +96,15 @@ void inspect(brls::View* view, json& out) {
         out["view"] = "player";
         out["player_item"] = player->testItem();
         auto& mpv = MPVCore::instance();
+        out["playback_seconds"] = mpv.playback_time;
+        out["duration_seconds"] = mpv.duration;
+        out["player_stopped"] = mpv.isStopped();
+    }
+    if (dynamic_cast<LocalPlayer*>(view)) {
+        auto& mpv = MPVCore::instance();
+        out["player"] = true;
+        out["local_playback"] = true;
+        out["view"] = "local_player";
         out["playback_seconds"] = mpv.playback_time;
         out["duration_seconds"] = mpv.duration;
         out["player_stopped"] = mpv.isStopped();
@@ -113,6 +129,23 @@ json state() {
     for (auto* activity : stack)
         if (auto* player = dynamic_cast<PlayerView*>(activity->getContentView())) inspect(player, out);
     out["build_commit"] = AppVersion::getCommit();
+    // Fixture profiles use synthetic IDs. Expose the active account only in
+    // isolated local tests so startup smoke can verify which saved profile
+    // actually reached MainActivity; never export live account identifiers.
+    if (!env("GMCA_TEST_FIXTURE_URL").empty()) {
+        out["test_account_id"] = AppConfig::instance().getUserId();
+        out["subtitle_tracks"] = json::array();
+        auto& mpv = MPVCore::instance();
+        if (mpv.isValid()) {
+            int64_t trackCount = std::max<int64_t>(0, std::min<int64_t>(64, mpv.getInt("track-list/count")));
+            for (int64_t i = 0; i < trackCount; ++i) {
+                const std::string prefix = "track-list/" + std::to_string(i) + "/";
+                if (mpv.getString(prefix + "type") != "sub") continue;
+                auto title = mpv.getString(prefix + "title");
+                if (title.find("://") == std::string::npos) out["subtitle_tracks"].push_back(title);
+            }
+        }
+    }
     if (!stack.empty()) {
         auto* root = stack.back()->getContentView();
         if (root) {

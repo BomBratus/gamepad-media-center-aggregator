@@ -3,8 +3,8 @@
     "title": "pleNx nay là GMCA",
     "intro": "Vẫn là ứng dụng đó, nhưng đã lớn hơn. pleNx đã trở thành GMCA — Gamepad Media Center Aggregator — và giờ đây làm được nhiều hơn rất nhiều.",
     "whats_new": "CÓ GÌ MỚI",
-    "feature_backends": "Một ứng dụng, mọi máy chủ — Plex, Jellyfin, Emby và Stremio",
-    "feature_music": "Thư viện nhạc của bạn, ngay bên cạnh phim và chương trình",
+    "feature_backends": "Stremio catalogs, library and playback on PS4",
+    "feature_music": "Multiple Stremio accounts, with your own library and history",
     "feature_offline": "Tải xuống ngoại tuyến để xem ở mọi nơi, không cần kết nối",
     "feature_updates": "Cập nhật thường xuyên, gửi thẳng vào ứng dụng",
     "reassure": "Đăng nhập, cài đặt và các mục đã tải của bạn được chuyển sang tự động — không cần thiết lập lại. Chúc bạn xem vui vẻ!",
@@ -16,8 +16,7 @@
     "suggest": "Đề Xuất",
     "search": "Tìm",
     "downloads": "Tải xuống",
-    "setting": "Cài đặt",
-    "remote": "Máy chủ"
+    "setting": "Cài đặt"
   },
   "home": {
     "resume": "Tiếp tục xem",
@@ -86,7 +85,8 @@
     "go_series": "Đến phim bộ",
     "go_season": "Đến mùa",
     "director": "Đạo diễn",
-    "open": "Mở"
+    "open": "Mở",
+    "type": "Type"
   },
   "search": {
     "hint": "Hỗ trợ từ khóa và chữ cái đầu của chúng",
@@ -147,47 +147,12 @@
     "on_server": "Có trên máy chủ",
     "not_on_server": "Không có trên máy chủ"
   },
-  "remote": {
-    "empty_title": "Không có tệp",
-    "empty_sub": "Duyệt bộ nhớ cục bộ và các máy chủ WebDAV, FTP hoặc SFTP của bạn.",
-    "local": "Tệp",
-    "folder": "Thư mục",
-    "up": "Trở về",
-    "bluray": "Phát Blu-ray",
-    "add_server": "Thêm máy chủ",
-    "edit_server": "Chỉnh sửa máy chủ",
-    "manage": "Quản lý máy chủ",
-    "edit": "Chỉnh sửa",
-    "delete": "Xóa",
-    "delete_confirm": "Xóa “{}”?",
-    "type": "Loại",
-    "name": "Tên",
-    "host": "Máy chủ",
-    "port": "Cổng",
-    "username": "Tên người dùng",
-    "password": "Mật khẩu",
-    "path": "Đường dẫn bắt đầu",
-    "optional": "Tùy chọn",
-    "save": "Kiểm tra và lưu",
-    "test_failed": "Kết nối thất bại: {}",
-    "retry": "Thử lại?",
-    "required": "Nhập ít nhất tên và máy chủ.",
-    "sort": "Sắp xếp tệp",
-    "date": "Ngày sửa đổi",
-    "size": "Kích thước",
-    "pin": "Ghim vào Tệp",
-    "unpin": "Gỡ khỏi Tệp",
-    "pinned": "Đã ghim vào Tệp",
-    "unpinned": "Đã gỡ khỏi Tệp",
-    "already_pinned": "Đã ghim",
-    "pin_missing": "Thư mục này không còn khả dụng. Gỡ khỏi Tệp?"
-  },
   "download": {
     "start": "Tải xuống",
     "cancel": "Hủy tải xuống",
     "remove": "Xóa bản tải",
     "downloading": "Đang tải xuống...",
-    "eta": "còn {}",
+    "eta": "Còn {}",
     "completed": "Đã tải xuống",
     "failed": "Tải xuống thất bại",
     "queued": "Trong hàng đợi",
@@ -212,8 +177,7 @@
     "section_done": "Đã tải xuống",
     "remove_all": "Xóa tất cả",
     "confirm_remove_all": "Xóa tất cả các mục đã tải?",
-    "empty_sub": "Phim và tập đã tải sẽ xuất hiện ở đây để xem ngoại tuyến.",
-    "eta": "Còn {}"
+    "empty_sub": "Phim và tập đã tải sẽ xuất hiện ở đây để xem ngoại tuyến."
   },
   "setting": {
     "quit_hint": "Bạn cần thoát khỏi ứng dụng và mở lại ứng dụng để các cài đặt mới hoạt động",
@@ -382,25 +346,6 @@
     "hint_confirm": "Cài đặt NSP forwarder có thể bị ban\nVui lòng xác nhận lại",
     "remove_old": "GMCA đã ở trên menu HOME. Nếu ô pleNx cũ vẫn còn, hãy xóa nó trong Cài đặt hệ thống > Quản lý dữ liệu > Xóa phần mềm."
   },
-  "plex": {
-    "title": "Đăng nhập vào tài khoản Plex của bạn",
-    "generating": "Đang tạo mã…",
-    "waiting": "Đang chờ xác nhận…",
-    "connected": "Đã kết nối!",
-    "expired": "Mã đã hết hạn, vui lòng thử lại",
-    "step1": "1. Trên điện thoại hoặc máy tính, mở plex.tv/link",
-    "step2": "2. Đăng nhập vào tài khoản Plex của bạn",
-    "step3": "3. Nhập mã hiển thị bên trên",
-    "regenerate": "Tạo mã mới",
-    "choose_server": "Chọn một máy chủ",
-    "choose_profile": "Chọn một hồ sơ",
-    "profile_pin": "PIN hồ sơ",
-    "wrong_pin": "PIN không đúng",
-    "no_server": "Không tìm thấy máy chủ nào trên tài khoản này",
-    "connecting": "Đang kết nối đến máy chủ…",
-    "unreachable": "Không thể kết nối đến máy chủ",
-    "connecting_slow": "Việc này mất nhiều thời gian hơn bình thường — vẫn đang cố kết nối tới máy chủ của bạn. Đợi thêm một chút nhé…"
-  },
   "empty": {
     "title": "Không có gì để hiển thị",
     "error": "Không thể tải"
@@ -422,21 +367,16 @@
     "choose_type": "Chọn loại kết nối",
     "switch_title": "Kết nối",
     "add": "Thêm",
-    "jellyfin": {
-      "title_jellyfin": "Đăng nhập vào Jellyfin",
-      "title_emby": "Đăng nhập vào Emby",
-      "url": "Địa chỉ máy chủ",
-      "username": "Tên người dùng",
-      "password": "Mật khẩu",
-      "connect": "Kết nối"
-    },
     "stremio": {
       "title": "Đăng nhập vào Stremio",
       "email": "Email",
       "password": "Mật khẩu",
       "connect": "Kết nối",
       "invalid": "Nhập email và mật khẩu của bạn"
-    }
+    },
+    "connecting": "Đang kết nối đến máy chủ…",
+    "unreachable": "Không thể kết nối đến máy chủ",
+    "connecting_slow": "Việc này mất nhiều thời gian hơn bình thường — vẫn đang cố kết nối tới máy chủ của bạn. Đợi thêm một chút nhé…"
   },
   "stremio": {
     "subtitle": {

@@ -3,8 +3,8 @@
     "title": "이제 pleNx는 GMCA입니다",
     "intro": "같은 앱이 더 크게 성장했습니다. pleNx는 GMCA(Gamepad Media Center Aggregator)로 새로워졌고, 훨씬 더 많은 것을 할 수 있습니다.",
     "whats_new": "새로운 기능",
-    "feature_backends": "하나의 앱으로 모든 서버를 — Plex, Jellyfin, Emby, Stremio",
-    "feature_music": "영화와 시리즈와 함께 즐기는 음악 라이브러리",
+    "feature_backends": "Stremio catalogs, library and playback on PS4",
+    "feature_music": "Multiple Stremio accounts, with your own library and history",
     "feature_offline": "오프라인 다운로드로 연결 없이 어디서나 감상",
     "feature_updates": "앱으로 바로 전달되는 정기 업데이트",
     "reassure": "로그인, 설정, 다운로드가 자동으로 옮겨졌습니다 — 다시 설정할 필요가 없습니다. 즐겁게 감상하세요!",
@@ -16,8 +16,7 @@
     "suggest": "제안",
     "search": "검색",
     "downloads": "다운로드",
-    "setting": "설정",
-    "remote": "서버"
+    "setting": "설정"
   },
   "home": {
     "resume": "계속 시청하기",
@@ -86,7 +85,8 @@
     "go_series": "시리즈로 이동",
     "go_season": "시즌으로 이동",
     "director": "감독",
-    "open": "열기"
+    "open": "열기",
+    "type": "Type"
   },
   "search": {
     "hint": "키워드와 키워드의 첫 글자를 지원합니다.",
@@ -147,41 +147,6 @@
     "on_server": "서버에 있음",
     "not_on_server": "서버에 없음"
   },
-  "remote": {
-    "empty_title": "파일 없음",
-    "empty_sub": "로컬 저장소와 WebDAV, FTP, SFTP 서버를 탐색할 수 있습니다.",
-    "local": "파일",
-    "folder": "폴더",
-    "up": "상위 폴더",
-    "bluray": "Blu-ray 재생",
-    "add_server": "서버 추가",
-    "edit_server": "서버 편집",
-    "manage": "서버 관리",
-    "edit": "편집",
-    "delete": "삭제",
-    "delete_confirm": "“{}”을(를) 삭제할까요?",
-    "type": "유형",
-    "name": "이름",
-    "host": "호스트",
-    "port": "포트",
-    "username": "사용자 이름",
-    "password": "비밀번호",
-    "path": "시작 경로",
-    "optional": "선택 사항",
-    "save": "테스트 후 저장",
-    "test_failed": "연결 실패: {}",
-    "retry": "다시 시도할까요?",
-    "required": "이름과 호스트를 입력하세요.",
-    "sort": "파일 정렬",
-    "date": "수정한 날짜",
-    "size": "크기",
-    "pin": "파일에 고정",
-    "unpin": "파일에서 제거",
-    "pinned": "파일에 고정됨",
-    "unpinned": "파일에서 제거됨",
-    "already_pinned": "이미 고정됨",
-    "pin_missing": "이 폴더를 더 이상 사용할 수 없습니다. 파일에서 제거할까요?"
-  },
   "download": {
     "start": "다운로드",
     "cancel": "다운로드 취소",
@@ -212,8 +177,7 @@
     "section_done": "다운로드 완료",
     "remove_all": "모두 삭제",
     "confirm_remove_all": "모든 다운로드를 삭제하시겠습니까?",
-    "empty_sub": "다운로드한 영화와 에피소드가 여기에 표시되어 오프라인으로 시청할 수 있습니다.",
-    "eta": "{} 남음"
+    "empty_sub": "다운로드한 영화와 에피소드가 여기에 표시되어 오프라인으로 시청할 수 있습니다."
   },
   "setting": {
     "quit_hint": "앱을 종료합니다. 설정 내용은 다음 실행 시 적용됩니다.",
@@ -382,25 +346,6 @@
     "hint_confirm": "NSP 포워더 설치는 기기가 밴될 수 있습니다\n다시 한 번 확인하세요",
     "remove_old": "GMCA가 HOME 메뉴에 있습니다. 기존 pleNx 타일이 남아 있으면 시스템 설정 > 데이터 관리 > 소프트웨어 삭제에서 삭제하세요."
   },
-  "plex": {
-    "title": "Plex 계정에 로그인",
-    "generating": "코드 생성 중…",
-    "waiting": "확인 대기 중…",
-    "connected": "연결됨!",
-    "expired": "코드가 만료되었습니다. 다시 시도하세요",
-    "step1": "1. 휴대폰이나 컴퓨터에서 plex.tv/link를 엽니다",
-    "step2": "2. Plex 계정에 로그인합니다",
-    "step3": "3. 위에 표시된 코드를 입력합니다",
-    "regenerate": "새 코드 생성",
-    "choose_server": "서버 선택",
-    "choose_profile": "프로필 선택",
-    "profile_pin": "프로필 PIN",
-    "wrong_pin": "잘못된 PIN",
-    "no_server": "이 계정에서 서버를 찾을 수 없습니다",
-    "connecting": "서버에 연결하는 중…",
-    "unreachable": "서버에 연결할 수 없음",
-    "connecting_slow": "평소보다 시간이 오래 걸리고 있습니다 — 계속 서버에 연결을 시도 중입니다. 잠시 기다려 주세요…"
-  },
   "empty": {
     "title": "표시할 항목 없음",
     "error": "불러올 수 없음"
@@ -422,21 +367,16 @@
     "choose_type": "연결 유형을 선택하세요",
     "switch_title": "연결 목록",
     "add": "추가",
-    "jellyfin": {
-      "title_jellyfin": "Jellyfin에 로그인",
-      "title_emby": "Emby에 로그인",
-      "url": "서버 주소",
-      "username": "사용자 이름",
-      "password": "비밀번호",
-      "connect": "연결"
-    },
     "stremio": {
       "title": "Stremio에 로그인",
       "email": "이메일",
       "password": "비밀번호",
       "connect": "연결",
       "invalid": "이메일과 비밀번호를 입력하세요"
-    }
+    },
+    "connecting": "서버에 연결하는 중…",
+    "unreachable": "서버에 연결할 수 없음",
+    "connecting_slow": "평소보다 시간이 오래 걸리고 있습니다 — 계속 서버에 연결을 시도 중입니다. 잠시 기다려 주세요…"
   },
   "stremio": {
     "subtitle": {

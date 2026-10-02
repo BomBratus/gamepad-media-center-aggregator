@@ -2,8 +2,9 @@
     Copyright 2023 dragonflylee
 */
 
+#include "utils/config.hpp"
 #include "tab/media_collection.hpp"
-#include "api/plex.hpp"
+#include "api/backend.hpp"
 #include "api/backend.hpp"
 #include "view/video_card.hpp"
 #include "view/video_source.hpp"
@@ -23,7 +24,7 @@ std::map<std::string, std::string> MediaCollection::customPrefs;
 
 class GenresDataSource : public RecyclingGridDataSource {
 public:
-    using MediaList = std::vector<plex::Section>;
+    using MediaList = std::vector<media::Section>;
 
     explicit GenresDataSource(const MediaList& r, const std::string& itemId, const std::string& itemType)
         : list(std::move(r)), itemId(itemId), itemType(itemType) {
@@ -110,9 +111,6 @@ public:
 
     void doRequest() {
         ASYNC_RETAIN
-        // requested offset, not r.StartIndex: see MediaCollection::doRequest —
-        // Jellyfin/Emby omit StartIndex on an empty past-the-end page, so it
-        // parses to 0 and would wipe a filled grid
         size_t reqStart = this->start;
         AppConfig::instance().backend().getCollections(this->sectionId, this->start, this->pageSize,
             [ASYNC_TOKEN, reqStart](const media::Container<media::Item>& r) {
@@ -146,7 +144,7 @@ MediaCollection::MediaCollection(const std::string& itemId, const std::string& i
     brls::Logger::debug("MediaCollection: create {} type {}", itemId, itemType);
     if (genresId.size() > 0) {
         this->inflateFromXMLRes("xml/tabs/media.xml");
-    } else if (itemType == plex::mediaTypeMovie || itemType == plex::mediaTypeShow) {
+    } else if (itemType == media::mediaTypeMovie || itemType == media::mediaTypeShow) {
         this->inflateFromXMLRes("xml/tabs/collection.xml");
 
         // the first tab (labelled "Accueil" in the XML) carries the whole-library
@@ -163,7 +161,7 @@ MediaCollection::MediaCollection(const std::string& itemId, const std::string& i
         item->setTabStyle(AutoTabBarStyle::ACCENT);
         item->setFontSize(18);
         item->setLabel("main/tabs/suggest"_i18n);
-        if (itemType == plex::mediaTypeShow) {
+        if (itemType == media::mediaTypeShow) {
             this->tabFrame->addTab(item, [this]() { return new SuggestShow(this->itemId); });
         } else {
             this->tabFrame->addTab(item, [this]() { return new SuggestMovie(this->itemId); });
@@ -173,7 +171,7 @@ MediaCollection::MediaCollection(const std::string& itemId, const std::string& i
         // (verified on a real server 2026-06-10:
         // /library/sections/{show}/collections -> size 0)
         // and only when the backend actually has collections (Stremio has none).
-        if (itemType == plex::mediaTypeMovie && AppConfig::instance().backend().caps().collections) {
+        if (itemType == media::mediaTypeMovie && AppConfig::instance().backend().caps().collections) {
             item = new AutoSidebarItem();
             item->setTabStyle(AutoTabBarStyle::ACCENT);
             item->setFontSize(18);
@@ -193,13 +191,13 @@ MediaCollection::MediaCollection(const std::string& itemId, const std::string& i
         // collection mode (grid only): scrolled header "title + N items
         // · duration" like the playlist view;
         // set BEFORE the first layout (setHeaderView contract)
-        if (itemType == plex::mediaTypeCollection) {
+        if (itemType == media::mediaTypeCollection) {
             brls::View* header = brls::View::createFromXMLResource("view/grid_header.xml");
             this->labelTitle = dynamic_cast<brls::Label*>(header->getView("grid/header/title"));
             this->labelMeta = dynamic_cast<brls::Label*>(header->getView("grid/header/meta"));
             this->recycler->setHeaderView(header, 84);
             this->doMetadata();
-        } else if (itemType == plex::mediaTypeArtist) {
+        } else if (itemType == media::mediaTypeArtist) {
             // music library: square covers (1:1) instead of the 2:3 poster
             this->recycler->itemImageRatio = 1.0f;
         }
@@ -225,8 +223,6 @@ MediaCollection::MediaCollection(const std::string& itemId, const std::string& i
     this->recycler->onNextPage([this]() { this->doRequest(); });
 
     if (AppConfig::SYNC) {
-        // sort preferences persisted LOCALLY (LIBRARY_SORT item):
-        // /DisplayPreferences does not exist in Plex (PLEX_MIGRATION.md §2.5)
         if (MediaCollection::customPrefs.empty()) {
             auto saved = AppConfig::instance().getItem(AppConfig::LIBRARY_SORT, nlohmann::json::object());
             for (auto& el : saved.items()) {
@@ -361,10 +357,6 @@ void MediaCollection::doRequest() {
     // photo / collection: no type= filter
 
     ASYNC_RETAIN
-    // the offset we asked for: the response's StartIndex is unreliable on
-    // Jellyfin/Emby — it is omitted from an empty past-the-end page (33-byte
-    // body) and parses back to 0, which would otherwise mark a filled grid as
-    // "empty". Plex echoes the real totalSize, so this was latent there.
     size_t reqStart = this->startIndex;
     auto onItems = [ASYNC_TOKEN, reqStart](const media::Container<media::Item>& r) {
             ASYNC_RELEASE
@@ -389,8 +381,8 @@ void MediaCollection::doRequest() {
                         for (auto& it : r.Items) {
                             // only movie/episode/clip carry a full duration
                             // (a show only exposes an episode duration)
-                            bool full = it.type == plex::mediaTypeMovie || it.type == plex::mediaTypeEpisode ||
-                                        it.type == plex::mediaTypeClip;
+                            bool full = it.type == media::mediaTypeMovie || it.type == media::mediaTypeEpisode ||
+                                        it.type == media::mediaTypeClip;
                             if (!full || it.duration <= 0) {
                                 total = 0;
                                 break;
@@ -591,7 +583,7 @@ StremioCatalogs::StremioCatalogs(const std::string& sectionKey, const std::strin
         item->setTabStyle(AutoTabBarStyle::ACCENT);
         item->setFontSize(18);
         item->setLabel("main/tabs/suggest"_i18n);
-        if (sectionType == plex::mediaTypeShow) {
+        if (sectionType == media::mediaTypeShow) {
             this->tabFrame->addTab(item, [key]() { return new SuggestShow(key); });
         } else {
             this->tabFrame->addTab(item, [key]() { return new SuggestMovie(key); });

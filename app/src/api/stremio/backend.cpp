@@ -1,22 +1,4 @@
-/*
-    GMCA — Stremio implementation of media::Backend (see stremio/backend.hpp).
-    Étape 1: NAVIGATION only. Aggregates the configured addons (AddonEngine) and
-    maps the Stremio addon protocol onto the neutral media:: model.
-
-    Async convention mirrors the Jellyfin backend: each verb runs the request on
-    brls::async, parses, and calls `then` on the UI thread via brls::sync; on
-    failure it calls `error`. ensureLoaded() is invoked INSIDE each async body
-    (it may block on the manifest fetches).
-
-    Playback: resolvePlayback returns the source url chosen at detail time;
-    getSubtitles fans out the addons' `subtitles` resource at play time (external
-    SRT/VTT sidecars, sub-add'ed by the player). Account actions (watchlist,
-    watched flag, progress) are gated on a connected account.
-
-    Empty-Container verbs (collections/playlists/genres/related/person/recently-
-    added/extras) return nothing — Stremio addons do not provide them. None of
-    these surface a hard error to the UI.
-*/
+/* GMCA media models and playback. Persisted field names remain compatible. */
 
 #include "api/stremio/backend.hpp"
 #include "api/stremio/types.hpp"
@@ -893,12 +875,6 @@ std::vector<media::Media> resolveAllStreams(
             all.push_back(std::move(media));
         }
         if (url == preferredRequest) {
-#if defined(__PSV__)
-            all.erase(std::remove_if(all.begin(), all.end(), [](const media::Media& source) {
-                return source.videoResolution == "4K" || source.videoResolution == "1440p" ||
-                    (source.playable() && codecRankVita(source.videoCodec) == 0);
-            }), all.end());
-#endif
             const auto matches = std::count_if(all.begin(), all.end(), [&](const media::Media& source) {
                 return source.playable() && source.sourceIdentity == savedIdentity;
             });
@@ -913,38 +889,9 @@ std::vector<media::Media> resolveAllStreams(
         }
     }
     restoreAddonSourceOrder(all);
-#if defined(__PSV__)
-    // PS Vita: >1080p exceeds the hardware H.264 decoder (level 4.x) and
-    // hard-crashes the GPU on play (the "blue light of death" users report),
-    // and the Vita ffmpeg build has NO decoder at all for HEVC/AV1/XviD
-    // (scripts/vita/ffmpeg/VITABUILD) — those streams fail 100% of the time.
-    // Drop them outright — better an "unsupported" message than a device
-    // freeze or a guaranteed playback error. 1080p H.264 is kept but demoted
-    // below every <=720p option by qualityRankVita, so the default pick
-    // (index 0) stays smooth while the heavier source remains a manual
-    // fallback. See bug #216 (crash on Vita playback).
-    all.erase(std::remove_if(all.begin(), all.end(),
-                  [](const media::Media& m) {
-                      return m.videoResolution == "4K" || m.videoResolution == "1440p" ||
-                             (m.playable() && codecRankVita(m.videoCodec) == 0);
-                  }),
-        all.end());
-#endif
     std::stable_sort(all.begin(), all.end(), [](const media::Media& x, const media::Media& y) {
         if (x.playable() != y.playable()) return x.playable();  // playable first
-#if defined(__PSV__)
-        // decodable video codec first (H.264 explicit > unknown; the
-        // no-decoder codecs were erased above, this is a safety net), then
-        // decodable audio (an eac3/dts/truehd/opus track plays SILENT on the
-        // Vita ffmpeg build), then quality
-        int cx = codecRankVita(x.videoCodec), cy = codecRankVita(y.videoCodec);
-        if (cx != cy) return cx > cy;
-        int ax = audioRankVita(x.audioCodec), ay = audioRankVita(y.audioCodec);
-        if (ax != ay) return ax > ay;
-        int qx = qualityRankVita(x.videoResolution), qy = qualityRankVita(y.videoResolution);
-#else
         int qx = qualityRank(x.videoResolution), qy = qualityRank(y.videoResolution);
-#endif
         if (qx != qy) return qx > qy;                           // then best quality
         if (x.playable() && x.cached != y.cached) return x.cached;  // then cached debrid first
         return false;
@@ -1046,10 +993,6 @@ StremioBackend::StremioBackend() : engine(std::make_shared<AddonEngine>()) {
     caps_.globalSearch = false;
     caps_.recentlyAdded = false;
     caps_.markWatched = account;
-    // Stremio's "library" is a server-side list of full items (id/name/poster),
-    // displayed and opened like Jellyfin favorites — NOT a provider-guid watchlist
-    // (which would route through the Plex-only fetchLibraryGuids/matchInLibrary
-    // path in WatchlistTab). So map it onto Favorites.
     caps_.listKind = account ? media::ListKind::Favorites : media::ListKind::None;
     caps_.ratings = true;
     caps_.skipIntro = false;
@@ -2064,9 +2007,6 @@ media::PlaybackSource StremioBackend::resolvePlayback(
     // (which does not wrap tasks in try/catch) would abort the app.
     if (version.parts.empty() || version.parts.front().key.empty()) return {};
     std::string extra = "network-timeout=" + std::to_string(HTTP::TIMEOUT / 100);
-    // Match Plex/Jellyfin direct play: the Continue Watching offset is an mpv
-    // file-local option, so it survives the Stremio source picker without any
-    // extra seek/refetch after load.
     if (opts.seekMs > 0) extra += ",start=" + misc::sec2Time(opts.seekMs / 1000);
     if (HTTP::PROXY_STATUS) extra += ",http-proxy=\"" + HTTP::PROXY + "\"";
     return {version.parts.front().key, extra, false, "directplay"};

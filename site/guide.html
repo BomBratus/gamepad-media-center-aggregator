@@ -4,16 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Guide — GMCA</title>
-  <meta name="description" content="How to install GMCA on Nintendo Switch, PS Vita, Raspberry Pi/Linux and desktop, connect Plex/Jellyfin/Emby/Stremio, playback controls, system requirements and FAQ.">
+  <meta name="description" content="Build and use the PS4 Stremio-only GMCA profile. Linux is an explicitly selected test bench for shared behavior.">
   <link rel="canonical" href="https://thcolin.github.io/gamepad-media-center-aggregator/guide.html">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Guide — GMCA">
-  <meta property="og:description" content="Install GMCA on Switch, PS Vita, Raspberry Pi and desktop; connect Plex, Jellyfin, Emby or Stremio.">
+  <meta property="og:description" content="PS4 Stremio-only development guide, playback controls, and the Linux shared-behavior test bench.">
   <meta property="og:url" content="https://thcolin.github.io/gamepad-media-center-aggregator/guide.html">
   <meta property="og:image" content="https://thcolin.github.io/gamepad-media-center-aggregator/assets/img/og.jpg">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Guide — GMCA">
-  <meta name="twitter:description" content="Install GMCA on Switch, PS Vita, Raspberry Pi and desktop; connect Plex, Jellyfin, Emby or Stremio.">
+  <meta name="twitter:description" content="PS4 Stremio-only development guide, playback controls, and the Linux shared-behavior test bench.">
   <meta name="twitter:image" content="https://thcolin.github.io/gamepad-media-center-aggregator/assets/img/og.jpg">
   <meta name="theme-color" content="#0d0d10">
   <link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32.png">
@@ -48,184 +48,109 @@
       <p class="guide-kicker reveal">Operation manual</p>
       <h1 class="reveal" style="--i:1">Guide</h1>
       <nav class="toc reveal" style="--i:2" aria-label="On this page">
-        <a href="#switch"><span class="toc-num">01</span> Install on Nintendo Switch</a>
-        <a href="#other"><span class="toc-num">02</span> PS Vita, Raspberry Pi &amp; desktop</a>
-        <a href="#connect"><span class="toc-num">03</span> Connect a server</a>
-        <a href="#controls"><span class="toc-num">04</span> Controls during playback</a>
-        <a href="#requirements"><span class="toc-num">05</span> System requirements</a>
-        <a href="#faq"><span class="toc-num">06</span> FAQ</a>
+        <a href="#ps4"><span class="toc-num">01</span> PS4 package</a>
+        <a href="#stremio"><span class="toc-num">02</span> Stremio</a>
+        <a href="#controls"><span class="toc-num">03</span> Playback controls</a>
+        <a href="#testbench"><span class="toc-num">04</span> Linux test bench</a>
+        <a href="#faq"><span class="toc-num">05</span> FAQ</a>
       </nav>
     </header>
 
-    <!-- ============ SWITCH ============ -->
-    <section class="guide-section" id="switch">
+    <!-- ============ PS4 ============ -->
+    <section class="guide-section" id="ps4">
       <div class="sec-head reveal">
         <span class="sec-num" aria-hidden="true">01</span>
-        <h2>Install on Nintendo Switch</h2>
+        <h2>PS4 package</h2>
       </div>
       <div class="guide-body reveal">
-        <p>You'll need a console running <a href="https://github.com/Atmosphere-NX/Atmosphere">Atmosphère</a> CFW
-           and the homebrew menu.</p>
-        <ol>
-          <li>Download <a href="https://github.com/thcolin/gamepad-media-center-aggregator/releases/latest/download/GMCA.nro"><code>GMCA.nro</code></a>
-              from the latest release and copy it to <code>sdmc:/switch/</code>.</li>
-          <li>Launch GMCA from the homebrew menu.</li>
-          <li>On first launch in <strong>applet mode</strong>, GMCA offers to install a HOME menu tile:
-              press the button, confirm, and the app relaunches as a regular title with full memory.
-              Alternatively, hold <kbd>R</kbd> while launching any game (title takeover).</li>
-          <li>Add your media server (see <a href="#connect">Connect a server</a>) and start watching.</li>
-        </ol>
-        <aside class="note">
-          <strong>Video playback needs full-memory mode.</strong> Applet mode (launching over the
-          HOME menu) is fine for browsing, but install the HOME tile (or use title takeover)
-          before starting a movie.
-        </aside>
-        <p>Coming from pleNx? GMCA reads your existing library, logins and downloads automatically on
-           first launch, nothing to re-configure.</p>
+        <p>This development profile targets PS4 and builds a Stremio-only GMCA
+           package. Download the artifact named <code>GMCA-PS4-Stremio-only</code>
+           from a successful run of the
+           <a href="https://github.com/thcolin/gamepad-media-center-aggregator/actions/workflows/build-ps4-stremio-only.yml">PS4 Stremio-only workflow</a>.
+           Each artifact includes a SHA-256 checksum.</p>
+        <aside class="note"><strong>Package identity:</strong> title ID
+           <code>GMCA00000</code>, PS4 revision <code>00.82</code>. The
+          in-app updater verifies the package, saves it to <code>/data/pkg</code>,
+          and prompts for manual installation in GoldHEN Package Installer.</aside>
       </div>
     </section>
 
-    <!-- ============ OTHER PLATFORMS ============ -->
-    <section class="guide-section" id="other">
+    <!-- ============ STREMIO ============ -->
+    <section class="guide-section" id="stremio">
       <div class="sec-head reveal">
         <span class="sec-num" aria-hidden="true">02</span>
-        <h2>PS Vita, Raspberry Pi &amp; desktop</h2>
+        <h2>Connect Stremio</h2>
       </div>
       <div class="guide-body reveal">
-        <p>Every <a href="https://github.com/thcolin/gamepad-media-center-aggregator/releases/latest">release</a> ships builds for
-           all supported platforms, with fresh nightly artifacts on
-           <a href="https://nightly.link/thcolin/gamepad-media-center-aggregator/workflows/build.yaml/dev">nightly.link</a>.</p>
-        <dl class="platform-list">
-          <div><dt>PS Vita</dt>
-          <dd>Install <code>GMCA.vpk</code> with VitaShell, or find GMCA on
-              <a href="https://www.rinnegatamante.eu/vitadb/">VitaDB</a>, for jailbroken consoles.</dd></div>
-          <div><dt>Raspberry Pi / Linux</dt>
-          <dd>Flatpak bundles for x86_64 and arm64v8 (OpenGL 3), plus an Arch package. Wire a Pi to the TV
-              with a controller or keyboard for a full 10-foot media center.</dd></div>
-          <div><dt>macOS</dt>
-          <dd>DMG for Intel and Apple Silicon, macOS 10.15+. If Gatekeeper refuses to open the app,
-              clear the quarantine attribute:
-              <pre><code>sudo xattr -rd com.apple.quarantine /Applications/GMCA.app</code></pre></dd></div>
-          <div><dt>Windows</dt>
-          <dd>Portable 7z archives for x64, x86 and ARM64 (Windows 7 or later, DirectX 11.1).</dd></div>
-        </dl>
-      </div>
-    </section>
-
-    <!-- ============ CONNECT ============ -->
-    <section class="guide-section" id="connect">
-      <div class="sec-head reveal">
-        <span class="sec-num" aria-hidden="true">03</span>
-        <h2>Connect a server</h2>
-      </div>
-      <div class="guide-body reveal">
-        <p>On first launch, pick a backend. The same interface follows whichever you choose.</p>
-        <dl class="platform-list">
-          <div><dt>Plex</dt>
-          <dd>Enter the 4-character code shown on screen at <a href="https://plex.tv/link">plex.tv/link</a>,
-              then pick your server and your Plex Home profile (PIN-protected profiles supported).</dd></div>
-          <div><dt>Jellyfin / Emby</dt>
-          <dd>Type your server URL, then authenticate with Quick Connect (no keyboard) or your username
-              and password.</dd></div>
-          <div><dt>Stremio</dt>
-          <dd>Log in with your Stremio account. Your add-on catalogues and library sync across your devices. Streams play
-              from direct links or your configured debrid service.</dd></div>
-          <div><dt>File servers</dt>
-          <dd>Add a WebDAV, FTP, SFTP or HTTP(S) share straight from the UI, with a connection test before
-              saving. USB drives work too on Switch.</dd></div>
-        </dl>
+        <p>The PS4 build opens the Stremio connection flow. Sign in with the
+           account that has your desired catalogues and add-ons configured.
+           Available streams depend on those add-ons and their sources.</p>
       </div>
     </section>
 
     <!-- ============ CONTROLS ============ -->
     <section class="guide-section" id="controls">
       <div class="sec-head reveal">
-        <span class="sec-num" aria-hidden="true">04</span>
+        <span class="sec-num" aria-hidden="true">03</span>
         <h2>Controls during playback</h2>
       </div>
       <div class="guide-body reveal">
         <table class="controls">
           <thead>
-            <tr><th scope="col">Gamepad</th><th scope="col">Keyboard</th><th scope="col">Action</th></tr>
+            <tr><th scope="col">PS4 controller</th><th scope="col">Linux test bench</th><th scope="col">Playback action</th></tr>
           </thead>
           <tbody>
-            <tr><td><span class="btn-glyph">A</span></td><td><kbd>space</kbd></td><td>Play / Pause</td></tr>
-            <tr><td><span class="btn-glyph">B</span></td><td><kbd>esc</kbd></td><td>Stop</td></tr>
-            <tr><td><span class="btn-glyph">Y</span></td><td><kbd>o</kbd></td><td>Toggle OSD</td></tr>
-            <tr><td><span class="btn-glyph">X</span></td><td><kbd>f4</kbd></td><td>Menu</td></tr>
-            <tr><td><span class="btn-glyph">R</span> / <span class="btn-glyph">L</span></td><td><kbd>]</kbd> / <kbd>[</kbd></td><td>Seek forward / back</td></tr>
-            <tr><td><span class="btn-glyph">+</span></td><td><kbd>f1</kbd></td><td>Video profile</td></tr>
-            <tr><td><span class="btn-glyph">RS</span></td><td><kbd>f2</kbd></td><td>Video quality</td></tr>
-            <tr><td><span class="btn-glyph">LS</span></td><td><kbd>f3</kbd></td><td>Playback speed</td></tr>
+            <tr><td><span class="btn-glyph">Cross</span></td><td><kbd>space</kbd></td><td>Play / pause</td></tr>
+            <tr><td><span class="btn-glyph">Circle</span></td><td><kbd>esc</kbd></td><td>Stop</td></tr>
+            <tr><td><span class="btn-glyph">Triangle</span></td><td><kbd>o</kbd></td><td>Toggle OSD</td></tr>
+            <tr><td><span class="btn-glyph">Square</span></td><td><kbd>f4</kbd></td><td>Open menu</td></tr>
+            <tr><td><span class="btn-glyph">R1</span> / <span class="btn-glyph">L1</span></td><td><kbd>]</kbd> / <kbd>[</kbd></td><td>Seek forward / back</td></tr>
+            <tr><td>Share</td><td><kbd>f1</kbd></td><td>Video profile</td></tr>
+            <tr><td><span class="btn-glyph">R3</span></td><td><kbd>f2</kbd></td><td>Video quality</td></tr>
+            <tr><td><span class="btn-glyph">L3</span></td><td><kbd>f3</kbd></td><td>Playback speed</td></tr>
           </tbody>
         </table>
-        <p>Anywhere in the app, press <kbd>X</kbd> (or long-press) on a poster to open the
-           quick actions panel: go to show, go to season, mark watched, download, add to your list.</p>
       </div>
     </section>
 
-    <!-- ============ REQUIREMENTS ============ -->
-    <section class="guide-section" id="requirements">
+    <!-- ============ LINUX TEST BENCH ============ -->
+    <section class="guide-section" id="testbench">
       <div class="sec-head reveal">
-        <span class="sec-num" aria-hidden="true">05</span>
-        <h2>System requirements</h2>
+        <span class="sec-num" aria-hidden="true">04</span>
+        <h2>Linux test bench</h2>
       </div>
       <div class="guide-body reveal">
-        <ul>
-          <li><strong>Nintendo Switch</strong>:Atmosphère CFW, full-memory mode for playback</li>
-          <li><strong>PS Vita</strong>:HENkaku/h-encore jailbreak</li>
-          <li><strong>Raspberry Pi / Linux</strong>:Flatpak (x86_64 / arm64v8), OpenGL 3 support</li>
-          <li><strong>Windows</strong>:Windows 7 or later, DirectX 11.1 support</li>
-          <li><strong>macOS</strong>:10.15 or later, Intel or Apple Silicon</li>
-        </ul>
-        <p>MPV decodes H.264, H.265, VP8, VP9 and AV1 video; Opus, FLAC, MP3, AAC, AC-3, E-AC-3,
-           TrueHD and DTS audio; and SRT, VTT, SSA/ASS and DVDSUB subtitles. Anything your
-           hardware can't direct-play, a Plex/Jellyfin/Emby server transcodes.</p>
+        <p>Linux exists only to test behavior shared with the PS4 build. It is
+           not a supported delivery target and cannot validate PS4 input,
+           graphics, playback, or package behavior. Select it explicitly and
+           keep compilation to two jobs:</p>
+        <pre><code>cmake -S . -B build-linux -DGMCA_LINUX_TEST_BENCH=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-linux --parallel 2</code></pre>
       </div>
     </section>
 
     <!-- ============ FAQ ============ -->
     <section class="guide-section" id="faq">
       <div class="sec-head reveal">
-        <span class="sec-num" aria-hidden="true">06</span>
+        <span class="sec-num" aria-hidden="true">05</span>
         <h2>FAQ</h2>
       </div>
       <div class="guide-body reveal">
         <details>
-          <summary>Is this pleNx? What happened to it?</summary>
-          <p>GMCA is the evolution of pleNx: same app and team, renamed as it grew from a Plex-only client
-             into a multi-backend one (Plex, Jellyfin, Emby, Stremio). Existing pleNx installs migrate their
-             data to GMCA automatically on first launch.</p>
+          <summary>What is this development profile?</summary>
+          <p>This branch specializes GMCA for PS4 and Stremio. The repository and
+             changelog preserve the project's earlier platforms and backends.</p>
         </details>
         <details>
-          <summary>Subtitles don't show up on Switch?</summary>
-          <p>Drop any TrueType font at <code>sdmc:/switch/GMCA/subfont.ttf</code>; it will be
-             used to render text subtitles.</p>
-        </details>
-        <details>
-          <summary>macOS won't open the app?</summary>
-          <p>Gatekeeper quarantines unsigned apps downloaded from the internet. Clear the attribute:</p>
-          <pre><code>sudo xattr -rd com.apple.quarantine /Applications/GMCA.app</code></pre>
-        </details>
-        <details>
-          <summary>How do I enable an external USB drive on Switch?</summary>
-          <p>Set <code>ums</code> in <code>config.json</code> (in <code>sdmc:/switch/GMCA/</code>):</p>
-          <pre><code>{
-  "setting": {
-    "ums": true
-  }
-}</code></pre>
-        </details>
-        <details>
-          <summary>Is GMCA affiliated with Plex, Jellyfin, Emby or Stremio?</summary>
-          <p>No. GMCA is an independent, open-source, third-party client, not affiliated with or
-             endorsed by any of them. It talks to <em>your</em> server with your own account.</p>
+          <summary>Does the Linux build replace PS4 testing?</summary>
+          <p>No. Linux is a shared-behavior test bench. Validate PS4-specific
+             behavior with the PS4 package and device.</p>
         </details>
         <details>
           <summary>Where do I report a bug?</summary>
           <p>On the <a href="https://github.com/thcolin/gamepad-media-center-aggregator/issues">GitHub issue tracker</a>.
-             Describe what you did, what happened, your backend, and your device model. On desktop, launching
-             the app with <code>-d -o gmca.log</code> writes a debug log you can attach.</p>
+             Include the PS4 model, Stremio add-ons involved, what you did, and
+             what happened.</p>
         </details>
       </div>
     </section>
@@ -239,7 +164,7 @@
     </div>
     <div class="cb-right">
       <a class="cb-hint" href="./"><span class="btn-glyph">B</span> Back home</a>
-      <a class="cb-hint" href="https://github.com/thcolin/gamepad-media-center-aggregator/releases/latest"><span class="btn-glyph btn-glyph-a">A</span> Download</a>
+      <a class="cb-hint" href="https://github.com/thcolin/gamepad-media-center-aggregator/actions/workflows/build-ps4-stremio-only.yml"><span class="btn-glyph btn-glyph-a">A</span> Workflow artifacts</a>
     </div>
   </div>
 
@@ -247,7 +172,7 @@
     <div class="footer-inner">
       <div class="footer-brand">
         <span class="wordmark wordmark-footer">GMCA</span>
-        <p>Gamepad Media Center Aggregator: a native, controller-first client for Plex, Jellyfin, Emby and Stremio.<br>
+        <p>Gamepad Media Center Aggregator: a native, controller-first PS4 client for Stremio.<br>
            Free and open source, forked from
            <a href="https://github.com/dragonflylee/switchfin">Switchfin</a>, built on
            <a href="https://github.com/natinusala/borealis">borealis</a> and
@@ -256,8 +181,8 @@
       <nav class="footer-col" aria-label="Project">
         <h3>Project</h3>
         <a href="https://github.com/thcolin/gamepad-media-center-aggregator">GitHub</a>
-        <a href="https://github.com/thcolin/gamepad-media-center-aggregator/releases">Releases</a>
-        <a href="https://nightly.link/thcolin/gamepad-media-center-aggregator/workflows/build.yaml/dev">Nightly builds</a>
+        <a href="https://github.com/thcolin/gamepad-media-center-aggregator/actions/workflows/build-ps4-stremio-only.yml">PS4 workflow artifacts</a>
+        <a href="https://github.com/thcolin/gamepad-media-center-aggregator/actions/workflows/build-ps4-stremio-only.yml">PS4 workflow artifacts</a>
         <a href="https://github.com/thcolin/gamepad-media-center-aggregator/issues">Issues</a>
       </nav>
       <nav class="footer-col" aria-label="Help">
@@ -269,8 +194,7 @@
       </nav>
     </div>
     <p class="footer-legal">
-      GMCA is an independent, third-party project, not affiliated with or endorsed by Plex, Jellyfin, Emby or Stremio.
-      Nintendo Switch is a trademark of Nintendo; PS Vita is a trademark of Sony. ·
+      GMCA is an independent, third-party project, not affiliated with or endorsed by Stremio. PS4 is a trademark of Sony. ·
       <span data-version>v1.1.0</span> · <a href="https://github.com/thcolin/gamepad-media-center-aggregator/blob/dev/CHANGELOG.md">Changelog</a>
     </p>
   </footer>

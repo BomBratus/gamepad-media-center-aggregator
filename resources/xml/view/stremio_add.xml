@@ -1,5 +1,5 @@
 <!-- Stremio sign-in: full-screen centered page, same visual language as the
-     Jellyfin sign-in page (jellyfin_add.xml). Icon + grey title, then a
+     Stremio sign-in page. Icon + grey title, then a
      full-width form (email / password), centered Connect button and a status
      label. B (Back) is owned by the ServerList AppletFrame. -->
 <brls:Box

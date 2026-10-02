@@ -1,18 +1,4 @@
-#ifdef __SWITCH__
-#include <switch.h>
-#include "utils/overclock.hpp"
-#elif defined(__PSV__)
-#include <psp2/kernel/cpu.h>
-#include <psp2/kernel/threadmgr/thread.h>
-#include <psp2/appmgr.h>
-#include <psp2/vshbridge.h>
-#include <borealis/platforms/desktop/desktop_platform.hpp>
-
-extern "C" {
-unsigned int _newlib_heap_size_user = 220 * 1024 * 1024;
-unsigned int _pthread_stack_default_user = 2 * 1024 * 1024;
-}
-#elif defined(__PS4__)
+#ifdef __PS4__
 #include <orbis/SystemService.h>
 #include <orbis/Sysmodule.h>
 #include <arpa/inet.h>
@@ -23,15 +9,9 @@ extern int ps4_mpv_dump_shaders;
 extern in_addr_t primary_dns;
 extern in_addr_t secondary_dns;
 }
-#elif defined(ANDROID)
-#include <SDL2/SDL_system.h>
-#include <jni.h>
-#elif defined(__APPLE__) || defined(__linux__) || defined(_WIN32)
+#elif defined(GMCA_LINUX_TEST_BENCH)
 #include <unistd.h>
 #include <borealis/platforms/desktop/desktop_platform.hpp>
-#if defined(_WIN32)
-#include <shlobj.h>
-#endif
 
 constexpr uint32_t MINIMUM_WINDOW_WIDTH = 640;
 constexpr uint32_t MINIMUM_WINDOW_HEIGHT = 360;
@@ -42,10 +22,7 @@ constexpr uint32_t MINIMUM_WINDOW_HEIGHT = 360;
 #include <algorithm>
 #include <mutex>
 #include <borealis/views/edit_text_dialog.hpp>
-#include "api/plex/auth.hpp"
 #include "api/backend.hpp"
-#include "api/plex/backend.hpp"
-#include "api/jellyfin/backend.hpp"
 #include "api/stremio/backend.hpp"
 #include "api/http.hpp"
 #include "utils/config.hpp"
@@ -76,7 +53,6 @@ std::unordered_map<AppConfig::Item, AppConfig::Option> AppConfig::settingMap = {
     {TOUCH_GESTURE, {"touch_gesture"}},
     {CLIP_POINT, {"clip_point"}},
     {SYNC_SETTING, {"sync_setting"}},
-    {OVERCLOCK, {"overclock"}},
     {MPV_VO, {"mpv_vo", {"gpu", "gpu-next", "mediacodec_embed"}}},
     {PLAYER_LOW_QUALITY, {"player_low_quality"}},
     {PLAYER_SUBS_FALLBACK, {"player_subs_fallback"}},
@@ -115,8 +91,6 @@ std::unordered_map<AppConfig::Item, AppConfig::Option> AppConfig::settingMap = {
     {LIBRARY_SORT, {"library_sort"}},
     {SIDEBAR_LAYOUT, {"sidebar_layout"}},
 
-    {HINT_FORWARDER, {"hint_forwarder"}},
-    {HINT_FORWARDER_GMCA, {"hint_forwarder_gmca"}},
     {RENAME_NOTICE_SHOWN, {"rename_notice_shown"}},
 
     {KEY_REFRESH, {"key_refresh"}},
@@ -135,62 +109,7 @@ std::unordered_map<AppConfig::Item, AppConfig::Option> AppConfig::settingMap = {
 };
 
 static std::string generateDeviceId() {
-#ifdef __SWITCH__
-    AccountUid uid;
-    accountInitialize(AccountServiceType_Administrator);
-    if (R_FAILED(accountGetPreselectedUser(&uid))) {
-        if (R_FAILED(accountTrySelectUserWithoutInteraction(&uid, false))) {
-            accountGetLastOpenedUser(&uid);
-        }
-    }
-    accountExit();
-    if (accountUidIsValid(&uid)) {
-        uint8_t digest[32];
-        sha256CalculateHash(digest, &uid, sizeof(uid));
-        return misc::hexEncode(digest, sizeof(digest));
-    }
-#elif defined(__PSV__)
-    char cid[0x20];
-    if (_vshSblAimgrGetConsoleId(cid) >= 0) {
-        char text[0x40];
-        sceClibSnprintf(text, sizeof(text) - 1, "%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
-            cid[0x0], cid[0x1], cid[0x2], cid[0x3], cid[0x4], cid[0x5], cid[0x6], cid[0x7], cid[0x8], cid[0x9],
-            cid[0xA], cid[0xB], cid[0xC], cid[0xD], cid[0xE], cid[0xF]);
-        return text;
-    }
-#elif defined(ANDROID)
-    JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
-    jclass utilsClass = env->FindClass("org/libsdl/app/PlatformUtils");
-    if (utilsClass) {
-        jmethodID jmethod = env->GetStaticMethodID(utilsClass, "getAndroidId", "()Ljava/lang/String;");
-        jstring jname = (jstring)env->CallStaticObjectMethod(utilsClass, jmethod);
-        const char* name = env->GetStringUTFChars(jname, nullptr);
-        std::string deviceId = name;
-        env->ReleaseStringUTFChars(jname, name);
-        env->DeleteLocalRef(jname);
-        env->DeleteLocalRef(utilsClass);
-        return deviceId;
-    }
-#elif defined(_WIN32)
-    HW_PROFILE_INFOW profile;
-    if (GetCurrentHwProfileW(&profile)) {
-        std::vector<char> deviceId(HW_PROFILE_GUIDLEN);
-        WideCharToMultiByte(CP_UTF8, 0, profile.szHwProfileGuid, std::wcslen(profile.szHwProfileGuid), deviceId.data(),
-            deviceId.size(), nullptr, nullptr);
-        return deviceId.data();
-    }
-#elif defined(__APPLE__)
-    io_registry_entry_t ioRegistryRoot = IORegistryEntryFromPath(kIOMasterPortDefault, "IOService:/");
-    if (ioRegistryRoot) {
-        CFStringRef uuidCf = (CFStringRef)IORegistryEntryCreateCFProperty(
-            ioRegistryRoot, CFSTR(kIOPlatformUUIDKey), kCFAllocatorDefault, 0);
-        std::vector<char> deviceId(CFStringGetLength(uuidCf) + 1);
-        CFStringGetCString(uuidCf, deviceId.data(), deviceId.size(), kCFStringEncodingMacRoman);
-        CFRelease(uuidCf);
-        IOObjectRelease(ioRegistryRoot);
-        return deviceId.data();
-    }
-#elif defined(__linux__)
+#ifdef GMCA_LINUX_TEST_BENCH
     static const std::vector<std::string> dev_names = {
         "/sys/devices/virtual/dmi/id/board_serial",
         "/proc/device-tree/serial-number",
@@ -213,37 +132,22 @@ static std::string generateDeviceId() {
 /// Per-platform data folder for a given application name.
 /// Factored out so the migration can compute the old name's path.
 static std::string dataDir(const std::string& name) {
-#if __SWITCH__
-    return fmt::format("sdmc:/switch/{}", name);
-#elif defined(__PS4__)
+#ifdef __PS4__
     return fmt::format("/data/{}", name);
-#elif defined(__PSV__)
-    return fmt::format("ux0:/data/{}", name);
-#elif _WIN32
-    WCHAR wpath[MAX_PATH];
-    std::vector<char> lpath(MAX_PATH);
-    SHGetSpecialFolderPathW(0, wpath, CSIDL_LOCAL_APPDATA, false);
-    WideCharToMultiByte(CP_UTF8, 0, wpath, std::wcslen(wpath), lpath.data(), lpath.size(), nullptr, nullptr);
-    return fmt::format("{}\\{}", lpath.data(), name);
-#elif defined(ANDROID)
-    return SDL_AndroidGetExternalStoragePath();
-#elif __linux__
+#elif defined(GMCA_LINUX_TEST_BENCH)
     char* config_home = getenv("XDG_CONFIG_HOME");
     if (config_home) return fmt::format("{}/{}", config_home, name);
     return fmt::format("{}/.config/{}", getenv("HOME"), name);
-#elif __APPLE__
-    return fmt::format("{}/Library/Application Support/{}", getenv("HOME"), name);
 #endif
 }
 
 /// Silent migration of the config folder inherited from a previous name
-/// (Switchlex -> pleNx -> GMCA): Plex/Jellyfin session, settings and
 /// downloads must survive each rename. Returns true when a legacy dir was
 /// actually relocated (the caller uses this to gate the one-time rebrand
 /// welcome notice).
 static bool migrateLegacyConfigDir(const std::string& legacy, const std::string& current) {
-    if (legacy == current) return false;  // e.g. Android: path independent of the name
-#if !defined(USE_BOOST_FILESYSTEM) || defined(_WIN32)
+    if (legacy == current) return false;
+#ifndef USE_BOOST_FILESYSTEM
     const fs::path from = fs::u8path(legacy), to = fs::u8path(current);
 #else
     const fs::path from = legacy, to = current;
@@ -260,9 +164,8 @@ static bool migrateLegacyConfigDir(const std::string& legacy, const std::string&
     return false;
 }
 
-
 static fs::path configFsPath(const std::string& path) {
-#if !defined(USE_BOOST_FILESYSTEM) || defined(_WIN32)
+#if !defined(USE_BOOST_FILESYSTEM)
     return fs::u8path(path);
 #else
     return fs::path(path);
@@ -280,7 +183,7 @@ static bool configPathExists(const std::string& path) {
 /// Reads one complete config object. Missing files are not errors; malformed
 /// JSON/schema throws so init() can fall back to the last known-good backup.
 static bool readConfigObject(const std::string& path, nlohmann::json& out) {
-#if !defined(USE_BOOST_FILESYSTEM) || defined(_WIN32)
+#if !defined(USE_BOOST_FILESYSTEM)
     std::ifstream f(fs::u8path(path));
 #else
     std::ifstream f(path);
@@ -310,7 +213,7 @@ static bool writeConfigAtomic(const std::string& path, const std::string& data) 
 
     try {
         fs::create_directories(configFsPath(path).parent_path());
-#if !defined(USE_BOOST_FILESYSTEM) || defined(_WIN32)
+#if !defined(USE_BOOST_FILESYSTEM)
         std::ofstream f(fs::u8path(tmp), std::ios::binary | std::ios::trunc);
 #else
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
@@ -376,6 +279,7 @@ bool AppConfig::init() {
         this->setting = nlohmann::json::object();
         this->remotes.clear();
         this->pins.clear();
+        this->persisted = nlohmann::json::object();
         this->server_url.clear();
         this->server_token.clear();
     };
@@ -383,6 +287,7 @@ bool AppConfig::init() {
         resetSerializedState();
         try {
             parsed.get_to(*this);
+            this->persisted = parsed;
         } catch (...) {
             resetSerializedState();
             throw;
@@ -432,11 +337,7 @@ bool AppConfig::init() {
         brls::Logger::warning("AppConfig: damaged config could not be recovered; using defaults");
     }
 
-#if defined(_WIN32) && !defined(_WINRT_)
-    misc::initCrashDump();
-#endif
-
-#if (defined(__APPLE__) || defined(__linux__) || defined(_WIN32)) && !defined(ANDROID) && !defined(TRIMUI)
+#if defined(GMCA_LINUX_TEST_BENCH)
     brls::DesktopPlatform::GAMEPAD_DB = configDir() + "/gamecontrollerdb.txt";
     if (this->getItem(AppConfig::SINGLE, false) && misc::sendIPC(this->ipcSocket(), "{}")) {
         brls::Logger::warning("AppConfig single instance");
@@ -469,13 +370,6 @@ bool AppConfig::init() {
                                                    width, height, (int)VideoContext::posX, (int)VideoContext::posY));
         this->save();
     });
-#elif defined(__PSV__)
-    int search_unk[2];
-    if (_vshKernelSearchModuleByName("CapUnlocker", search_unk) >= 0) {
-        brls::sync([]() { brls::Application::notify("CapUnlocker found"); });
-        sceKernelChangeThreadPriority(SCE_KERNEL_THREAD_ID_SELF, 64);
-        sceKernelChangeThreadCpuAffinityMask(SCE_KERNEL_THREAD_ID_SELF, SCE_KERNEL_CPU_MASK_SYSTEM);
-    }
 #elif defined(__PS4__)
     if (sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_NET) < 0) brls::Logger::error("cannot load net module");
     primary_dns = inet_addr("223.5.5.5");
@@ -516,7 +410,7 @@ bool AppConfig::init() {
     // 初始化内存缓存大小
     MPVCore::INMEMORY_CACHE = this->getItem(PLAYER_INMEMORY_CACHE, 10);
     // 是否使用低质量解码
-#if defined(__PSV__) || defined(__PS4__) || defined(__SWITCH__)
+#ifdef __PS4__
     MPVCore::LOW_QUALITY = this->getItem(PLAYER_LOW_QUALITY, true);
 #else
     MPVCore::LOW_QUALITY = this->getItem(PLAYER_LOW_QUALITY, false);
@@ -527,17 +421,12 @@ bool AppConfig::init() {
     MPVCore::VO = this->getItem(MPV_VO, MPVCore::VO);
     MPVCore::HARDWARE_DEC = this->getItem(PLAYER_HWDEC, true);
     MPVCore::FORCE_DIRECTPLAY = this->getItem(FORCE_DIRECTPLAY, false);
-    // default transcode bitrate cap. The Vita decoder chokes on heavy direct
     // play (high-bitrate / unsupported codecs -> slideshow), so default to a
     // smooth 4 Mbps H.264 transcode; "Auto" (0 = direct play) stays selectable
     // in the player quality menu. Other platforms default to direct play.
     // Persisted now (it was reset every launch, so the user's lowered choice
     // never survived a restart).
-#if defined(__PSV__)
-    MPVCore::VIDEO_QUALITY = this->getItem(PLAYER_VIDEO_QUALITY, (int64_t)4000000);
-#else
     MPVCore::VIDEO_QUALITY = this->getItem(PLAYER_VIDEO_QUALITY, (int64_t)0);
-#endif
     MPVCore::VIDEO_CODEC = this->getItem(TRANSCODEC, MPVCore::VIDEO_CODEC);
     MPVCore::AUDIO_CHANNELS = this->getItem(AUDIO_CHANNELS, MPVCore::AUDIO_CHANNELS);
     // 初始化自定义的硬件加速方案
@@ -578,13 +467,9 @@ bool AppConfig::init() {
 
     // 初始化一些在创建窗口之后才能初始化的内容
     brls::Application::getWindowCreationDoneEvent()->subscribe([this]() {
-#if defined(TRIMUI)
-        if (this->getItem(APP_SWAP_ABXY, true))
-#else
         if (this->getItem(APP_SWAP_ABXY, false))
-#endif
         {
-            // 对于 PSV/PS4 来说，初始化时会加载系统设置，可能在那时已经交换过按键
+            // 对于 PS4 来说，初始化时会加载系统设置，可能在那时已经交换过按键
             // 所以这里需要读取 isSwapInputKeys 的值，而不是直接设置为 true
             brls::Application::setSwapInputKeys(!brls::Application::isSwapInputKeys());
         }
@@ -598,28 +483,14 @@ bool AppConfig::init() {
         }
 
         // 初始化纹理缓存数量
-#if defined(__PSV__) || defined(__PS4__)
+#ifdef __PS4__
         brls::TextureCache::instance().cache.setCapacity(1);
-#if defined(__PSV__)
-        // The entry-count cap alone (401 effective: setCapacity ADDS
-        // DEFAULT_CAPACITY) lets artwork pin ~100+ MB and starve mpv of
-        // LPDDR/CDRAM. Cap the BYTES too: 48 MB of DXT posters is ~200-400
-        // covers, plenty for browsing, and leaves the video allocations room.
-        // (48, not 64: the music-view crash log peaked near ~54 MB of artwork
-        // before the blue light — the budget must sit safely below that.)
-        brls::TextureCache::instance().cache.setByteCapacity(48 * 1024 * 1024);
-#elif defined(__PS4__)
-        // PS4 Stremio artwork arrives as absolute CDN images and is uploaded as
-        // RGBA textures. The nominal 401-entry cache can otherwise retain
-        // hundreds of MiB after long browsing sessions. Keep a generous but
-        // bounded artwork budget so mpv/Piglet still has headroom for playback.
         brls::TextureCache::instance().cache.setByteCapacity(128 * 1024 * 1024);
-#endif
 #else
         brls::TextureCache::instance().cache.setCapacity(getItem(TEXTURE_CACHE_NUM, 200));
 #endif
 
-#if (defined(__APPLE__) || defined(__linux__) || defined(_WIN32)) && !defined(ANDROID)
+#if defined(GMCA_LINUX_TEST_BENCH)
         // 设置窗口最小尺寸
         brls::Application::getPlatform()->setWindowSizeLimits(MINIMUM_WINDOW_WIDTH, MINIMUM_WINDOW_HEIGHT, 0, 0);
         if (this->getItem(ALWAYS_ON_TOP, false)) {
@@ -627,9 +498,8 @@ bool AppConfig::init() {
         }
 #endif
 
-        // Init keyboard shortcut (F11 fullscreen toggle — non-Apple platforms only;
-        // on macOS the handler had no live case, so it's not registered there)
-#ifndef __APPLE__
+#if defined(GMCA_LINUX_TEST_BENCH)
+        // Init the Linux test bench F11 fullscreen shortcut.
         brls::Application::getPlatform()->getInputManager()->getKeyboardKeyStateChanged()->subscribe(
             [this](brls::KeyState state) {
                 if (!state.pressed) return;
@@ -645,12 +515,6 @@ bool AppConfig::init() {
 #endif
     });
 
-#ifdef __SWITCH__
-    /// Set Overclock
-    if (getItem(AppConfig::OVERCLOCK, false)) {
-        SwitchSys::setClock(true);
-    };
-#endif
     Ums::instance().init();
 
     // init custom font path
@@ -658,7 +522,7 @@ bool AppConfig::init() {
     brls::FontLoader::USER_ICON_PATH = configDir() + "/icon.ttf";
     if (access(brls::FontLoader::USER_ICON_PATH.c_str(), F_OK) == -1) {
         // 自定义字体不存在，使用内置字体
-#if defined(__PSV__) || defined(__PS4__)
+#ifdef __PS4__
         brls::FontLoader::USER_ICON_PATH = BRLS_ASSET("font/keymap_ps.ttf");
 #else
         std::string icon = getItem(KEYMAP, std::string("xbox"));
@@ -680,13 +544,9 @@ bool AppConfig::init() {
         brls::FontLoader::USER_EMOJI_PATH = BRLS_ASSET("font/emoji.ttf");
     }
 
-    // Repair the primary only after all init defaults (notably device id) have
-    // been established. Atomic save preserves a valid backup if the primary was
-    // the damaged file that brought us here.
-    if (this->recoveryState != RecoveryState::None) this->save();
-
     brls::Logger::info("init {} v{}-{} device {} from {}", AppVersion::getPlatform(), AppVersion::getVersion(),
         AppVersion::getCommit(), this->device, path);
+    if (this->recoveryState != RecoveryState::None) this->save();
     return true;
 }
 
@@ -694,10 +554,10 @@ void AppConfig::save() {
     static std::mutex saveMutex;
     std::lock_guard<std::mutex> lock(saveMutex);
     try {
-        const std::string path = this->configDir() + "/config.json";
-        nlohmann::json j(*this);
-        if (!writeConfigAtomic(path, j.dump(2)))
-            brls::Logger::warning("AppConfig save: atomic write failed for {}", path);
+        nlohmann::json snapshot = this->persisted;
+        snapshot.update(nlohmann::json(*this));
+        if (!writeConfigAtomic(this->configDir() + "/config.json", snapshot.dump(2)))
+            brls::Logger::warning("AppConfig: could not save configuration");
     } catch (const std::exception& ex) {
         brls::Logger::warning("AppConfig save: {}", ex.what());
     }
@@ -711,52 +571,27 @@ void AppConfig::resetBackend() {
 }
 
 media::Backend& AppConfig::backend() {
-    if (!this->activeBackend) {
-        // active server type = the one whose front URL is the active server_url
-        std::string type = "plex";
-        for (auto& s : this->servers) {
-            if (!this->server_url.empty() && !s.urls.empty() && s.urls.front() == this->server_url) {
-                type = s.type;
-                break;
-            }
-        }
-        switch (backendTypeFromString(type)) {
-            case media::BackendType::Jellyfin:
-                this->activeBackend = new jellyfin::JellyfinBackend(media::BackendType::Jellyfin);
-                break;
-            case media::BackendType::Emby:
-                this->activeBackend = new jellyfin::JellyfinBackend(media::BackendType::Emby);
-                break;
-            case media::BackendType::Stremio:
-                this->activeBackend = new stremio::StremioBackend();
-                break;
-            case media::BackendType::Plex:
-                this->activeBackend = new plex::PlexBackend();
-                break;
-        }
-    }
+    if (!this->activeBackend) this->activeBackend = new stremio::StremioBackend();
     return *this->activeBackend;
 }
 
 media::BackendType AppConfig::backendTypeFromString(const std::string& type) {
-    if (type == "jellyfin") return media::BackendType::Jellyfin;
-    if (type == "emby") return media::BackendType::Emby;
-    if (type == "stremio") return media::BackendType::Stremio;
-    return media::BackendType::Plex;
+    if (type != "stremio") throw std::invalid_argument("Unsupported account type");
+    return media::BackendType::Stremio;
 }
 
 const std::vector<std::string>& AppConfig::getStremioAddons() const {
     static const std::vector<std::string> empty;
     if (this->user == this->users.end()) return empty;
     for (auto& s : this->servers)
-        if (s.id == this->user->server_id) return s.addons;
+        if (s.id == this->user->server_id && supportedStremioAccount(s)) return s.addons;
     return empty;
 }
 
 void AppConfig::setStremioAddons(const std::vector<std::string>& addons) {
     if (this->user == this->users.end()) return;
     for (auto& s : this->servers) {
-        if (s.id != this->user->server_id) continue;
+        if (s.id != this->user->server_id || !supportedStremioAccount(s)) continue;
         if (s.addons == addons) return;  // no disk write when nothing changed
         s.addons = addons;
         this->save();
@@ -765,57 +600,35 @@ void AppConfig::setStremioAddons(const std::vector<std::string>& addons) {
 }
 
 bool AppConfig::checkLogin() {
+    this->resetBackend();
+    this->server_url.clear();
+    this->server_token.clear();
     auto is_user = [this](const AppUser& u) { return u.id == this->user_id; };
     this->user = std::find_if(this->users.begin(), this->users.end(), is_user);
     if (this->user == this->users.end()) return false;
 
-    auto is_server = [this](const AppServer& s) { return s.id == this->user->server_id; };
-    auto it = std::find_if(this->servers.begin(), this->servers.end(), is_server);
-    if (it == this->servers.end() || it->urls.empty()) return false;
-
-    // Reconnect to a remembered endpoint. No dependency on plex.tv here: a
-    // reachable stored URL is enough. The candidates are raced in parallel so an
-    // unreachable LAN address no longer blocks a reachable remote/relay one while
-    // roaming (GH #36). Stremio has no single reachable "server" (it aggregates
-    // remote addons + an optional account); skip the probe, accept the stored one.
-    std::string url = it->type == "stremio" ? (it->urls.empty() ? std::string() : it->urls.front())
-                                            : plex::raceConnections(it->urls, it->access_token);
-    if (url.empty()) {
-        brls::Logger::warning("AppConfig checkLogin: aucun endpoint joignable pour {}", it->name);
+    const auto* selected = selectedStremioServer(this->servers, this->user->server_id);
+    if (!selected) {
+        this->user = this->users.end();
         return false;
     }
-    this->server_url = url;
-    this->server_token = it->access_token;
-    this->resetBackend();
-    this->applyTheme(backendTypeFromString(it->type));
-    if (url != it->urls.front()) {
-        AppServer front = *it;
-        front.urls = {url};
-        this->addServer(front);
-    }
+    this->server_url = selected->urls.front();
+    this->server_token = selected->access_token;
+    this->applyTheme(media::BackendType::Stremio);
     return true;
 }
 
 std::string AppConfig::configDir() { return dataDir(AppVersion::getPackageName()); }
 
 std::string AppConfig::ipcSocket() {
-#ifdef _WIN32
-    return "\\\\.\\pipe\\" + AppVersion::getPackageName();
-#else
     return fmt::format("{}/{}.sock", configDir(), AppVersion::getPackageName());
-#endif
 }
 
 void AppConfig::checkRestart(char* argv[]) {
-#if !defined(__PS4__) && !defined(__SWITCH__) && !defined(ANDROID)
+#if defined(GMCA_LINUX_TEST_BENCH)
     if (brls::DesktopPlatform::RESTART_APP) {
         brls::Logger::info("Restart app {}", argv[0]);
-
-#if defined(__PSV__)
-        sceAppMgrLoadExec(argv[0], argv, nullptr);
-#else
         execv(argv[0], argv);
-#endif
     }
 #endif
 }
@@ -849,12 +662,15 @@ int AppConfig::getValueIndex(const Item item, int default_index) const {
 }
 
 bool AppConfig::addServer(const AppServer& s) {
+    if (!supportedStremioAccount(s)) return false;
     if (s.urls.size() > 0) {
         this->server_url = s.urls.front();
     }
 
     for (auto& o : this->servers) {
-        if (s.id == o.id) {
+        if (s.id == o.id && o.type == "stremio") {
+            o.type = s.type;
+            o.addons = s.addons;
             if (!s.name.empty()) o.name = s.name;
             if (!s.access_token.empty()) o.access_token = s.access_token;
             this->server_token = o.access_token;
@@ -877,71 +693,39 @@ bool AppConfig::addServer(const AppServer& s) {
 }
 
 void AppConfig::addUser(const AppUser& u, const std::string& url) {
-    auto is_user = [u](const AppUser& o) { return o.id == u.id; };
+    const auto* server = selectedStremioServer(this->servers, u.server_id);
+    if (!server) return;
+    AppUser account = u;
+    // A fresh authenticated account must not overwrite a retained legacy profile
+    // just because the two services happened to use the same user identifier.
+    while (std::any_of(this->users.begin(), this->users.end(), [this, &account](const AppUser& existing) {
+        return existing.id == account.id && !selectedStremioServer(this->servers, existing.server_id);
+    })) account.id = "stremio:" + account.id;
+    auto is_user = [this, account](const AppUser& o) {
+        return o.id == account.id && selectedStremioServer(this->servers, o.server_id);
+    };
     auto it = std::find_if(this->users.begin(), this->users.end(), is_user);
     if (it != this->users.end()) {
-        it->name = u.name;
-        it->access_token = u.access_token;
-        it->server_id = u.server_id;
-        it->thumb = u.thumb;
+        it->name = account.name;
+        it->access_token = account.access_token;
+        it->server_id = account.server_id;
+        it->thumb = account.thumb;
     } else {
-        it = this->users.insert(it, u);
+        it = this->users.insert(it, account);
     }
     this->server_url = url;
-    this->user_id = u.id;
+    this->user_id = account.id;
     this->user = it;
     // keeps the active server token in sync with the active user
-    std::string activeType = "plex";
-    for (auto& s : this->servers) {
-        if (s.id == u.server_id) {
-            this->server_token = s.access_token;
-            activeType = s.type;
-        }
-    }
+    this->server_token = server->access_token;
     this->resetBackend();
-    this->applyTheme(backendTypeFromString(activeType));
-    this->save();
-}
-
-void AppConfig::upsertServer(const AppServer& s) {
-    // Like addServer but never touches the active server_url/server_token: this
-    // registers a server we are NOT switching to. On an existing entry, refresh
-    // name/token and merge any new candidate urls, keeping the current ordering
-    // so a previously resolved (reachable) front url survives.
-    for (auto& o : this->servers) {
-        if (s.id == o.id) {
-            if (!s.name.empty()) o.name = s.name;
-            if (!s.access_token.empty()) o.access_token = s.access_token;
-            for (auto& u : s.urls) {
-                if (std::find(o.urls.begin(), o.urls.end(), u) == o.urls.end()) o.urls.push_back(u);
-            }
-            this->save();
-            return;
-        }
-    }
-    this->servers.push_back(s);
-    this->save();
-}
-
-void AppConfig::upsertUser(const AppUser& u) {
-    // Like addUser but never sets the active profile: registers a connection
-    // tile without switching to it.
-    auto is_user = [u](const AppUser& o) { return o.id == u.id; };
-    auto it = std::find_if(this->users.begin(), this->users.end(), is_user);
-    if (it != this->users.end()) {
-        it->name = u.name;
-        it->access_token = u.access_token;
-        it->server_id = u.server_id;
-        it->thumb = u.thumb;
-    } else {
-        this->users.push_back(u);
-    }
+    this->applyTheme(media::BackendType::Stremio);
     this->save();
 }
 
 bool AppConfig::removeServer(const std::string& id) {
     for (auto it = this->servers.begin(); it != this->servers.end(); ++it) {
-        if (it->id == id) {
+        if (it->id == id && supportedStremioAccount(*it)) {
             this->servers.erase(it);
             this->save();
             return this->servers.empty();
@@ -950,59 +734,15 @@ bool AppConfig::removeServer(const std::string& id) {
     return false;
 }
 
-void AppConfig::addRemote(const AppRemote& r) {
-    this->remotes.push_back(r);
-    this->save();
-}
-
-void AppConfig::updateRemote(size_t index, const AppRemote& r) {
-    if (index >= this->remotes.size()) return;
-    this->remotes[index] = r;
-    this->save();
-}
-
-void AppConfig::removeRemote(size_t index) {
-    if (index >= this->remotes.size()) return;
-    this->remotes.erase(this->remotes.begin() + index);
-    this->save();
-}
-
-bool AppConfig::isPinned(const std::string& path) const {
-    return std::find(this->pins.begin(), this->pins.end(), path) != this->pins.end();
-}
-
-void AppConfig::addPin(const std::string& path) {
-    if (path.empty() || this->isPinned(path)) return;
-    this->pins.push_back(path);
-    this->save();
-}
-
-void AppConfig::removePin(const std::string& path) {
-    auto it = std::find(this->pins.begin(), this->pins.end(), path);
-    if (it == this->pins.end()) return;
-    this->pins.erase(it);
-    this->save();
-}
-
 bool AppConfig::removeUser(const std::string& id) {
     for (auto it = this->users.begin(); it != this->users.end(); ++it) {
-        if (it->id == id) {
+        if (it->id == id && selectedStremioServer(this->servers, it->server_id)) {
             this->users.erase(it);
             this->save();
             return true;
         }
     }
     return false;
-}
-
-const std::vector<AppUser> AppConfig::getUsers(const std::string& id) const {
-    std::vector<AppUser> users;
-    for (auto& u : this->users) {
-        if (u.server_id == id) {
-            users.push_back(u);
-        }
-    }
-    return users;
 }
 
 void AppConfig::addColor(const brls::ThemeVariant tv, const std::string& name, NVGcolor defaultColor) {
@@ -1127,29 +867,8 @@ void AppConfig::initThemes() {
     // checkLogin()/addUser() re-apply the connected backend's palette afterwards.
     this->applyTheme(std::nullopt);
 
-    if (brls::Application::ORIGINAL_WINDOW_HEIGHT == 544) {
-        brls::getStyle().addMetric("app/album/height", 215);
-        brls::getStyle().addMetric("app/books/height", 270);
-        brls::getStyle().addMetric("app/video/height", 290);
-        // row = width x image ratio (poster 2:3 = 1.5, wide 16:9 = 0.5625)
-        // + 55 of label area (margin 10 + title 25 + subtitle 20), so the
-        // image fill keeps exactly the media's ratio
-        brls::getStyle().addMetric("app/card/poster/width", 150);
-        brls::getStyle().addMetric("app/card/poster/row", 280);
-        brls::getStyle().addMetric("app/card/wide/width", 280);
-        brls::getStyle().addMetric("app/card/wide/row", 213);
-        brls::getStyle().addMetric("app/grid/6", 5);
-        brls::getStyle().addMetric("app/grid/5", 4);
-        brls::getStyle().addMetric("app/grid/4", 3);
-        brls::getStyle().addMetric("app/grid/3", 2);
-        brls::getStyle().addMetric("app/grid/2", 1);
-        brls::getStyle().addMetric("brls/tab_frame/content_padding_sides", 30);
-        brls::getStyle().addMetric("main/content_padding_sides", 15);
-        brls::getStyle().addMetric("main/content_padding_top_bottom", 20);
-    } else {
-        // Grids lightened by one column compared to Switchfin: bigger
-        // posters, readable from the couch (UI_REDESIGN.md §4).
-        switch (brls::Application::ORIGINAL_WINDOW_HEIGHT) {
+    // Posters, readable from the couch (UI_REDESIGN.md §4).
+    switch (brls::Application::ORIGINAL_WINDOW_HEIGHT) {
         case 1080:
             brls::getStyle().addMetric("app/album/height", 250);
             brls::getStyle().addMetric("app/books/height", 320);
@@ -1182,7 +901,7 @@ void AppConfig::initThemes() {
             brls::getStyle().addMetric("app/album/height", 225);
             brls::getStyle().addMetric("app/books/height", 280);
             brls::getStyle().addMetric("app/video/height", 300);
-            // row = width x image ratio + 55 of labels (cf. PSV block)
+            // row = width x image ratio + 55 of labels (shared grid layout)
             brls::getStyle().addMetric("app/card/poster/width", 185);
             brls::getStyle().addMetric("app/card/poster/row", 333);
             brls::getStyle().addMetric("app/card/wide/width", 340);
@@ -1192,10 +911,9 @@ void AppConfig::initThemes() {
             brls::getStyle().addMetric("app/grid/4", 4);
             brls::getStyle().addMetric("app/grid/3", 3);
             brls::getStyle().addMetric("app/grid/2", 2);
-        }
-        brls::getStyle().addMetric("main/content_padding_sides", 40);
-        brls::getStyle().addMetric("main/content_padding_top_bottom", 30);
     }
+    brls::getStyle().addMetric("main/content_padding_sides", 40);
+    brls::getStyle().addMetric("main/content_padding_top_bottom", 30);
 
     // UI redesign (UI_REDESIGN.md §3.2-3.3): bare and larger section titles
     // (the decorative bar of brls::Header disappears), rounded focus halo

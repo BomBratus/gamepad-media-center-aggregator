@@ -3,7 +3,7 @@
 /*
     ImageCache — on-disk cache of artwork so fiches render without the server
     (SPEC §4.2). Keyed by the raw path/URL passed to Image::load (a relative
-    Plex path such as item.thumb/art/clearLogo, or an absolute http URL such as
+    media path such as item.thumb/art/clearLogo, or an absolute http URL such as
     a tmdb cast face). Files live under {config}/downloads/art/{key}.
 
     A locally cached asset is preferred by Image::load even online, giving

@@ -1,18 +1,4 @@
-/*
-    GMCA — Stremio implementation of media::Backend.
-    Translates the Stremio addon protocol (manifests, catalogs, meta, episodes,
-    streams, subtitles) into the neutral media:: model. Stateless, multi-addon: an
-    AddonEngine aggregates the configured addons and routes each request. The
-    addons are unauthenticated; the account token only drives the library sync.
-
-    SCOPE: navigation (catalogs as Sections/Hubs, item detail, seasons, episodes,
-    search), playback (resolvePlayback + external subtitles via getSubtitles), and
-    account actions (watchlist, watched flag, progress) when connected. See
-    MULTI_BACKEND.md.
-
-    Identity: Item::ratingKey is the OPAQUE "{stremioType}:{stremioId}" codec
-    (stremio/types.hpp). Stremio images are ABSOLUTE URLs, passed through verbatim.
-*/
+/* GMCA media models and playback. Persisted field names remain compatible. */
 
 #pragma once
 

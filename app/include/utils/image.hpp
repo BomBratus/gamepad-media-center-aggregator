@@ -32,8 +32,8 @@ public:
         // (SPEC §4.2, AC6/AC17). Keyed by the raw path/url passed here.
         if (ImageCache::has(path)) {
             std::string local = ImageCache::localPath(path);
-#if defined(__PS4__) || defined(BOREALIS_USE_GXM)
-            // PS4 and GXM: run cached assets through the same decode/downscale
+#if defined(__PS4__)
+            // PS4: run cached assets through the same decode/downscale
             // and upload path as network images. setImageFromFile would upload
             // the native-resolution file directly, bypassing those limits.
             withLocal(view, local, width, height);
@@ -42,23 +42,20 @@ public:
 #endif
             return;
         }
-        // backend-specific URL building (Plex /photo/:/transcode, Jellyfin /Images...);
-        // absolute external paths (cast faces...) are returned unchanged by the backend
         std::string url = AppConfig::instance().backend().imageUrl(path, width, height);
         // width/height are also forwarded to the decoder: backends that can't
         // resize server-side (Stremio's absolute Cinemeta/RPDB urls) still get
         // the artwork downscaled to its display size before the GPU upload, so a
         // 580x859 RPDB poster becomes a 512² texture instead of a 1024² one — the
-        // Vita GPU-memory exhaustion behind the overview crash (GXM only).
         if (!url.empty()) with(view, url, width, height);
     }
 
     /// @brief 设置要加载内容的图片组件。此函数需要工作在主线程。
-    /// width/height (>0) = intended display size, used by GXM and PS4 to cap
+    /// width/height (>0) = intended display size, used on PS4 to cap
     /// the decoded texture before upload.
     static void with(brls::Image* view, const std::string& url, int width = 0, int height = 0);
 
-#if defined(__PS4__) || defined(BOREALIS_USE_GXM)
+#if defined(__PS4__)
     /// Cached-file path: like with(), but reads pixels from disk instead of the
     /// network and runs them through doRequest's platform-specific size limits
     /// and upload path. Main thread.

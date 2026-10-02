@@ -4,8 +4,9 @@
     X/long-press context menu included (video_card.cpp).
 */
 
+#include "utils/config.hpp"
 #include "tab/hub_view.hpp"
-#include "api/plex.hpp"
+#include "api/backend.hpp"
 #include "api/backend.hpp"
 #include "view/recycling_grid.hpp"
 #include "view/video_card.hpp"
@@ -48,8 +49,6 @@ brls::View* HubView::getDefaultFocus() { return this->recycler; }
 
 void HubView::doRequest() {
     ASYNC_RETAIN
-    // requested offset, not r.StartIndex: Jellyfin/Emby omit StartIndex on an
-    // empty past-the-end page (it parses to 0) and would wipe a filled grid
     size_t reqStart = this->startIndex;
     AppConfig::instance().backend().getHubPage(this->hubKey, this->startIndex, this->pageSize,
         [ASYNC_TOKEN, reqStart](const media::Container<media::Item>& r) {
