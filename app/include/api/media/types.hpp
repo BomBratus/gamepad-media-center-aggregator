@@ -298,6 +298,7 @@ struct Item {
     std::vector<Media> media;
     // False only for a Stremio saved-provider fast path; alternatives remain lazy.
     bool sourcesComplete = true;
+    std::vector<std::string> sourceLookupIds; // transient provider IDs for completing source lookup
     std::vector<Chapter> chapters;
     std::vector<Marker> markers;
 

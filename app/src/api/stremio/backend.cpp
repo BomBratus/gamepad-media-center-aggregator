@@ -2,6 +2,7 @@
 
 #include "api/stremio/backend.hpp"
 #include "api/stremio/types.hpp"
+#include "api/stremio/stream_ids.hpp"
 #include "api/stremio/catalog_navigation.hpp"
 #include "api/stremio/catalog_aggregation.hpp"
 #include "api/stremio/episode_continuation.hpp"
@@ -822,7 +823,7 @@ media::Stream subtitleOptionToStream(const SubtitleOption& sub) {
 /// here as a playable Direct/Debrid row; infoHash-only/ytId/externalUrl stay
 /// non-playable (no local torrent client / browser on console).
 std::vector<media::Media> resolveAllStreams(
-    AddonEngine& engine, const std::string& stremioType, const std::string& stremioId,
+    AddonEngine& engine, const std::string& stremioType, const std::vector<std::string>& ids,
     const std::string& savedIdentity = "", bool* complete = nullptr,
     std::vector<media::Media> known = {}) {
     std::vector<media::Media> all = std::move(known);
@@ -834,19 +835,31 @@ std::vector<media::Media> resolveAllStreams(
         } catch (...) {}
     }
     if (complete) *complete = true;
-    auto providers = engine.addonsFor("stream", stremioType, stremioId);
+    struct Request {
+        Addon addon;
+        std::string url;
+    };
+    std::vector<Request> providers;
     std::map<std::string, size_t> providerOrder;
-    for (size_t i = 0; i < providers.size(); ++i)
-        providerOrder[engine.resourceUrl(providers[i], "stream", stremioType, stremioId)] = i;
+    std::set<std::string> served;
+    for (const auto& id : ids) {
+        for (const auto& addon : engine.addonsFor("stream", stremioType, id)) {
+            const auto url = engine.resourceUrl(addon, "stream", stremioType, id);
+            providerOrder[url] = providers.size();
+            providers.push_back({addon, url});
+            if (knownRequests.count(url)) served.insert(addon.transportUrl);
+        }
+    }
     const std::string preferredRequest = savedProviderRequest(savedIdentity);
     if (!preferredRequest.empty()) {
-        std::stable_partition(providers.begin(), providers.end(), [&](const Addon& addon) {
-            return engine.resourceUrl(addon, "stream", stremioType, stremioId) == preferredRequest;
+        std::stable_partition(providers.begin(), providers.end(), [&](const Request& request) {
+            return request.url == preferredRequest;
         });
     }
-    for (auto& a : providers) {
-        std::string url = engine.resourceUrl(a, "stream", stremioType, stremioId);
-        if (knownRequests.count(url)) continue;
+    for (const auto& request : providers) {
+        const auto& a = request.addon;
+        const auto& url = request.url;
+        if (knownRequests.count(url) || served.count(a.transportUrl)) continue;
         std::vector<StreamOption> streams;
         try {
             streams = parseStreams(getSync(url, streamRequestTimeout()));
@@ -854,6 +867,7 @@ std::vector<media::Media> resolveAllStreams(
             brls::Logger::warning("stremio stream {}: {}", redactUrlForLog(url), ex.what());
             continue;
         }
+        if (!streams.empty()) served.insert(a.transportUrl);
         for (size_t release = 0; release < streams.size(); ++release) {
             const auto& s = streams[release];
             media::Media media = streamToMedia(s, a.manifest.name);
@@ -1535,7 +1549,9 @@ void StremioBackend::completePlaybackSources(media::Item item,
         try {
             engine->ensureLoaded();
             const auto id = parseId(item.ratingKey);
-            item.media = resolveAllStreams(*engine, id.stremioType, id.stremioId, "", nullptr, std::move(item.media));
+            item.media = resolveAllStreams(*engine, id.stremioType,
+                item.sourceLookupIds.empty() ? std::vector<std::string>{id.stremioId} : item.sourceLookupIds,
+                "", nullptr, std::move(item.media));
             item.sourcesComplete = true;
             brls::sync([then, item = std::move(item)]() mutable { then(std::move(item)); });
         } catch (const std::exception& ex) {
@@ -1620,7 +1636,8 @@ void StremioBackend::getDetail(
                     auto source = record.find("source");
                     if (source != record.end() && source->is_object()) savedIdentity = jstr(*source, "identity");
                 }
-                out.media = resolveAllStreams(*engine, streamType, sp.stremioId, savedIdentity, &out.sourcesComplete);
+                out.sourceLookupIds = streamLookupIds(streamType, sp.stremioId, metaObj);
+                out.media = resolveAllStreams(*engine, streamType, out.sourceLookupIds, savedIdentity, &out.sourcesComplete);
             }
             if (playable) {
                 const ParsedId progressId = parseId(ratingKey);
