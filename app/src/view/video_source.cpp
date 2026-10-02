@@ -69,7 +69,7 @@ void showStremioResumeSourcePicker(const media::Item& card, int64_t seekMs, bool
                 return;
             }
             auto* picker = new brls::Dropdown("main/stremio/playback/choose_source"_i18n, choices,
-                [play, playable](int selected) {
+                [](int) {}, 0, [play, playable](int selected) {
                     if (selected < 0 || selected >= (int)playable.size()) return;
                     play(playable[(size_t)selected]);
                 });
