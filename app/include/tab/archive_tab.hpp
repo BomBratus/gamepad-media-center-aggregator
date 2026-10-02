@@ -37,4 +37,5 @@ private:
     int64_t refreshed = -1;
     bool loading = false, refreshing = false;
     stremio::archive::Options options;
+    std::shared_ptr<const stremio::archive::Snapshot> browseSnapshot;
 };

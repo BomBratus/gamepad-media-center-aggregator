@@ -6,12 +6,15 @@
 
 namespace stremio::archive {
 
+struct Snapshot;
+
 struct Options {
     std::vector<std::string> genres, countries, addons, services;
     bool hasViews = false;
 };
 struct Result {
     std::vector<media::Item> items;
+    std::shared_ptr<const Snapshot> snapshot;
     Options options;
     size_t total = 0, indexed = 0;
     int64_t refreshed = 0;
@@ -26,7 +29,7 @@ public:
     static Cache& instance();
     void refresh(bool force = false);
     void query(const Filter& filter, size_t offset, size_t limit, bool random,
-        std::function<void(Result)> callback);
+        std::function<void(Result)> callback, std::shared_ptr<const Snapshot> snapshot = {});
 private:
     Cache();
     struct State;

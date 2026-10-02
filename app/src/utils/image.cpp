@@ -1,5 +1,12 @@
 #include "utils/image.hpp"
 #include "utils/thread.hpp"
+#if defined(__PS4__)
+#include "utils/artwork_cache.hpp"
+static ArtworkCache& artworkCache() {
+    static ArtworkCache cache(AppConfig::instance().configDir() + "/cache/artwork");
+    return cache;
+}
+#endif
 #include <fstream>
 #include <vector>
 #include <fmt/format.h>
@@ -217,6 +224,7 @@ void Image::doRequest(HTTP& s) {
     }
     try {
         std::string data;
+        [[maybe_unused]] bool fromNetwork = false;
         if (this->local) {
             // offline: read the cached asset straight off disk — no server, no
             // curl handle touched (getinfo below would deref a NULL type on it).
@@ -226,10 +234,16 @@ void Image::doRequest(HTTP& s) {
             data = body.str();
             if (data.empty()) throw std::runtime_error("empty or unreadable cache file");
         } else {
-            std::ostringstream body;
-            HTTP::set_option(s, requestCancel, imageRequestTimeout());
-            s._get(this->url, &body);
-            data = body.str();
+#if defined(__PS4__)
+            data = artworkCache().read(this->url);
+#endif
+            if (data.empty()) {
+                std::ostringstream body;
+                HTTP::set_option(s, requestCancel, imageRequestTimeout());
+                s._get(this->url, &body);
+                data = body.str();
+                fromNetwork = true;
+            }
         }
         uint8_t* imageData = nullptr;
         int imageW = 0, imageH = 0;
@@ -242,7 +256,7 @@ void Image::doRequest(HTTP& s) {
         bool webpMagic = data.size() >= 12 && memcmp(data.data(), "RIFF", 4) == 0 &&
                          memcmp(data.data() + 8, "WEBP", 4) == 0;
         if (webpMagic || url.find("Webp") != std::string::npos ||
-            (!this->local && s.getinfo(&ct) && ct != nullptr && strcmp(ct, "image/webp") == 0)) {
+            (fromNetwork && s.getinfo(&ct) && ct != nullptr && strcmp(ct, "image/webp") == 0)) {
             imageData = WebPDecodeRGBA((const uint8_t*)data.c_str(), data.size(), &imageW, &imageH);
             isWebp = true;
         } else
@@ -253,6 +267,7 @@ void Image::doRequest(HTTP& s) {
         }
 
 #if defined(__PS4__)
+        if (imageData && fromNetwork && !requestCancel->load()) artworkCache().store(this->url, data);
         if (imageData && imageW > 0 && imageH > 0) {
             int tW = this->targetW;
             int tH = this->targetH;

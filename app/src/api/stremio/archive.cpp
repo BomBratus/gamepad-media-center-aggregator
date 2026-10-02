@@ -1,6 +1,6 @@
 #include "api/stremio/archive.hpp"
 #include "api/stremio/archive_storage.hpp"
-#include "api/stremio/types.hpp"
+#include "api/stremio/archive_catalog.hpp"
 #include "utils/config.hpp"
 #include "utils/thread.hpp"
 #include <borealis/core/thread.hpp>
@@ -112,8 +112,8 @@ void Cache::refresh(bool force) {
             std::lock_guard<std::mutex> guard(job->mutex);
             old = job->snapshot;
             const auto time = now();
-            if (!force && ((old->refreshed && time - old->refreshed < 3 * 86400) || time - job->attempted < 600)) {
-                job->nextCheck = old->refreshed && time - old->refreshed < 3 * 86400 ? old->refreshed + 3 * 86400 : job->attempted + 600;
+            if (!force && ((old->crawlVersion == 2 && old->crawlFinished && old->refreshed && time - old->refreshed < 3 * 86400) || time - job->attempted < 600)) {
+                job->nextCheck = old->crawlVersion == 2 && old->crawlFinished && old->refreshed && time - old->refreshed < 3 * 86400 ? old->refreshed + 3 * 86400 : job->attempted + 600;
                 job->refreshing = false;
                 return;
             }
@@ -123,9 +123,12 @@ void Cache::refresh(bool force) {
         }
         try {
             Snapshot next = *old;
+            if (next.crawlVersion != 2 || next.crawlFinished) next.crawl = Json::object();
+            next.crawlVersion = 2;
+            next.crawlFinished = false;
             std::unordered_map<std::string, size_t> ids;
             for (size_t i = 0; i < next.records.size(); ++i) ids[identity(next.records[i].meta)] = i;
-            bool partial = false, received = false, failed = false;
+            bool partial = false, received = false, failed = false, limited = false;
             size_t requests = 0;
             const auto started = std::chrono::steady_clock::now();
             auto checkpointAt = started;
@@ -136,28 +139,38 @@ void Cache::refresh(bool force) {
                     auto manifest = parseManifest(fetch(transport, job->cancelled));
                     for (const auto& catalog : manifest.catalogs) {
                         if (!catalog.browsable || (catalog.type != "movie" && catalog.type != "series")) continue;
+                        auto variants = catalogVariants(catalog);
+                        if (variants.empty()) { partial = true; continue; }
+                        for (const auto& genre : variants) {
+                        if (limited) break;
                         try {
-                        size_t skip = 0;
-                        std::set<std::string> seen;
+                        // Only indices/descriptors are persisted, never addon credentials.
+                        auto key = Json::array({std::distance(job->transports.begin(), std::find(job->transports.begin(), job->transports.end(), transport)), catalog.type, catalog.id, genre}).dump();
+                        auto& cursor = next.crawl[key];
+                        if (!cursor.is_object()) cursor = {{"skip", 0}, {"done", false}};
+                        if (media::jbool(cursor, "done")) continue;
+                        size_t skip = media::jint(cursor, "skip");
+                        std::set<std::string> pages;
+                        if (cursor.contains("lastPage") && cursor["lastPage"].is_string()) pages.insert(cursor["lastPage"].get<std::string>());
                         for (;;) {
                             if (job->cancelled->load()) return;
                             if (++requests > 2000 || std::chrono::steady_clock::now() - started > std::chrono::minutes(30)) {
-                                partial = true; break;
+                                partial = true; limited = true; break;
                             }
-                            std::string url = baseFromTransport(transport) + "/catalog/" + catalog.type + "/" + encodeURIComponent(catalog.id);
-                            if (skip) url += "/skip=" + std::to_string(skip);
-                            url += ".json";
+                            auto url = catalogUrl(transport, catalog, genre, skip);
                             auto page = fetch(url, job->cancelled);
                             auto metas = page.find("metas");
                             if (metas == page.end() || !metas->is_array()) throw std::runtime_error("Invalid catalog response");
-                            if (metas->empty()) break;
-                            size_t discovered = 0;
+                            received = true; // an empty final page is a successful response
+                            if (metas->empty()) { cursor["done"] = true; break; }
+                            Json pageIds = Json::array();
+                            for (const auto& raw : *metas) if (raw.is_object()) pageIds.push_back(media::jstr(raw, "id"));
+                            auto signature = pageIds.dump();
+                            if (!pages.insert(signature).second) { cursor["done"] = true; cursor["partial"] = true; partial = true; break; }
                             for (const auto& raw : *metas) {
                                 if (!raw.is_object() || media::jstr(raw, "id").empty()) continue;
                                 auto meta = compact(raw, catalog.type);
                                 auto id = identity(meta);
-                                if (!seen.insert(id).second) continue;
-                                ++discovered;
                                 auto existing = ids.find(id);
                                 if (existing == ids.end()) {
                                     if (next.records.size() >= MAX_RECORDS) { partial = true; continue; }
@@ -175,6 +188,11 @@ void Cache::refresh(bool force) {
                                 }
                                 received = true;
                             }
+                            skip += metas->size();
+                            cursor["skip"] = skip;
+                            cursor["lastPage"] = signature;
+                            if (page.contains("hasMore") && !media::jbool(page, "hasMore")) cursor["done"] = true;
+                            if (!catalog.hasSkip()) { cursor["done"] = true; cursor["partial"] = true; partial = true; }
                             if (next.records.size() >= checkpointSize + 1000 ||
                                 std::chrono::steady_clock::now() - checkpointAt > std::chrono::seconds(60)) {
                                 // Persist progress so an interrupted first download remains useful.
@@ -188,26 +206,26 @@ void Cache::refresh(bool force) {
                                 checkpointSize = next.records.size();
                                 checkpointAt = std::chrono::steady_clock::now();
                             }
-                            // Misbehaving addons sometimes ignore skip; never loop forever.
-                            if (!discovered) { partial = true; break; }
-                            if (page.contains("hasMore") && !media::jbool(page, "hasMore")) break;
-                            if (!catalog.hasSkip()) { partial = true; break; }
-                            skip += metas->size(); // server page size, not our grid's page size
+                            if (media::jbool(cursor, "done")) break;
                             std::this_thread::sleep_for(std::chrono::milliseconds(150));
                         }
                         } catch (...) { partial = true; failed = true; }
+                        }
+                        if (limited) break;
                     }
                 } catch (...) { partial = true; failed = true; }
                 if (requests > 2000 || std::chrono::steady_clock::now() - started > std::chrono::minutes(30)) break;
             }
-            if (!received) throw std::runtime_error("No catalogs available");
+            if (!received && next.crawl.empty()) throw std::runtime_error("No catalogs available");
             if (job->cancelled->load()) return;
+            for (const auto& cursor : next.crawl) if (media::jbool(cursor, "partial")) partial = true;
             next.partial = partial;
-            next.refreshed = failed ? old->refreshed : now();
+            next.crawlFinished = !failed && !limited;
+            next.refreshed = next.crawlFinished ? now() : old->refreshed;
             writeSnapshot(job->path, next);
             std::lock_guard<std::mutex> guard(job->mutex);
             job->snapshot = std::make_shared<Snapshot>(std::move(next));
-            if (!failed) job->nextCheck = now() + 3 * 86400;
+            job->nextCheck = now() + (failed || limited ? 600 : 3 * 86400);
             if (partial) job->error = "main/archive/partial";
         } catch (...) {
             std::lock_guard<std::mutex> guard(job->mutex);
@@ -217,16 +235,16 @@ void Cache::refresh(bool force) {
     });
 }
 
-void Cache::query(const Filter& filter, size_t offset, size_t limit, bool random, std::function<void(Result)> callback) {
+void Cache::query(const Filter& filter, size_t offset, size_t limit, bool random, std::function<void(Result)> callback, std::shared_ptr<const Snapshot> snapshot) {
     auto job = current();
-    brls::async([job, filter, offset, limit, random, callback] {
+    brls::async([job, filter, offset, limit, random, callback, snapshot] {
         Result result;
         try {
             job->load();
             std::shared_ptr<const Snapshot> data;
             {
                 std::lock_guard<std::mutex> guard(job->mutex);
-                data = job->snapshot;
+                data = snapshot ? snapshot : job->snapshot;
                 result.error = job->error;
             }
             result.indexed = data->records.size(); result.refreshed = data->refreshed;
@@ -236,6 +254,7 @@ void Cache::query(const Filter& filter, size_t offset, size_t limit, bool random
                 brls::sync([callback, result = std::move(result)]() mutable { callback(std::move(result)); });
                 return;
             }
+            result.snapshot = data; // subsequent pages use the same ordering during a crawl
             std::set<std::string> gs, cs, as, ss;
             for (const auto& record : data->records) {
                 for (const auto& value : genres(record)) if (!value.empty()) gs.insert(value);

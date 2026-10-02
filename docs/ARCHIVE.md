@@ -6,10 +6,12 @@ at startup when three days old, with an hourly age check while GMCA stays open.
 The console cannot run this job after GMCA closes. No TV-box service is needed.
 
 The downloader enumerates the configured addons' browsable movie/series
-catalogs. It advances `skip` by the actual number of returned previews,
+catalogs, including declared genre/year variants. Required genre/year extras
+are supplied rather than fetching an invalid unfiltered endpoint. It advances `skip` by the actual number of returned previews,
 recognizes `hasMore: false`, and stops repeated pages from addons ignoring
 pagination. A title is identified by `(Stremio type, id)` and deduplicated across
-catalogs; its catalog-addon provenance is retained. Unavailable catalogs do not
+catalogs; its catalog-addon provenance is retained. Fully overlapping pages
+remain valid; repeated page identities terminate misbehaving pagination. Unavailable catalogs do not
 prevent other catalogs from being indexed. This is the set of titles the addons
 expose for enumeration, not a promise to contain every title in existence.
 
@@ -34,7 +36,9 @@ credentials do not appear in filenames or new diagnostic messages. Cached
 metadata is intentionally compact and does not contain resolved stream URLs.
 Writes replace the previous file atomically. Progress is checkpointed every
 1,000 new titles or 60 seconds; a cancelled first download can retain useful
-partial data. Existing entries remain available during refreshes and provider
+partial data. The next offset and completed slices are saved with the records,
+so retries and app restarts continue the crawl. Existing caches automatically
+receive the expanded enumeration without deleting their titles. Existing entries remain available during refreshes and provider
 outages. A changed profile/addon configuration cancels the old job; shutdown
 also cancels its HTTP requests before the HTTP pool is joined.
 
@@ -43,8 +47,17 @@ requests are serial, with a short pause between pages. Limits of 50,000 records,
 64 MiB of serialized metadata, 2,000 page requests and 30 minutes per pass keep
 console memory, disk and network work bounded. Incomplete enumeration is labelled
 **Partial catalog coverage**. Failed network passes retry with a ten-minute
-backoff while Archive is open; successful limited passes use the normal three-day
-schedule. Metadata already archived is retained when a provider later omits it.
+backoff while Archive is open; passes stopped by time/request budgets also resume after that backoff. Completed
+passes use the normal three-day schedule. Metadata already archived is retained when a provider later omits it.
+
+Progress-label updates leave a populated grid in place during the crawl; they
+do not keep recycling cards and cancelling poster requests. Paged browsing
+keeps one snapshot/order until refresh finishes, avoiding duplicates while new
+records arrive. PS4 browsing
+artwork is saved from successful image downloads in a separate cache under
+`cache/artwork`, limited to 128 MiB and 1,000 files with oldest-file eviction.
+Reopening the app reuses these bytes. Downloaded media's permanent offline art
+is separate. The first load still depends on the artwork provider/network.
 
 Focused standalone checks:
 

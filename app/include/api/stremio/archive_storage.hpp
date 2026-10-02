@@ -11,6 +11,9 @@ struct Snapshot {
     std::vector<Record> records;
     int64_t refreshed = 0;
     bool partial = false;
+    Json crawl = Json::object(); // slice key -> next skip and last-page identities
+    bool crawlFinished = false;
+    int crawlVersion = 0;
 };
 
 inline Snapshot readSnapshot(const std::string& path) {
@@ -25,13 +28,17 @@ inline Snapshot readSnapshot(const std::string& path) {
     Snapshot result;
     result.refreshed = media::jint(json, "refreshed");
     result.partial = media::jbool(json, "partial");
+    result.crawlVersion = media::jint(json, "crawlVersion");
+    result.crawlFinished = media::jbool(json, "crawlFinished");
+    if (json.contains("crawl") && json["crawl"].is_object()) result.crawl = json["crawl"];
     for (const auto& row : json.at("records")) result.records.push_back(deserialize(row));
     return result;
 }
 
 // The previous cache remains intact if encoding, writing or rename fails.
 inline void writeSnapshot(const std::string& path, const Snapshot& snapshot) {
-    Json json = {{"version", 1}, {"refreshed", snapshot.refreshed}, {"partial", snapshot.partial}, {"records", Json::array()}};
+    Json json = {{"version", 1}, {"refreshed", snapshot.refreshed}, {"partial", snapshot.partial}, {"records", Json::array()},
+        {"crawl", snapshot.crawl}, {"crawlFinished", snapshot.crawlFinished}, {"crawlVersion", snapshot.crawlVersion}};
     for (const auto& record : snapshot.records) json["records"].push_back(serialize(record));
     auto bytes = json.dump();
     if (snapshot.records.size() > MAX_RECORDS || bytes.size() > MAX_CACHE_BYTES) throw std::runtime_error("Archive cache too large");

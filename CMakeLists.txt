@@ -109,7 +109,7 @@ set(PROJECT_AUTHOR "thcolin")
 set(PACKAGE_NAME "fun.thcolin.gmca")
 set(PSN_TITLE_ID "GMCA00000")
 # PS4 package revision currently published by the rolling in-app update feed.
-set(PS4_VERSION "00.86")
+set(PS4_VERSION "00.87")
 # Stable identity is required for package updates over the installed PS4 title.
 set(PS4_CONTENT_ID "IV0001-GMCA00000_00-GMCA000000006700")
 set(PROJECT_ICON ${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/icon.jpg)

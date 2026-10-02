@@ -108,7 +108,7 @@ void ArchiveTab::updateStatus(const Result& result) {
 
 void ArchiveTab::request(bool reset, bool random) {
     if (!reset && !random && loading) return;
-    if (reset) { offset = 0; ++generation; }
+    if (reset) { offset = 0; browseSnapshot.reset(); ++generation; }
     const auto version = generation;
     const auto start = offset;
     loading = true;
@@ -122,6 +122,7 @@ void ArchiveTab::request(bool reset, bool random) {
             else { VideoDataSource source(result.items); source.onItemSelected(this, 0); }
             return;
         }
+        browseSnapshot = result.snapshot;
         indexed = result.indexed; refreshed = result.refreshed; refreshing = result.refreshing;
         total = result.total;
         // Recycler callbacks can run during reload; advance first so the last
@@ -139,7 +140,7 @@ void ArchiveTab::request(bool reset, bool random) {
             auto* source = dynamic_cast<VideoDataSource*>(grid->getDataSource());
             if (source) { source->appendData(result.items); grid->notifyDataChanged(); }
         }
-    });
+    }, random ? nullptr : browseSnapshot);
 }
 
 void ArchiveTab::poll() {
@@ -149,7 +150,7 @@ void ArchiveTab::poll() {
         Cache::instance().query(filter, 0, 0, false, [ASYNC_TOKEN](Result result) {
             ASYNC_RELEASE
             if (!loading) {
-                if (result.indexed != indexed || result.refreshed != refreshed || (!result.refreshing && refreshing)) request();
+                if ((total == 0 && result.indexed != indexed) || (!result.refreshing && (refreshing || result.refreshed != refreshed || result.indexed != indexed))) request();
                 else {
                     // A progress-label change alone must not reset the user's
                     // grid position or discard pages while they are browsing.

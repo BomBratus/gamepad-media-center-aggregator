@@ -308,6 +308,7 @@ struct Catalog {
     // last-videos / calendar-videos need lastVideosIds / calendarVideosIds): it
     // is not browsable as a plain grid and must be hidden from the UI.
     bool browsable = true;
+    bool genreRequired = false;
 
     bool hasSearch() const {
         return std::find(extraSupported.begin(), extraSupported.end(), "search") != extraSupported.end();
@@ -375,6 +376,7 @@ inline Catalog parseCatalogDescriptor(const nlohmann::json& j) {
             if (!name.empty() &&
                 std::find(c.extraSupported.begin(), c.extraSupported.end(), name) == c.extraSupported.end())
                 c.extraSupported.push_back(name);
+            if (name == "genre" && jbool(e, "isRequired")) c.genreRequired = true;
             // collect genre options for the "genre" extra (used by filtering UI later)
             if (name == "genre" && e.contains("options") && e["options"].is_array())
                 for (auto& o : e["options"])
@@ -388,6 +390,9 @@ inline Catalog parseCatalogDescriptor(const nlohmann::json& j) {
     if (j.contains("genres") && j["genres"].is_array())
         for (auto& g : j["genres"])
             if (g.is_string()) c.genres.push_back(g.get<std::string>());
+    if (j.contains("extraRequired") && j["extraRequired"].is_array())
+        for (const auto& e : j["extraRequired"])
+            if (e == "genre") c.genreRequired = true;
     return c;
 }
 

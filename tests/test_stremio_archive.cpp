@@ -1,4 +1,5 @@
 #include "api/stremio/archive_storage.hpp"
+#include "api/stremio/archive_catalog.hpp"
 #include <cassert>
 #include <iostream>
 #include <filesystem>
@@ -7,6 +8,17 @@
 using namespace stremio::archive;
 
 int main() {
+    auto required = stremio::parseCatalogDescriptor({{"type", "movie"}, {"id", "year"},
+        {"extra", {{{"name", "genre"}, {"isRequired", true}, {"options", {"2026", "2025", "2026"}}}, {{"name", "skip"}}}},
+        {"genres", {"2026", "2025"}}});
+    assert(catalogVariants(required) == std::vector<std::string>({"2026", "2025"}));
+    assert(catalogUrl("https://addon.test/manifest.json", required, "2025", 200) ==
+        "https://addon.test/catalog/movie/year/genre=2025&skip=200.json");
+    required.genreRequired = false;
+    assert(catalogVariants(required) == std::vector<std::string>({"", "2026", "2025"}));
+    assert(catalogUrl("https://addon.test/manifest.json", required, "Sci-Fi & Fantasy", 0).find("genre=Sci-Fi%20%26%20Fantasy.json") != std::string::npos);
+    auto legacy = stremio::parseCatalogDescriptor({{"extraRequired", {"genre"}}, {"extraSupported", {"genre"}}, {"genres", {"2020"}}});
+    assert(catalogVariants(legacy) == std::vector<std::string>({"2020"}));
     std::vector<Record> records;
     for (int i = 0; i < 300; ++i) {
         records.push_back({{{"id", "tt" + std::to_string(i)}, {"type", i % 2 ? "series" : "movie"},
@@ -68,8 +80,18 @@ int main() {
     std::filesystem::create_directory(dir);
     auto path = (dir / "archive.json").string();
     Snapshot snapshot{records, 123456, true};
+    snapshot.crawlVersion = 2;
+    snapshot.crawl = {{"year2025", {{"skip", 200}, {"lastPage", "[tt1,tt2]"}, {"done", false}}},
+        {"top", {{"skip", 100}, {"done", true}}}};
     writeSnapshot(path, snapshot);
     auto read = readSnapshot(path);
+    assert(read.crawlVersion == 2 && !read.crawlFinished && read.crawl == snapshot.crawl);
+    // Old caches retain metadata and are eligible for the expanded crawl.
+    auto oldJson = Json{{"version", 1}, {"refreshed", 123}, {"records", Json::array({serialize(records[0])})}};
+    auto oldPath = (dir / "old.json").string();
+    std::ofstream(oldPath) << oldJson.dump();
+    auto old = readSnapshot(oldPath);
+    assert(old.records.size() == 1 && old.crawlVersion == 0 && !old.crawlFinished);
     assert(read.refreshed == 123456 && read.partial && read.records.size() == 300);
     assert(select(read.records, threshold) == std::vector<size_t>{148});
     Snapshot oversized = snapshot;
