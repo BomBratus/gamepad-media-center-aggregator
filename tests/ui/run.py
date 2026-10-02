@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.request
 from fixtures import FixtureServer
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -121,7 +122,7 @@ class Runtime:
             conn.connect(str(self.socket_path))
             conn.sendall(json.dumps(request).encode())
             reply = json.loads(conn.recv(262144))
-        if reply.get('error'):
+        if reply.get('error') and not reply.get('ready'):
             raise RuntimeError(reply['error'])
         return reply
 
@@ -271,7 +272,7 @@ def scenarios(app, name, fixture):
         # Read-only live integration uses the real account/addons; never starts playback.
         sidebar(app, 'lib/movie')
         app.press('right')
-        app.wait(lambda s: not s['loading'] and bool(s['focus']), 'live movies catalog', timeout=60)
+        app.wait(lambda s: contains(app, 'StremioCatalogs', s) and not s['loading'] and bool(s['focus']) and any(n.get('id', '').startswith('movie:') and 'VideoCardCell' in n.get('class', '') for n in flat(app, s)), 'live movies catalog', timeout=60)
         app.checkpoint('live-movies')
         return
     # Concrete scenario functions are below; every route observes real UI state.
@@ -586,6 +587,25 @@ FUNCTIONS = {'movies': movie, 'series': series, 'source-picker': source_picker,
              'search': search, 'error-loading': error_loading}
 
 
+def check_live_account(profile_path):
+    # One authenticated read proves live account integration without persisting
+    # its returned history or sending any mutation to the account.
+    data = json.loads(profile_path.read_text())
+    server = next(s for s in data['servers'] if s.get('type') == 'stremio' and s.get('access_token'))
+    user = next(u for u in data['users'] if u.get('server_id') == server['id'])
+    token = user.get('access_token') or server['access_token']
+    request = urllib.request.Request('https://api.strem.io/api/datastoreGet',
+        json.dumps({'authKey': token, 'collection': 'libraryItem', 'all': True}).encode(),
+        {'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            reply = json.load(response)
+        if reply.get('error') or not isinstance(reply.get('result'), list):
+            raise ValueError('invalid account read response')
+    except Exception:
+        raise RuntimeError('live authenticated account read failed') from None
+
+
 def configured_live():
     candidates = [Path(os.environ['GMCA_TEST_LIVE_CONFIG'])] if os.environ.get('GMCA_TEST_LIVE_CONFIG') else [Path.home() / '.config/GMCA/config.json', Path.home() / '.cache/gmca-tvtest-live/config.json']
     for candidate in candidates:
@@ -607,8 +627,11 @@ def runtime_case(name, directory, media, expected_commit=None):
             path = Path(temporary) / 'config'
             if name == 'live':
                 candidates = [Path.home() / '.config/GMCA/config.json', Path.home() / '.cache/gmca-tvtest-live/config.json']
-                live = configured_live() or candidates[0]
+                live = configured_live() or Path(os.environ.get('GMCA_TEST_LIVE_CONFIG', str(candidates[0])))
+                result['step'] = 'live authenticated account read'
                 secrets = profile(path, None, live)
+                check_live_account(path / 'GMCA/config.json')
+                result['account_read_validated'] = True
                 base = None
             else:
                 fixture = FixtureServer(media).start()

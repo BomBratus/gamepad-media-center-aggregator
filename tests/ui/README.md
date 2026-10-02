@@ -92,8 +92,8 @@ local copy at `~/.cache/gmca-tvtest-live/config.json` as fallback. The runner co
 authenticated Stremio server/user into its private profile. It does not copy
 history, downloads, caches, other backend credentials, or account progress files.
 An absent authenticated config makes the live scenario fail explicitly; it does
-not silently replace live validation with fixtures. The live scenario browses home
-and Movies without playback or watched changes. The test HTTP guard permits the
+not silently replace live validation with fixtures. The live scenario first confirms an authenticated datastore read without retaining
+its response, then browses Home and Movies without playback or watched changes. The test HTTP guard permits the
 account read APIs and rejects account writes. Tokens and signed URLs are removed
 before stdout/stderr is persisted, and are never placed into result artifacts.
 Live screenshots are allowlisted to Home and Movies catalog views without an
