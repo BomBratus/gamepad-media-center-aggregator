@@ -19,15 +19,13 @@
     the type alongside the id to route requests, so we fold it into ratingKey:
       movie    "movie:tt0111161"
       series   "series:tt0903747"
-      episode  "series:tt0903747:1:1"      (stremioId is the video id)
-      season   "season:tt0903747:1"        (synthetic, {showId}:{n})
-    Item::guid = raw stremioId (the IMDB `tt…` id; cross-source identity).
-    Item::key  = ratingKey.
-    parseId() splits on the FIRST ':' -> {stremioType, stremioId}.
-
-    LIMITATION (documented, not handled): kitsu ids (`kitsu:ID`, episodes
-    `kitsu:ID:ep`) already contain a ':' in their prefix, which collides with the
-    "{type}:{id}" ratingKey scheme. Only IMDB (`tt`) ids are supported for now.
+      season   "season:tt0903747:1"        (synthetic, parsed from the right)
+      episode  legacy Cinemeta: "series:tt0903747:1:1"
+               opaque ids:       "episode:<parentLen>:<parentId><videoId>"
+    The length-prefixed episode form preserves both the parent id and the raw
+    Stremio video id even when either contains ':' (Kitsu/MAL/AniList/etc.).
+    Existing un-namespaced Cinemeta episode keys keep their old form so persisted
+    watched history remains valid. Item::guid is always the raw Stremio id.
 */
 
 #pragma once
@@ -68,6 +66,25 @@ inline std::string encodeURIComponent(const std::string& s) {
         }
     }
     return out;
+}
+
+/// Keep logs useful without exposing addon configuration, debrid API keys,
+/// auth-bearing paths, query parameters, or URL userinfo. Stremio transport
+/// URLs commonly embed configuration in the path, so only scheme + host/port
+/// are retained.
+inline std::string redactUrlForLog(const std::string& url) {
+    const size_t schemeEnd = url.find("://");
+    if (schemeEnd == std::string::npos || schemeEnd == 0) return "<redacted-url>";
+
+    const size_t authorityStart = schemeEnd + 3;
+    const size_t authorityEnd = url.find_first_of("/?#", authorityStart);
+    std::string authority = url.substr(authorityStart,
+        authorityEnd == std::string::npos ? std::string::npos : authorityEnd - authorityStart);
+    const size_t userInfo = authority.rfind('@');
+    if (userInfo != std::string::npos) authority.erase(0, userInfo + 1);
+    if (authority.empty()) authority = "<redacted-host>";
+
+    return url.substr(0, schemeEnd + 3) + authority + "/<redacted>";
 }
 
 /// transportUrl -> base (strips a trailing `/manifest.json`).
@@ -135,7 +152,7 @@ inline int64_t parseYear(const std::string& releaseInfo) {
 /// not produced here.
 inline std::string mapType(const std::string& t) {
     if (t == "movie") return media::mediaTypeMovie;
-    if (t == "series") return media::mediaTypeShow;
+    if (t == "series" || t == "anime") return media::mediaTypeShow;
     if (t == "channel" || t == "tv") return media::mediaTypeClip;
     return t;
 }
@@ -143,6 +160,8 @@ inline std::string mapType(const std::string& t) {
 /// Neutral media:: item -> the Stremio resource type used to route requests.
 /// Seasons/episodes belong to a series; clips map to a channel.
 inline std::string stremioType(const media::Item& item) {
+    if (item.ratingKey.rfind("anime:", 0) == 0 || item.ratingKey.rfind("anime-episode:", 0) == 0 ||
+        item.ratingKey.rfind("anime-season:", 0) == 0) return "anime";
     if (item.type == media::mediaTypeMovie) return "movie";
     if (item.type == media::mediaTypeShow || item.type == media::mediaTypeSeason ||
         item.type == media::mediaTypeEpisode)
@@ -155,16 +174,16 @@ inline std::string stremioType(const media::Item& item) {
 
 struct ParsedId {
     std::string stremioType;  // movie | series | season | channel | tv | …
-    std::string stremioId;    // raw Stremio id (tt…, tt…:S:E, {showId}:{n})
-    // episode breakdown (only when the id has the "{base}:{season}:{episode}" shape)
-    std::string baseId;
+    std::string stremioId;    // raw Stremio id; for episodes this is the raw video id
+    std::string baseId;       // movie/show id used for /meta + account library state
     int64_t season = -1;
-    int64_t episode = -1;
+    int64_t episode = -1;     // >= 0 marks an episode; opaque ids use 0 as a sentinel
 };
 
-/// Split ratingKey on the FIRST ':' -> {stremioType, stremioId}. For an episode
-/// (type "series" with a "{base}:{s}:{e}" id) or a season ("season" with a
-/// "{showId}:{n}" id), the trailing numeric components are filled in too.
+/// Split ratingKey on the FIRST ':' -> {kind, payload}. Whole-item ids remain
+/// "{type}:{rawId}". Seasons are synthetic and split from the right. New episode
+/// keys carry a length-prefixed parent id so the raw parent/video ids may contain
+/// arbitrary ':' characters without changing their meaning.
 inline ParsedId parseId(const std::string& ratingKey) {
     ParsedId p;
     auto colon = ratingKey.find(':');
@@ -175,24 +194,48 @@ inline ParsedId parseId(const std::string& ratingKey) {
         p.baseId = ratingKey;
         return p;
     }
-    p.stremioType = ratingKey.substr(0, colon);
-    p.stremioId = ratingKey.substr(colon + 1);
+
+    std::string kind = ratingKey.substr(0, colon);
+    std::string payload = ratingKey.substr(colon + 1);
+
+    if (kind == "episode" || kind == "anime-episode") {
+        auto lengthEnd = payload.find(':');
+        if (lengthEnd == std::string::npos) return p;
+        try {
+            size_t parentLen = (size_t)std::stoull(payload.substr(0, lengthEnd));
+            size_t parentStart = lengthEnd + 1;
+            if (parentLen > payload.size() - parentStart) return p;
+            p.stremioType = kind == "anime-episode" ? "anime" : "series";
+            p.baseId = payload.substr(parentStart, parentLen);
+            p.stremioId = payload.substr(parentStart + parentLen);
+            if (p.baseId.empty() || p.stremioId.empty()) return ParsedId{};
+            p.episode = 0;
+            return p;
+        } catch (...) {
+            return ParsedId{};
+        }
+    }
+
+    p.stremioType = kind;
+    p.stremioId = payload;
     p.baseId = p.stremioId;
 
-    if (p.stremioType == "season") {
-        // "season:{showId}:{n}" -> stremioId == "{showId}:{n}"
+    if (p.stremioType == "season" || p.stremioType == "anime-season") {
+        // "season:{showId}:{n}" -> split only the synthetic trailing season.
         auto last = p.stremioId.rfind(':');
         if (last != std::string::npos) {
             p.baseId = p.stremioId.substr(0, last);
             try {
                 p.season = std::stoll(p.stremioId.substr(last + 1));
+                if (kind == "anime-season") p.stremioType = "anime";
             } catch (...) {
             }
         }
     } else if (p.stremioType == "series") {
-        // An episode id is "{base}:{season}:{episode}"; a bare show id has no extra ':'.
-        // (IMDB base ids carry no ':', so re-splitting on ':' is unambiguous here;
-        //  kitsu ids would break this — see LIMITATION at the top of the file.)
+        // Backward compatibility for the original Cinemeta key:
+        // "series:{base}:{season}:{episode}". It is intentionally recognized only
+        // when there are exactly three components; namespaced ids use the opaque
+        // "episode:" codec above and are never split on their internal ':'.
         std::vector<std::string> parts;
         size_t pos = 0, next;
         while ((next = p.stremioId.find(':', pos)) != std::string::npos) {
@@ -201,10 +244,12 @@ inline ParsedId parseId(const std::string& ratingKey) {
         }
         parts.push_back(p.stremioId.substr(pos));
         if (parts.size() == 3) {
-            p.baseId = parts[0];
             try {
-                p.season = std::stoll(parts[1]);
-                p.episode = std::stoll(parts[2]);
+                int64_t season = std::stoll(parts[1]);
+                int64_t episode = std::stoll(parts[2]);
+                p.baseId = parts[0];
+                p.season = season;
+                p.episode = episode;
             } catch (...) {
             }
         }
@@ -212,13 +257,44 @@ inline ParsedId parseId(const std::string& ratingKey) {
     return p;
 }
 
-/// Build the synthetic ratingKey for a season row of a show.
-inline std::string seasonId(const std::string& showId, int64_t n) {
-    return "season:" + showId + ":" + std::to_string(n);
+// Account playback progress is stored on the parent series, even when the
+// local checkpoint is keyed by episode. Fence remote mutations at that scope.
+inline std::string playbackResourceKey(const std::string& ratingKey) {
+    const auto id = parseId(ratingKey);
+    return (id.stremioType == "season" ? "series" : id.stremioType) + ":" + id.baseId;
 }
 
-/// Build the ratingKey for an episode from its Stremio video id ("{base}:{s}:{e}").
-inline std::string episodeId(const std::string& videoId) { return "series:" + videoId; }
+/// Build the synthetic ratingKey for a season row of a show.
+inline std::string seasonId(const std::string& showId, int64_t n, const std::string& type = "series") {
+    return (type == "anime" ? "anime-season:" : "season:") + showId + ":" + std::to_string(n);
+}
+
+inline bool isDecimalIdPart(const std::string& value) {
+    return !value.empty() &&
+           std::all_of(value.begin(), value.end(), [](unsigned char c) { return std::isdigit(c); });
+}
+
+/// Preserve the historical Cinemeta episode key when it is unambiguous. This
+/// keeps existing IMDB watched-history entries stable while all namespaced or
+/// otherwise opaque ids use the collision-free codec below.
+inline bool canUseLegacyEpisodeId(const std::string& showId, const std::string& videoId) {
+    if (showId.empty() || showId.find(':') != std::string::npos) return false;
+    std::string prefix = showId + ":";
+    if (videoId.rfind(prefix, 0) != 0) return false;
+    std::string suffix = videoId.substr(prefix.size());
+    auto sep = suffix.find(':');
+    if (sep == std::string::npos || suffix.find(':', sep + 1) != std::string::npos) return false;
+    return isDecimalIdPart(suffix.substr(0, sep)) && isDecimalIdPart(suffix.substr(sep + 1));
+}
+
+/// Build a ratingKey that round-trips BOTH the parent series id and raw video id.
+/// Kitsu-style ids ("kitsu:419" / "kitsu:419:1") therefore remain untouched when
+/// routed to /meta, /stream and /subtitles.
+inline std::string episodeId(const std::string& showId, const std::string& videoId, const std::string& type = "series") {
+    if (showId.empty() || videoId.empty()) return "";
+    if (type != "anime" && canUseLegacyEpisodeId(showId, videoId)) return "series:" + videoId;
+    return (type == "anime" ? "anime-episode:" : "episode:") + std::to_string(showId.size()) + ":" + showId + videoId;
+}
 
 /// ---- Manifest / catalog descriptors ----------------------------------------
 
@@ -421,9 +497,10 @@ inline media::Item parseMeta(const nlohmann::json& j) {
 }
 
 /// Series `meta.videos[]` -> episode Items, sorted by (season, episode).
-/// Each video: { id:"tt…:1:1", name|title, season, episode, released, overview, thumbnail }.
-/// ratingKey = "series:{video.id}", type = episode, index = episode,
-/// parentIndex = season, grandparent* = the show.
+/// The video id is addon-defined and opaque (e.g. "tt…:1:1" or "kitsu:419:1").
+/// ratingKey keeps the parent show id separately when the legacy Cinemeta shape
+/// is not safe, so later detail/progress calls never have to infer parentage from
+/// the video's ':' separators.
 inline std::vector<media::Item> parseEpisodes(const nlohmann::json& metaJson, const media::Item& show) {
     std::vector<media::Item> out;
     auto vids = metaJson.find("videos");
@@ -431,7 +508,7 @@ inline std::vector<media::Item> parseEpisodes(const nlohmann::json& metaJson, co
     for (auto& v : *vids) {
         media::Item e;
         std::string vid = jstr(v, "id");
-        e.ratingKey = episodeId(vid);
+        e.ratingKey = episodeId(show.guid, vid, stremioType(show));
         e.key = e.ratingKey;
         e.guid = vid;
         e.type = media::mediaTypeEpisode;
@@ -472,6 +549,15 @@ inline CatalogResult parseCatalog(const nlohmann::json& j) {
 
 /// ---- Streams (parsed now, consumed in étape 2) -----------------------------
 
+/// Stremio subtitle descriptor. The same shape is used both by the standalone
+/// `subtitles` resource and by `stream.subtitles[]`, where the tracks are tied
+/// directly to a particular playable source/release.
+struct SubtitleOption {
+    std::string id;
+    std::string url;   // absolute http(s) URL to the subtitle file (SRT/VTT)
+    std::string lang;  // ISO 639-2 code, or free text (SDK fallback)
+};
+
 struct StreamOption {
     std::string name;
     std::string title;
@@ -482,6 +568,13 @@ struct StreamOption {
     int fileIdx = -1;         // torrent file index
     bool notWebReady = false;
     std::string bingeGroup;
+    // Stremio stream.behaviorHints used by subtitle providers to identify the
+    // exact selected release. These are supplied by the addon; GMCA never hashes
+    // or range-reads the remote video just to manufacture them.
+    std::string videoHash;
+    int64_t videoSize = 0;
+    std::string filename;
+    std::vector<SubtitleOption> subtitles;  // source-specific sidecars
 };
 
 inline std::vector<StreamOption> parseStreams(const nlohmann::json& j) {
@@ -497,10 +590,23 @@ inline std::vector<StreamOption> parseStreams(const nlohmann::json& j) {
         so.externalUrl = jstr(s, "externalUrl");
         so.infoHash = jstr(s, "infoHash");
         so.fileIdx = (int)jint(s, "fileIdx", -1);
+        auto embeddedSubs = s.find("subtitles");
+        if (embeddedSubs != s.end() && embeddedSubs->is_array()) {
+            for (auto& sub : *embeddedSubs) {
+                SubtitleOption opt;
+                opt.id = jstr(sub, "id");
+                opt.url = jstr(sub, "url");
+                opt.lang = jstr(sub, "lang");
+                if (!opt.url.empty()) so.subtitles.push_back(std::move(opt));
+            }
+        }
         auto bh = s.find("behaviorHints");
         if (bh != s.end() && bh->is_object()) {
             so.notWebReady = jbool(*bh, "notWebReady");
             so.bingeGroup = jstr(*bh, "bingeGroup");
+            so.videoHash = jstr(*bh, "videoHash");
+            so.videoSize = jint(*bh, "videoSize");
+            so.filename = jstr(*bh, "filename");
         }
         out.push_back(std::move(so));
     }
@@ -514,10 +620,6 @@ inline std::vector<StreamOption> parseStreams(const nlohmann::json& j) {
 // structured fields and re-render with our own consistent badges, rather than
 // passing the addon's text through verbatim. (Research: every client does this.)
 
-/// Resolution label from a stream's name+title ("4K"/"1440p"/"1080p"/"720p"/
-/// "480p"/"CAM"/"SD"). CAM-class (cam/ts/telesync/screener) ranks below any
-/// resolution. 1440p gets its own label so the PSV filter can drop it: an
-/// unlabelled 1440p used to fall through to "SD" and rank ABOVE 1080p on Vita.
 inline std::string qualityLabel(const std::string& text) {
     std::string t = text;
     for (auto& c : t) c = (char)std::tolower((unsigned char)c);
@@ -541,41 +643,6 @@ inline int qualityRank(const std::string& label) {
     if (label == "720p") return 3;
     if (label == "480p" || label == "SD") return 2;
     return 1;  // CAM
-}
-
-/// PS Vita sort rank. The hardware H.264 decoder tops out at 1080p and 4K
-/// hard-crashes the GPU (blue light), while 1080p remux bitrates stutter on the
-/// Vita's limited CPU/IO. So every <=720p source outranks 1080p, which stays
-/// only as a last-resort fallback (4K is filtered out before the sort, but is
-/// ranked lowest here as a safety net). Field-tested guidance from Vita users:
-/// keep Stremio playback at <=720p. (default pick = highest-ranked = index 0.)
-inline int qualityRankVita(const std::string& label) {
-    if (label == "720p") return 5;
-    if (label == "480p" || label == "SD") return 4;
-    if (label == "1080p") return 3;  // decodable but heavy -> fallback only
-    if (label == "4K" || label == "1440p") return 1;  // exceed the decoder; excluded upstream
-    return 2;                        // CAM
-}
-
-/// PS Vita video-codec rank. The Vita ffmpeg build ships NO hevc/av1/vp9/xvid
-/// decoder at all (scripts/vita/ffmpeg/VITABUILD compiles --disable-decoders
-/// plus an H.264-centric allowlist) — such streams cannot play, ever, not even
-/// slowly. An empty label (no codec token in the addon text) is most often
-/// H.264 in the wild, so it stays playable-by-default, below explicit H.264.
-inline int codecRankVita(const std::string& label) {
-    if (label == "H.264") return 2;
-    if (label.empty()) return 1;  // unknown: best effort
-    return 0;                     // HEVC / AV1 / XviD: no decoder on Vita
-}
-
-/// PS Vita audio-codec rank, for DEPRIORITIZATION only (never exclusion: a
-/// stream whose audio the Vita build can't decode — no eac3/dca/truehd/opus in
-/// VITABUILD — still plays video, just silent, and the tokens are less reliable
-/// than video ones). Decodable (AAC/AC3/FLAC/MP3) > unknown > undecodable.
-inline int audioRankVita(const std::string& label) {
-    if (label == "AAC" || label == "AC3" || label == "FLAC" || label == "MP3") return 2;
-    if (label.empty()) return 1;
-    return 0;  // DDP / DTS / TrueHD / Atmos / Opus
 }
 
 /// First "<number> <GB|MB|TB>" found, normalized ("8.4 GB"). Empty if none.
@@ -678,9 +745,14 @@ inline bool detectDebrid(const std::string& name, bool& cached) {
 /// classified as non-playable (no torrent engine / no browser on console).
 inline media::Media streamToMedia(const StreamOption& s, const std::string& addonName) {
     media::Media m;
+    // Preserve complete release metadata; display labels are not identities.
+    if (!s.title.empty())
+        m.sourceIdentity = nlohmann::json::array({addonName, s.name, s.title, s.infoHash, s.fileIdx}).dump();
     std::string blob = s.name + " " + s.title;
     m.videoResolution = qualityLabel(blob);
     m.label = addonName;
+    m.sourceName = s.name;
+    m.sourceTitle = s.title;
 
     if (!s.url.empty()) {
         bool cached = true;
@@ -689,11 +761,13 @@ inline media::Media streamToMedia(const StreamOption& s, const std::string& addo
         m.cached = cached;
         media::Part p;
         p.key = s.url;
+        p.size = s.videoSize;
+        p.videoHash = s.videoHash;
+        p.filename = s.filename;
         p.accessible = true;
         p.exists = true;
         m.parts.push_back(std::move(p));
-        // structured fields, not just display: the PSV stream filter/sort in
-        // resolveAllStreams reads them (codecRankVita / audioRankVita)
+        // Structured fields support format-aware source details in the UI.
         m.videoCodec = parseCodecLabel(blob);
         m.audioCodec = parseAudioLabel(blob);
         std::string size = parseSizeLabel(s.title.empty() ? s.name : s.title);
@@ -715,17 +789,12 @@ inline media::Media streamToMedia(const StreamOption& s, const std::string& addo
 //
 // `{base}/subtitles/{type}/{encId}.json` returns { subtitles: [{ id, url, lang }] }
 // (SDK: docs/api/responses/subtitles.md). `url` is an ABSOLUTE http(s) link to a
-// SRT/VTT file, `lang` an ISO 639-2 code (or free text when no valid code). We
-// query WITHOUT the optional videoHash/videoSize extras (OpenSubtitles-style hash
-// matching): that would need range reads of the remote/debrid file per playback —
-// too costly on console. Id-based matching (imdbId / episode id) is enough; any
-// residual desync is handled by the player's existing sub-delay (subsync) control.
-
-struct SubtitleOption {
-    std::string id;
-    std::string url;   // absolute http(s) URL to the subtitle file (SRT/VTT)
-    std::string lang;  // ISO 639-2 code, or free text (SDK fallback)
-};
+// SRT/VTT file, `lang` an ISO 639-2 code (or free text when no valid code).
+//
+// When the selected stream already supplies behaviorHints.videoHash/videoSize/
+// filename, the backend forwards those values as Stremio subtitle request extras.
+// GMCA does NOT compute missing hashes with remote range reads: absent hints simply
+// fall back to the id-only request so console playback stays cheap and responsive.
 
 inline std::vector<SubtitleOption> parseSubtitles(const nlohmann::json& j) {
     std::vector<SubtitleOption> out;
@@ -764,6 +833,16 @@ inline nlohmann::json getSync(const std::string& url, long timeout = HTTP::TIMEO
     // invalidated immediately when the configured transports change.
     if (url.find("/meta/") != std::string::npos) {
         std::string resp = requests::getCached(url, timeout, 300000);
+        if (resp.empty()) return nlohmann::json::object();
+        return nlohmann::json::parse(resp);
+    }
+
+    // Catalog responses are repeatedly revisited while moving Home -> section ->
+    // detail -> Back. A short exact-URL cache avoids another addon round-trip
+    // without prefetching extra pages or hiding catalog changes for long.
+    if (url.find("/catalog/") != std::string::npos) {
+        long ttl = url.find("/search=") != std::string::npos ? 15000L : 30000L;
+        std::string resp = requests::getCached(url, timeout, ttl);
         if (resp.empty()) return nlohmann::json::object();
         return nlohmann::json::parse(resp);
     }

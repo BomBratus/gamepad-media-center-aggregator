@@ -3,8 +3,8 @@
     "title": "pleNx ahora es GMCA",
     "intro": "La misma app, pero más grande. pleNx se ha convertido en GMCA — el Gamepad Media Center Aggregator — y ahora hace mucho más.",
     "whats_new": "NOVEDADES",
-    "feature_backends": "Una sola app, todos tus servidores — Plex, Jellyfin, Emby y Stremio",
-    "feature_music": "Tu biblioteca de música, junto a películas y series",
+    "feature_backends": "Stremio catalogs, library and playback on PS4",
+    "feature_music": "Multiple Stremio accounts, with your own library and history",
     "feature_offline": "Descargas sin conexión para ver donde quieras, sin internet",
     "feature_updates": "Actualizaciones periódicas, directas en la app",
     "reassure": "Tus cuentas, ajustes y descargas se han conservado automáticamente — no hay que configurar nada de nuevo. ¡Disfruta!",
@@ -16,8 +16,7 @@
     "suggest": "Sugerencias",
     "search": "Buscar",
     "downloads": "Descargas",
-    "setting": "Ajustes",
-    "remote": "Servidores"
+    "setting": "Ajustes"
   },
   "home": {
     "resume": "Seguir viendo",
@@ -86,7 +85,8 @@
     "go_series": "Ir a la serie",
     "go_season": "Ir a la temporada",
     "director": "Dirección",
-    "open": "Abrir"
+    "open": "Abrir",
+    "type": "Type"
   },
   "search": {
     "hint": "Admite palabras clave y sus letras iniciales",
@@ -147,41 +147,6 @@
     "on_server": "En el servidor",
     "not_on_server": "No está en el servidor"
   },
-  "remote": {
-    "empty_title": "No hay archivos",
-    "empty_sub": "Explora el almacenamiento local y tus servidores WebDAV, FTP o SFTP.",
-    "local": "Archivos",
-    "folder": "Carpeta",
-    "up": "Subir",
-    "bluray": "Reproducir Blu-ray",
-    "add_server": "Añadir un servidor",
-    "edit_server": "Editar servidor",
-    "manage": "Gestionar servidor",
-    "edit": "Editar",
-    "delete": "Eliminar",
-    "delete_confirm": "¿Eliminar «{}»?",
-    "type": "Tipo",
-    "name": "Nombre",
-    "host": "Host",
-    "port": "Puerto",
-    "username": "Usuario",
-    "password": "Contraseña",
-    "path": "Ruta inicial",
-    "optional": "Opcional",
-    "save": "Probar y guardar",
-    "test_failed": "Error de conexión: {}",
-    "retry": "¿Reintentar?",
-    "required": "Introduce al menos un nombre y un host.",
-    "sort": "Ordenar archivos",
-    "date": "Fecha de modificación",
-    "size": "Tamaño",
-    "pin": "Fijar en Archivos",
-    "unpin": "Quitar de Archivos",
-    "pinned": "Fijado en Archivos",
-    "unpinned": "Quitado de Archivos",
-    "already_pinned": "Ya está fijado",
-    "pin_missing": "Esta carpeta ya no está disponible. ¿Quitarla de Archivos?"
-  },
   "download": {
     "start": "Descargar",
     "cancel": "Cancelar descarga",
@@ -212,8 +177,7 @@
     "section_done": "Descargado",
     "remove_all": "Eliminar todo",
     "confirm_remove_all": "¿Eliminar todas las descargas?",
-    "empty_sub": "Las películas y episodios descargados aparecen aquí para verlos sin conexión.",
-    "eta": "{} restante"
+    "empty_sub": "Las películas y episodios descargados aparecen aquí para verlos sin conexión."
   },
   "setting": {
     "quit_hint": "Vas a salir de la aplicación. La configuración tendrá efecto tras el próximo arranque",
@@ -382,25 +346,6 @@
     "hint_confirm": "Instalar el NSP forwarder puede resultar en un baneo\nPor favor confirma de nuevo",
     "remove_old": "GMCA está en tu menú HOME. Si aún hay un icono antiguo de pleNx, elimínalo en Configuración del sistema > Gestión de datos > Eliminar software."
   },
-  "plex": {
-    "title": "Inicia sesión en tu cuenta de Plex",
-    "generating": "Generando código…",
-    "waiting": "Esperando confirmación…",
-    "connected": "¡Conectado!",
-    "expired": "El código ha caducado, inténtalo de nuevo",
-    "step1": "1. En tu teléfono u ordenador, abre plex.tv/link",
-    "step2": "2. Inicia sesión en tu cuenta de Plex",
-    "step3": "3. Introduce el código mostrado arriba",
-    "regenerate": "Generar un nuevo código",
-    "choose_server": "Elige un servidor",
-    "choose_profile": "Elige un perfil",
-    "profile_pin": "PIN del perfil",
-    "wrong_pin": "PIN incorrecto",
-    "no_server": "No se encontró ningún servidor en esta cuenta",
-    "connecting": "Conectando al servidor…",
-    "unreachable": "Servidor inaccesible",
-    "connecting_slow": "Esto está tardando más de lo habitual — seguimos intentando conectar con tu servidor. Un momento…"
-  },
   "empty": {
     "title": "Nada que mostrar",
     "error": "No se pudo cargar"
@@ -422,21 +367,16 @@
     "choose_type": "Elige el tipo de conexión",
     "switch_title": "Conexiones",
     "add": "Añadir",
-    "jellyfin": {
-      "title_jellyfin": "Inicia sesión en Jellyfin",
-      "title_emby": "Inicia sesión en Emby",
-      "url": "Dirección del servidor",
-      "username": "Usuario",
-      "password": "Contraseña",
-      "connect": "Conectar"
-    },
     "stremio": {
       "title": "Inicia sesión en Stremio",
       "email": "Correo electrónico",
       "password": "Contraseña",
       "connect": "Conectar",
       "invalid": "Introduce tu correo electrónico y contraseña"
-    }
+    },
+    "connecting": "Conectando al servidor…",
+    "unreachable": "Servidor inaccesible",
+    "connecting_slow": "Esto está tardando más de lo habitual — seguimos intentando conectar con tu servidor. Un momento…"
   },
   "stremio": {
     "subtitle": {
@@ -444,6 +384,11 @@
     },
     "movies": "Películas",
     "series": "Series",
+    "anime": {
+      "title": "Anime",
+      "empty_title": "No se encontraron catálogos de anime",
+      "empty_sub": "Instala o sincroniza un addon de catálogo de anime en Stremio para explorar anime aquí."
+    },
     "popular": "Populares",
     "new": "Novedades",
     "featured": "Destacados",

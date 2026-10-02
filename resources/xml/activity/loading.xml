@@ -25,7 +25,7 @@
         <brls:Label
             fontSize="16"
             textColor="@theme/font/grey"
-            text="@i18n/main/plex/connecting" />
+            text="@i18n/main/server/connecting" />
 
     </brls:Box>
 </brls:AppletFrame>

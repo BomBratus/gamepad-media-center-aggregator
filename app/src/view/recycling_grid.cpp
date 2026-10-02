@@ -870,3 +870,13 @@ RecyclingGridContentBox::RecyclingGridContentBox(RecyclingView* recycler) : Box(
 brls::View* RecyclingGridContentBox::getNextFocus(brls::FocusDirection direction, brls::View* currentView) {
     return this->recycler->getNextCellFocus(direction, currentView);
 }
+
+#ifdef GMCA_TEST_HARNESS
+bool RecyclingView::testLoading() const {
+    return dynamic_cast<DataSourceSkeleton*>(dataSource) != nullptr && dataSource->getItemCount() > 0;
+}
+bool RecyclingGrid::testError() const {
+    return dataSource && dataSource->getItemCount() == 0 && hintLabel &&
+           hintLabel->getFullText() == brls::getStr("main/empty/error");
+}
+#endif

@@ -25,13 +25,10 @@
 #include "view/mpv_core.hpp"
 #include "view/selector_cell.hpp"
 #include "view/library_manager.hpp"
-#include "api/plex.hpp"
+#include "api/backend.hpp"
 #include "api/media/langs.hpp"
 #include "utils/dialog.hpp"
-#ifdef __SWITCH__
-#include "utils/overclock.hpp"
-#endif
-#ifdef __linux__
+#if defined(GMCA_LINUX_TEST_BENCH)
 #include <borealis/platforms/desktop/steam_deck.hpp>
 #endif
 
@@ -44,15 +41,7 @@ public:
 
         this->labelTitle->setText(AppVersion::getPackageName());
         this->labelVersion->setText(fmt::format("v{}-{} ({})", AppVersion::getVersion(), AppVersion::getCommit(),
-#if defined(BOREALIS_USE_D3D11)
-            "D3D11"
-#elif defined(BOREALIS_USE_DEKO3D)
-            "Deko3D"
-#elif defined(BOREALIS_USE_GXM)
-            "GXM"
-#else
             "OpenGL"
-#endif
             ));
         this->labelGithub->setText("https://github.com/" + AppVersion::git_repo);
         this->btnGithub->registerClickAction([this](...) {
@@ -103,17 +92,6 @@ void SettingTab::onCreate() {
     auto& conf = AppConfig::instance();
 
 /// Hardware decode
-#ifdef __SWITCH__
-    btnOverClock->init(
-        "main/setting/others/overclock"_i18n, conf.getItem(AppConfig::OVERCLOCK, false), [&conf](bool value) {
-            SwitchSys::setClock(value);
-            conf.setItem(AppConfig::OVERCLOCK, value);
-        });
-#else
-    btnOverClock->setVisibility(brls::Visibility::GONE);
-#endif
-
-/// Hardware decode
 #ifdef PS4
     btnHWDEC->setVisibility(brls::Visibility::GONE);
 #else
@@ -125,18 +103,7 @@ void SettingTab::onCreate() {
     });
 #endif
 
-#if defined(ANDROID)
-    auto& voOption = conf.getOptions(AppConfig::MPV_VO);
-    selectorVO->init("main/setting/playback/vo"_i18n, voOption.options, conf.getOptionIndex(AppConfig::MPV_VO),
-        [&voOption](int selected) {
-            if (MPVCore::VO == voOption.options[selected]) return;
-            MPVCore::VO = voOption.options[selected];
-            AppConfig::instance().setItem(AppConfig::MPV_VO, MPVCore::VO);
-            MPVCore::instance().restart();
-        });
-#else
     selectorVO->setVisibility(brls::Visibility::GONE);
-#endif
 
     /// Decode quality
     btnQuality->init("main/setting/playback/low_quality"_i18n, MPVCore::LOW_QUALITY, [&conf](bool value) {
@@ -174,24 +141,25 @@ void SettingTab::onCreate() {
             AppConfig::instance().setItem(AppConfig::PLAYER_SUBTITLE_LANG, subLangValues[selected]);
         });
 
+    btnAutoplayNext->init("Autoplay next episode",
+        conf.getItem(AppConfig::PLAYER_AUTOPLAY_NEXT, true), [&conf](bool value) {
+            conf.setItem(AppConfig::PLAYER_AUTOPLAY_NEXT, value);
+        });
+
     btnDirectPlay->init("main/setting/playback/force_directplay"_i18n, MPVCore::FORCE_DIRECTPLAY, [&conf](bool value) {
         if (MPVCore::FORCE_DIRECTPLAY == value) return;
         MPVCore::FORCE_DIRECTPLAY = value;
         conf.setItem(AppConfig::FORCE_DIRECTPLAY, value);
     });
 
-#if defined(__PSV__)
-    selectorCodec->setVisibility(brls::Visibility::GONE);
-#else
     auto& codecOption = conf.getOptions(AppConfig::TRANSCODEC);
     selectorCodec->init("main/setting/playback/transcodec"_i18n, {"AVC/H264", "HEVC/H265", "AV1"},
         conf.getOptionIndex(AppConfig::TRANSCODEC), [&codecOption](int selected) {
             MPVCore::VIDEO_CODEC = codecOption.options[selected];
             AppConfig::instance().setItem(AppConfig::TRANSCODEC, MPVCore::VIDEO_CODEC);
         });
-#endif
 
-#if defined(__PS4__) || defined(__PSV__) || defined(TRIMUI)
+#if defined(__PS4__)
     selectorAudioChannels->setVisibility(brls::Visibility::GONE);
 #else
     auto& audioChannelsOption = conf.getOptions(AppConfig::AUDIO_CHANNELS);
@@ -259,22 +227,8 @@ void SettingTab::onCreate() {
         conf.setItem(AppConfig::CLIP_POINT, value);
     });
 
-#ifdef __SWITCH__
-    btnTutorialOpenApp->registerClickAction([](...) -> bool {
-        brls::Application::pushActivity(new HintActivity());
-        return true;
-    });
-    btnTutorialError->registerClickAction([](...) -> bool {
-        auto view = brls::View::createFromXMLResource("view/tutorial_error.xml");
-        auto dialog = new brls::Dialog(dynamic_cast<brls::Box*>(view));
-        dialog->addButton("hints/ok"_i18n, []() {});
-        dialog->open();
-        return true;
-    });
-#else
     btnTutorialOpenApp->setVisibility(brls::Visibility::GONE);
     btnTutorialError->setVisibility(brls::Visibility::GONE);
-#endif
     btnTutorialFont->registerClickAction([](...) -> bool {
         auto dialog = new brls::Dialog(new TutorialFont());
         dialog->addButton("hints/ok"_i18n, []() {});
@@ -284,10 +238,10 @@ void SettingTab::onCreate() {
 
     btnOpenConfig->registerClickAction([](...) -> bool {
         const std::string confDir = AppConfig::instance().configDir();
-#if defined(__SWITCH__) || defined(__PSV__) || defined(__PS4__) || defined(ANDROID)
-        Dialog::show("main/setting/others/config_dir"_i18n + ":\n" + confDir);
+#if defined(__PS4__)
+    Dialog::show("main/setting/others/config_dir"_i18n + ":\n" + confDir);
 #else
-#ifdef __linux__
+#if defined(GMCA_LINUX_TEST_BENCH)
         if (!brls::isSteamDeck())
 #endif
         {
@@ -298,7 +252,7 @@ void SettingTab::onCreate() {
     });
 
 /// Fullscreen
-#if (defined(__APPLE__) || defined(__linux__) || defined(_WIN32)) && !defined(ANDROID) && !defined(TRIMUI)
+#if defined(GMCA_LINUX_TEST_BENCH)
     btnFullscreen->init(
         "main/setting/others/fullscreen"_i18n, conf.getItem(AppConfig::FULLSCREEN, false), [](bool value) {
             VideoContext::FULLSCREEN = value;
@@ -322,7 +276,7 @@ void SettingTab::onCreate() {
     btnSingle->setVisibility(brls::Visibility::GONE);
 #endif
 
-#if (defined(__APPLE__) || defined(__linux__) || defined(_WIN32)) && !defined(TRIMUI)
+#if defined(GMCA_LINUX_TEST_BENCH)
     int keyIndex = conf.getOptionIndex(AppConfig::KEYMAP);
     selectorKeymap->init("main/setting/others/keymap/header"_i18n,
         {
@@ -423,7 +377,8 @@ void SettingTab::onCreate() {
     });
 
     btnReleaseChecker->title->setText(
-        fmt::format("{} ({}: {})", "main/setting/others/release"_i18n, "hints/current"_i18n, AppVersion::getVersion()));
+        fmt::format("{} ({}: {})", "main/setting/others/release"_i18n, "hints/current"_i18n,
+            AppVersion::getUpdateVersion()));
     btnReleaseChecker->registerClickAction([](...) -> bool {
         AppVersion::checkUpdate(0, true);
         return true;

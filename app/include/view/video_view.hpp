@@ -48,6 +48,9 @@ public:
     void setClipPoint(const std::vector<float>& clips);
 
     void playNext(int offset);
+    void setAutoNext(bool enabled) { this->autoNext = enabled; }
+    // Player supplies backend-aware advancement; explicit episode selection stays direct.
+    void setNextEpisode(std::function<int()> next) { this->nextEpisode = std::move(next); }
 
     brls::Event<int>* getPlayEvent() { return &this->playIndexEvent; }
 
@@ -62,7 +65,7 @@ public:
     void registerVideoAudio(brls::ActionListener action);
     /// Optional hook fired on MPV_FILE_ERROR. If it returns true the error is
     /// considered handled (e.g. PlayerView fell back to direct play) and no
-    /// error dialog is shown. Unset for local/remote players -> dialog as before.
+    /// error dialog is shown. Unset for local players -> dialog as before.
     void registerError(brls::ActionListener action);
     void registerActions(const std::string& hintText, const brls::ControllerButton button,
         const brls::BrlsKeyCombination key, const brls::ActionListener& actionListener, bool hidden = false,
@@ -139,6 +142,8 @@ private:
     static void disableDimming(bool disable);
 
     int playIndex = -1;
+    bool autoNext = true;
+    std::function<int()> nextEpisode;
     brls::Event<int> playIndexEvent;
     brls::VoidEvent settingEvent;
     View* lastFocusedView = nullptr;

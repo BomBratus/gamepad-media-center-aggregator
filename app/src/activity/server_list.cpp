@@ -2,10 +2,11 @@
     Copyright 2023 dragonflylee
 */
 
+#include "utils/config.hpp"
 #include "activity/server_list.hpp"
 #include "view/connection_switcher.hpp"
 #include "tab/setting_tab.hpp"
-#include "tab/remote_tab.hpp"
+#include "tab/stremio_add.hpp"
 #include <optional>
 
 using namespace brls::literals;  // for _i18n
@@ -23,7 +24,7 @@ ServerList::~ServerList() { brls::Logger::debug("ServerList Activity: delete"); 
 void ServerList::onContentAvailable() {
     // the footer is button hints only now, floating over the content; it
     // self-configures (gradient/pill) in its constructor — nothing to set here.
-    auto* switcher = new ConnectionSwitcher();
+    auto* switcher = new StremioAdd();
     this->content->addView(switcher);
     brls::Application::giveFocus(switcher->getDefaultFocus());
 
@@ -36,11 +37,6 @@ void ServerList::onContentAvailable() {
             view->present(tab);
             return true;
         });
-        this->frame->registerAction("main/tabs/remote"_i18n, brls::BUTTON_RB, [](brls::View* view) {
-            auto* tab = new RemoteTab();
-            tab->onCreate();
-            view->present(tab);
-            return true;
-        });
+
     }
 }

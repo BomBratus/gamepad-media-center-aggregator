@@ -1,17 +1,4 @@
-/*
-    GMCA — abstract media backend interface.
-
-    Every server type (Plex, Jellyfin/Emby, Stremio) implements media::Backend
-    and produces neutral media::* models. The UI talks ONLY to the active backend
-    (AppConfig::instance().backend()) and never formats a provider URL itself.
-    Capabilities drive which actions/menus/tabs are shown. See MULTI_BACKEND.md.
-
-    Async convention (same as the former plex::getJSON): a verb runs the request
-    on brls::async, parses, and calls `then` back on the UI thread via brls::sync;
-    on failure it calls `error`. resolvePlayback() is synchronous (the player
-    already calls it inside an async context) and throws std::runtime_error on
-    failure.
-*/
+/* GMCA media models and playback. Persisted field names remain compatible. */
 
 #pragma once
 
@@ -30,24 +17,15 @@ template <typename T>
 using Then = std::function<void(T)>;
 
 /// Backend kind (also the discriminant persisted in AppServer::type)
-enum class BackendType { Plex, Jellyfin, Emby, Stremio };
+enum class BackendType { Stremio };
 
-/// Content kind requested by the UI (each backend maps onto its own encoding:
-/// Plex type=1|2, Jellyfin includeItemTypes=Movie|Series, Stremio movie|series).
 enum class MediaKind { Any, Movie, Show, Season, Episode, Collection, Playlist, Photo, Artist, Album, Track };
 
 /// Playback report state
 enum class PlayState { Playing, Paused, Stopped };
 
-/// Personal-list flavor exposed by the backend: drives the "my list" tab/button
-/// visibility AND its wording. Plex -> Watchlist (plex.tv account), Jellyfin/Emby
-/// -> Favorites. None hides the tab/button entirely.
-enum class ListKind { None, Watchlist, Favorites };
+enum class ListKind { None, Favorites };
 
-/// Library grid query — abstracts sort/filter/type. `sortField` is a neutral
-/// token mapped per backend (canonical tokens follow the Plex set:
-/// "titleSort", "addedAt", "originallyAvailableAt", "rating", "viewCount",
-/// "userRating"). Capability `serverSort`/`serverFilter` gate the UI controls.
 struct GridQuery {
     std::string sortField;
     bool descending = false;
@@ -65,7 +43,7 @@ struct PlaybackOptions {
     bool forceDirectPlay = false;
     bool burnSubtitles = false;
     std::string videoCodec = "h264";  // transcode target codec
-    std::string sessionId;            // stable per-playback session id (X-Plex-Session-Identifier / PlaySessionId)
+    std::string sessionId;            // compatible media field
 };
 
 /// Result of resolvePlayback(): an mpv-playable URL + how to play it.
@@ -95,8 +73,6 @@ struct Capabilities {
     bool recentlyAdded = true;
     // item actions
     bool markWatched = true;
-    /// personal "my list": Watchlist (Plex), Favorites (Jellyfin/Emby), or None.
-    /// Gates the personal-list tab + the detail-page button, and picks the wording.
     ListKind listKind = ListKind::None;
     bool ratings = true;           // critic/audience ratings
     bool skipIntro = false;        // intro/credits markers
@@ -105,7 +81,7 @@ struct Capabilities {
     bool serverProgress = true;    // report progress to server (else local-only)
     bool downloadOriginal = true;
     // accounts
-    bool multiProfile = true;      // Plex Home / Jellyfin users
+    bool multiProfile = true;      // compatible media field
 };
 
 /// Abstract media backend. Navigation verbs are pure virtual (every backend must
@@ -129,6 +105,13 @@ public:
     }
     virtual void getHomeHubs(int count, bool excludeContinueWatching, Then<Container<Hub>> then, OnError error) = 0;
     virtual void getSectionHubs(const std::string& sectionId, int count, Then<Container<Hub>> then, OnError error) = 0;
+    /// Provider-backed top-rated chart. Backends that do not expose one keep
+    /// this default unsupported implementation. Stremio maps it to IMDb's
+    /// all-time Top 250 movie / TV charts and pages the cached result locally.
+    virtual void getTopRated(
+        MediaKind kind, size_t start, size_t size, Then<Container<Item>> then, OnError error) {
+        if (error) error("top rated unsupported");
+    }
     virtual void getContinueWatching(int count, Then<Container<Hub>> then, OnError error) = 0;
     virtual void getLibraryGrid(
         const std::string& sectionId, const GridQuery& q, size_t start, size_t size, Then<Container<Item>> then,
@@ -140,9 +123,6 @@ public:
     /// Single item detail. `full` requests heavy includes (streams/chapters/markers).
     virtual void getItemDetail(const std::string& id, bool full, Then<Item> then, OnError error) = 0;
     virtual void getChildren(const std::string& id, Then<Container<Item>> then, OnError error) = 0;
-    /// Albums of a music artist. Hierarchical backends (Plex) resolve this like
-    /// getChildren; Jellyfin/Emby must override (artists are virtual entities,
-    /// queried by ArtistIds, not by folder ParentId). See MULTI_BACKEND / issue #11.
     virtual void getArtistAlbums(const std::string& artistId, Then<Container<Item>> then, OnError error) {
         getChildren(artistId, then, error);
     }
@@ -179,15 +159,8 @@ public:
     virtual PlaybackSource resolvePlayback(const Item& item, const Media& version, const PlaybackOptions& opts) = 0;
     /// mpv sub-add URL for an external (sidecar) subtitle stream.
     virtual std::string subtitleSidecarUrl(const std::string& streamKey) const { return ""; }
-    /// Resolve external (sidecar) subtitle tracks for `item`, asynchronously, at
-    /// PLAY time. Plex/Jellyfin embed their sidecars in the Media streams at
-    /// detail time and keep this default no-op; Stremio has no per-file streams,
-    /// so it fans out the addons' `subtitles` resource here (only when actually
-    /// playing — cheaper than on every detail open, and the set is per-video, not
-    /// per-source). Each returned Stream is a subtitle (streamType 3) whose `key`
-    /// feeds subtitleSidecarUrl(); `languageTag` is a 2-letter code for matching
-    /// the preferred-language setting, `displayTitle` the menu label.
-    virtual void getSubtitles(const Item& item, Then<std::vector<Stream>> then, OnError error) {
+    virtual void getSubtitles(
+        const Item& item, const Media& version, Then<std::vector<Stream>> then, OnError error) {
         if (then) then({});
     }
     /// Optional guidance for the player's subtitle menu when NO subtitle track is
@@ -208,17 +181,10 @@ public:
     }
     /// Original-quality download URL for a media part.
     virtual std::string downloadUrl(const std::string& partKey) const = 0;
-    /// Auth headers for a raw HTTP request (downloads): Plex X-Plex-*, Jellyfin Authorization.
     virtual HTTP::Header authHeaders() const = 0;
 
-    // ---- personal list: watchlist (Plex) / favorites (Jellyfin) --------------
-    // Gated by caps().listKind != None. All take/produce neutral models; the
-    // backend extracts the right identifier (Plex: item.guid; Jellyfin: item.ratingKey).
 
-    /// Can this item be added to the personal list? (Plex: movie/show with a
-    /// provider guid; Jellyfin: any real item.)
     virtual bool canList(const Item& item) const { return false; }
-    /// List the personal-list contents (Plex watchlist / Jellyfin favorites).
     virtual void listWatchlist(
         const std::string& sortField, MediaKind kind, size_t start, size_t size, Then<Container<Item>> then,
         OnError error) {
@@ -231,11 +197,6 @@ public:
     /// Add/remove the item from the personal list.
     virtual void setWatchlisted(const Item& item, bool add, std::function<void()> then, OnError error) {
         if (error) error("personal list unsupported");
-    }
-    /// Resolve a provider guid to a server item (Plex watchlist only; opens
-    /// detail). Empty Item if none. Favorites are already server items.
-    virtual void matchInLibrary(const std::string& guid, Then<Item> then, OnError error) {
-        if (then) then(Item{});
     }
 };
 

@@ -8,8 +8,6 @@ constexpr std::chrono::milliseconds max_idle_time{60000};
 
 #ifdef BOREALIS_USE_STD_THREAD
 size_t ThreadPool::max_thread_num = std::thread::hardware_concurrency();
-#elif defined(__PSV__)
-size_t ThreadPool::max_thread_num = 2;
 #else
 size_t ThreadPool::max_thread_num = 4;
 #endif

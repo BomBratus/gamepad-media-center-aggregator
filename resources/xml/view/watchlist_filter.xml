@@ -61,7 +61,7 @@
                     <brls:SelectorCell
                         id="watchlist/filter/type" />
                     <brls:SelectorCell
-                        id="watchlist/filter/availability" />
+                        id="watchlist/filter/progress" />
                 </brls:Box>
 
             </brls:Box>

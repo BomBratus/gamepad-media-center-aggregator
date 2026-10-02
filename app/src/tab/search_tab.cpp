@@ -2,6 +2,7 @@
     Copyright 2023 dragonflylee
 */
 
+#include "utils/config.hpp"
 #include "tab/search_tab.hpp"
 #include "view/recycling_grid.hpp"
 #include "view/svg_image.hpp"
@@ -12,9 +13,11 @@
 #include "utils/keybind.hpp"
 #include "utils/network_state.hpp"
 #include "utils/offline_library.hpp"
-#include "api/plex.hpp"
 #include "api/backend.hpp"
+#include <algorithm>
+#include <cstdint>
 #include <fstream>
+#include <map>
 
 using namespace brls::literals;  // for _i18n
 
@@ -62,6 +65,16 @@ private:
     std::string path;
     std::vector<std::string> list;
 };
+
+namespace {
+struct SearchDebounceState {
+    int frames = 0;
+    uint64_t generation = 0;
+};
+
+std::map<SearchTab*, SearchDebounceState> searchDebounceStates;
+std::map<SearchTab*, brls::Event<>::Subscription> searchDebounceSubscriptions;
+}  // namespace
 
 /// Removes the last UTF-8 code point: the IME can input multi-byte
 /// characters, a bare pop_back would cut a sequence in the middle.
@@ -173,6 +186,16 @@ SearchTab::SearchTab() {
     });
 
     this->searchSuggest->registerCell("Cell", VideoCardCell::create);
+
+    searchDebounceStates[this] = {};
+    auto subscription = brls::Application::getRunLoopEvent()->subscribe([this]() {
+        auto it = searchDebounceStates.find(this);
+        if (it == searchDebounceStates.end() || it->second.frames <= 0) return;
+        if (--it->second.frames > 0 || this->currentSearch.empty()) return;
+        this->searchSuggest->showSkeleton();
+        this->doSearch(this->currentSearch);
+    });
+    searchDebounceSubscriptions.emplace(this, subscription);
 }
 
 void SearchTab::onCreate() {
@@ -192,7 +215,15 @@ void SearchTab::onCreate() {
     this->updateInput();
 }
 
-SearchTab::~SearchTab() { brls::Logger::debug("SearchTab: deleted"); }
+SearchTab::~SearchTab() {
+    auto sub = searchDebounceSubscriptions.find(this);
+    if (sub != searchDebounceSubscriptions.end()) {
+        brls::Application::getRunLoopEvent()->unsubscribe(sub->second);
+        searchDebounceSubscriptions.erase(sub);
+    }
+    searchDebounceStates.erase(this);
+    brls::Logger::debug("SearchTab: deleted");
+}
 
 brls::View* SearchTab::create() { return new SearchTab(); }
 
@@ -350,16 +381,21 @@ void SearchTab::doSuggest() {
     AppConfig::instance().backend().getRecentlyAdded(0, 24,
         [ASYNC_TOKEN](const media::Container<media::Item>& r) {
             ASYNC_RELEASE
+            if (!this->currentSearch.empty()) return;
             // poster grid: the suggestions are complete items
             this->searchSuggest->setDataSource(new VideoDataSource(r.Items));
         },
         [ASYNC_TOKEN](const std::string& ex) {
             ASYNC_RELEASE
+            if (!this->currentSearch.empty()) return;
             this->searchSuggest->setError(ex);
         });
 }
 
 void SearchTab::doSearch(const std::string& searchTerm) {
+    auto state = searchDebounceStates.find(this);
+    const uint64_t generation = state == searchDebounceStates.end() ? 0 : state->second.generation;
+
     // offline: search the local catalog (title contains, case-insensitive)
     // instead of the server (SPEC §4.4)
     if (NetworkState::isOffline()) {
@@ -378,8 +414,12 @@ void SearchTab::doSearch(const std::string& searchTerm) {
     ASYNC_RETAIN
     // a single page: search does not paginate reliably
     AppConfig::instance().backend().search(searchTerm, media::MediaKind::Any, 40,
-        [ASYNC_TOKEN](const media::Container<media::Item>& r) {
+        [ASYNC_TOKEN, searchTerm, generation](const media::Container<media::Item>& r) {
             ASYNC_RELEASE
+            auto state = searchDebounceStates.find(this);
+            if (state == searchDebounceStates.end() || state->second.generation != generation ||
+                searchTerm != this->currentSearch)
+                return;
             if (r.Items.empty()) {
                 this->searchSuggest->setEmpty(
                     "main/search/no_results"_i18n, "main/search/no_results_sub"_i18n, "icon/ico-search.svg");
@@ -387,13 +427,20 @@ void SearchTab::doSearch(const std::string& searchTerm) {
                 this->searchSuggest->setDataSource(new VideoDataSource(r.Items));
             }
         },
-        [ASYNC_TOKEN](const std::string& ex) {
+        [ASYNC_TOKEN, searchTerm, generation](const std::string& ex) {
             ASYNC_RELEASE
+            auto state = searchDebounceStates.find(this);
+            if (state == searchDebounceStates.end() || state->second.generation != generation ||
+                searchTerm != this->currentSearch)
+                return;
             brls::Application::notify(ex);
         });
 }
 
 void SearchTab::updateInput() {
+    auto& debounce = searchDebounceStates[this];
+    ++debounce.generation;
+    debounce.frames = 0;
     auto theme = brls::Application::getTheme();
     if (this->currentSearch.empty()) {
         this->inputLabel->setText("main/search/placeholder"_i18n);
@@ -409,7 +456,8 @@ void SearchTab::updateInput() {
             this->historyBox->setVisibility(brls::Visibility::GONE);
         }
         this->suggestHeader->setTitle("main/search/results"_i18n);
-        this->searchSuggest->showSkeleton();
-        this->doSearch(this->currentSearch);
+        size_t fps = brls::Application::getFPS();
+        if (fps == 0) fps = 60;
+        debounce.frames = std::max(1, (int)(fps * 450 / 1000));
     }
 }

@@ -10,17 +10,9 @@
 #include <utils/event.hpp>
 #ifdef MPV_SW_RENDER
 #include <mpv/render.h>
-#elif defined(BOREALIS_USE_D3D11)
-#include <mpv/render_dxgi.h>
-#elif defined(BOREALIS_USE_DEKO3D)
-#include <mpv/render_dk3d.h>
-#elif defined(BOREALIS_USE_GXM)
-#include <mpv/render.h>
-#include <mpv/render_gxm.h>
-#include <nanovg_gxm_utils.h>
 #else
 #include <mpv/render_gl.h>
-#if defined(__PSV__) || defined(__PS4__)
+#ifdef __PS4__
 #include <GLES2/gl2.h>
 #else
 #include <glad/glad.h>
@@ -64,7 +56,7 @@ public:
 
     std::string getString(const std::string &key);
 
-    double getDouble(const std::string &key);
+    double getDouble(const std::string &key, double fallback = 0);
     void setDouble(const std::string &key, double value);
 
     int64_t getInt(const std::string &key, int64_t default_value = 0);
@@ -138,20 +130,12 @@ public:
 
     // 硬件解码
     inline static bool HARDWARE_DEC = false;
-#if defined(__SWITCH__) || defined(BOREALIS_USE_GXM) || defined(ANDROID)
-    inline static std::string PLAYER_HWDEC_METHOD = "auto";
-#elif defined(__PSV__)
-    inline static std::string PLAYER_HWDEC_METHOD = "vita-copy";
-#elif defined(__PS4__)
+#ifdef __PS4__
     inline static std::string PLAYER_HWDEC_METHOD = "no";
 #else
     inline static std::string PLAYER_HWDEC_METHOD = "auto-safe";
 #endif
-#if defined(ANDROID)
-    inline static std::string VO = "gpu";
-#else
     inline static std::string VO = "libmpv";
-#endif
     inline static std::string VIDEO_CODEC = "h264";
     inline static int64_t VIDEO_QUALITY = 0;
 
@@ -194,44 +178,26 @@ private:
         {MPV_RENDER_PARAM_SW_POINTER, pixels},
         {MPV_RENDER_PARAM_INVALID, nullptr},
     };
-#elif defined(BOREALIS_USE_D3D11)
-    mpv_render_param mpv_params[1] = {
-        {MPV_RENDER_PARAM_INVALID, nullptr},
-    };
-#elif defined(BOREALIS_USE_DEKO3D)
-    DkFence doneFence;
-    DkFence readyFence;
-    mpv_deko3d_fbo mpv_fbo{
-        .tex = nullptr,
-        .ready_fence = &readyFence,
-        .done_fence = &doneFence,
-        .w = 1280,
-        .h = 720,
-        .format = DkImageFormat_RGBA8_Unorm,
-    };
-    mpv_render_param mpv_params[3] = {
-        {MPV_RENDER_PARAM_DEKO3D_FBO, &mpv_fbo},
-        {MPV_RENDER_PARAM_INVALID, nullptr},
-    };
-#elif defined(BOREALIS_USE_GXM)
-    int nvg_image = 0;
-    mpv_gxm_fbo mpv_fbo = {
-        .render_target = nullptr,
-        .color_surface = nullptr,
-        .depth_stencil_surface = nullptr,
-        .w = DISPLAY_WIDTH,
-        .h = DISPLAY_HEIGHT,
-        .format = SCE_GXM_TEXTURE_FORMAT_U8U8U8U8_RGBA,
-    };
-    int flip_y{1};
-    mpv_render_param mpv_params[3] = {
-        {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
-        {MPV_RENDER_PARAM_GXM_FBO, &mpv_fbo},
-        {MPV_RENDER_PARAM_INVALID, nullptr},
-    };
 #else
     GLint default_framebuffer = 0;
-    mpv_opengl_fbo mpv_fbo;
+    // Zero-initialize every field. Leaving w/h/internal_format indeterminate can
+    // make libmpv choose an invalid render target description on GLES/Piglet.
+    mpv_opengl_fbo mpv_fbo{};
+#if defined(__PS4__)
+    // Keep libmpv off Borealis' default framebuffer on PS4. Piglet can report
+    // a completely healthy decode/render/swap loop while the shared target is
+    // visually corrupted; an owned RGBA target isolates video GL state and is
+    // then composed by NanoVG in normal UI draw order.
+    GLuint ps4_video_fbo = 0;
+    GLuint ps4_video_texture = 0;
+    int ps4_video_nvg_image = 0;
+    int ps4_video_width = 0;
+    int ps4_video_height = 0;
+    bool ps4_video_target_ready = false;
+
+    bool createPs4VideoTarget(int width, int height);
+    void destroyPs4VideoTarget();
+#endif
     int flip_y{1};
     mpv_render_param mpv_params[3] = {
         {MPV_RENDER_PARAM_OPENGL_FBO, &mpv_fbo},
@@ -250,8 +216,7 @@ private:
     // 当前软件是否在前台的回调
     brls::Event<bool>::Subscription focusSubscription;
 
-    // window/framebuffer size changes (Switch dock/undock): the mpv render
-    // target size is in pixels and must follow Application::windowWidth/Height
+    // Window/framebuffer resize changes the pixel dimensions used by mpv.
     brls::VoidEvent::Subscription sizeSubscription;
 
     /// Will be called in main thread to get events from mpv core

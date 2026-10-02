@@ -36,7 +36,6 @@ void split(const std::string& data, std::vector<std::string>& result, char seq);
 
 bool sendIPC(const std::string& sock, const std::string& payload);
 
-void initCrashDump();
 
 }  // namespace misc
 

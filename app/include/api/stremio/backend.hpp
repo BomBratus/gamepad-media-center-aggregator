@@ -1,25 +1,20 @@
-/*
-    GMCA — Stremio implementation of media::Backend.
-    Translates the Stremio addon protocol (manifests, catalogs, meta, episodes,
-    streams, subtitles) into the neutral media:: model. Stateless, multi-addon: an
-    AddonEngine aggregates the configured addons and routes each request. The
-    addons are unauthenticated; the account token only drives the library sync.
-
-    SCOPE: navigation (catalogs as Sections/Hubs, item detail, seasons, episodes,
-    search), playback (resolvePlayback + external subtitles via getSubtitles), and
-    account actions (watchlist, watched flag, progress) when connected. See
-    MULTI_BACKEND.md.
-
-    Identity: Item::ratingKey is the OPAQUE "{stremioType}:{stremioId}" codec
-    (stremio/types.hpp). Stremio images are ABSOLUTE URLs, passed through verbatim.
-*/
+/* GMCA media models and playback. Persisted field names remain compatible. */
 
 #pragma once
 
 #include "api/backend.hpp"
 #include "api/stremio/addons.hpp"
+#include <memory>
 
 namespace stremio {
+
+// Local playback checkpoints are queued asynchronously, independently of account sync.
+void flushPlaybackHistory();
+void beginPlayback(const std::string& id, const std::string& sessionId);
+bool playbackCompleted(const std::string& id);
+nlohmann::json savedPlayback(const std::string& id);
+void rememberPlayback(const media::Item& item, const media::Media& source, int64_t position, int64_t duration);
+int savedPlaybackSource(const media::Item& item);
 
 class StremioBackend : public media::Backend {
 public:
@@ -35,6 +30,8 @@ public:
         media::OnError error) override;
     void getSectionHubs(const std::string& sectionId, int count, media::Then<media::Container<media::Hub>> then,
         media::OnError error) override;
+    void getTopRated(media::MediaKind kind, size_t start, size_t size,
+        media::Then<media::Container<media::Item>> then, media::OnError error) override;
     void getContinueWatching(int count, media::Then<media::Container<media::Hub>> then, media::OnError error) override;
     void getLibraryGrid(const std::string& sectionId, const media::GridQuery& q, size_t start, size_t size,
         media::Then<media::Container<media::Item>> then, media::OnError error) override;
@@ -43,6 +40,8 @@ public:
     void getHubPage(const std::string& hubKey, size_t start, size_t size,
         media::Then<media::Container<media::Item>> then, media::OnError error) override;
     void getItemDetail(const std::string& id, bool full, media::Then<media::Item> then, media::OnError error) override;
+    void completePlaybackSources(media::Item item, media::Then<media::Item> then, media::OnError error);
+    void getResumeDetail(const std::string& id, bool reuseSource, media::Then<media::Item> then, media::OnError error);
     void getChildren(
         const std::string& id, media::Then<media::Container<media::Item>> then, media::OnError error) override;
     void getAllEpisodes(const std::string& showId, bool includeStreams,
@@ -75,8 +74,8 @@ public:
     media::PlaybackSource resolvePlayback(
         const media::Item& item, const media::Media& version, const media::PlaybackOptions& opts) override;
     std::string subtitleSidecarUrl(const std::string& streamKey) const override;
-    void getSubtitles(
-        const media::Item& item, media::Then<std::vector<media::Stream>> then, media::OnError error) override;
+    void getSubtitles(const media::Item& item, const media::Media& version,
+        media::Then<std::vector<media::Stream>> then, media::OnError error) override;
     std::string subtitleMenuHint() const override;
     void reportProgress(const std::string& id, media::PlayState state, int64_t posMs, int64_t durMs,
         const std::string& sessionId) override;
@@ -95,8 +94,9 @@ public:
     void setWatchlisted(const media::Item& item, bool add, std::function<void()> then, media::OnError error) override;
 
 private:
+    void getDetail(const std::string& id, bool full, bool reuseSource, media::Then<media::Item> then, media::OnError error);
     media::Capabilities caps_;
-    AddonEngine engine;
+    std::shared_ptr<AddonEngine> engine;
 };
 
 }  // namespace stremio

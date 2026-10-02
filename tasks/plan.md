@@ -1,4 +1,9 @@
-# Plan d'implémentation — Navigation hors-ligne (issue #19)
+# Archived: plan d'implémentation — Navigation hors-ligne (issue #19)
+
+> Plan historique dérivé d'une spécification Plex antérieure. Il est conservé
+> comme contexte de projet et ne décrit pas les priorités actuelles. GMCA cible
+> actuellement PS4 avec Stremio uniquement; Linux sert de banc de test partagé
+> explicite. Voir [README.md](../README.md) et [tests/ui/README.md](../tests/ui/README.md).
 
 Dérivé de `SPEC.md`. Ordre = dépendances. Chaque tâche = 1 commit atomique.
 

@@ -1,9 +1,9 @@
 /*
     GMCA — "Playlists" sidebar tab.
     Grid of ALL the server's video playlists: square cards
-    (Plex composite = 1:1 mosaic) + title + "N items".
-    API: GET /playlists?playlistType=video (plex::apiPlaylists),
-    X-Plex-Container-* pagination; click -> PlaylistView.
+    (media composite = 1:1 mosaic) + title + "N items".
+    API: GET /playlists?playlistType=video (media::apiPlaylists),
+    X-media-Container-* pagination; click -> PlaylistView.
 */
 
 #pragma once

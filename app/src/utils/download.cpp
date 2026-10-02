@@ -6,7 +6,6 @@
 #include "utils/offline_catalog.hpp"
 #include "utils/image_cache.hpp"
 #include "utils/thread.hpp"
-#include "api/plex.hpp"
 #include "api/backend.hpp"
 #include <algorithm>
 #include <cctype>
@@ -71,7 +70,7 @@ void DownloadManager::addDownload(const std::string& itemId) {
 
     // metadata for the download
     AppConfig::instance().backend().getItemDetail(
-        itemId, false,
+        itemId, true,
         [this](const media::Item& item) {
 
             std::lock_guard<std::mutex> lock(this->mutex);
@@ -86,10 +85,9 @@ void DownloadManager::addDownload(const std::string& itemId) {
             dl.productionYear = (long)item.year;
             dl.durationMs = item.duration;
             // poster: for an episode, the season's/show's
-            dl.thumb = item.type == plex::mediaTypeEpisode
+            dl.thumb = item.type == media::mediaTypeEpisode
                            ? (!item.parentThumb.empty() ? item.parentThumb : item.grandparentThumb)
                            : item.thumb;
-            // first accessible Part: original quality (PLEX_MIGRATION.md D2)
             for (auto& media : item.media) {
                 for (auto& part : media.parts) {
                     if (!part.key.empty()) {
@@ -103,6 +101,7 @@ void DownloadManager::addDownload(const std::string& itemId) {
                 brls::Application::notify("main/download/failed"_i18n);
                 return;
             }
+            OfflineLibrary::instance().putItem(item);
             dl.status = DownloadStatus::Queued;
 
             this->items.push_back(dl);
@@ -138,10 +137,11 @@ void DownloadManager::addDownload(const media::Item& item, const std::string& pa
     dl.episodeIndex = (int)item.index;
     dl.productionYear = (long)item.year;
     dl.durationMs = item.duration;
-    dl.thumb = item.type == plex::mediaTypeEpisode
+    dl.thumb = item.type == media::mediaTypeEpisode
                    ? (!item.parentThumb.empty() ? item.parentThumb : item.grandparentThumb)
                    : item.thumb;
     dl.partKey = partKey;
+    OfflineLibrary::instance().putItem(item);
     dl.status = DownloadStatus::Queued;
     this->items.push_back(dl);
     this->saveIndex();
@@ -285,7 +285,6 @@ std::vector<DownloadItem> DownloadManager::getItems() const {
 }
 
 std::string DownloadManager::buildDownloadUrl(const DownloadItem& item) const {
-    // original-quality file (PLEX_MIGRATION.md D2 — no transcoded download in v1)
     return AppConfig::instance().backend().downloadUrl(item.partKey);
 }
 
@@ -294,57 +293,9 @@ std::string DownloadManager::buildDownloadUrl(const DownloadItem& item) const {
 // choice (not a concurrency requirement: the shared curl DNS cache is lock-
 // guarded, http.cpp).
 void DownloadManager::captureOfflineSync(const std::string& itemId) {
-    auto& conf = AppConfig::instance();
-    const std::string base = conf.getUrl();
-    const std::string token = conf.getToken();
-    auto& lib = OfflineLibrary::instance();
-
-    auto fetchOne = [&](const std::string& id) -> std::optional<plex::Item> {
-        std::string url = base + fmt::format(fmt::runtime(plex::apiMetadata), id, "");
-        auto c = plex::getSync(url, token).get<plex::Container<plex::Item>>();
-        if (c.Items.empty()) return std::nullopt;
-        return c.Items.front();
-    };
-    auto fetchChildren = [&](const std::string& id) -> std::vector<plex::Item> {
-        std::string url = base + fmt::format(fmt::runtime(plex::apiChildren), id, "");
-        return plex::getSync(url, token).get<plex::Container<plex::Item>>().Items;
-    };
-    auto cacheAssets = [](const plex::Item& it) {
-        for (const auto& p : offline::assetPaths(it)) ImageCache::store(p);
-    };
-
-    // leaf fiche + its artwork (poster/backdrop/logo/cast)
-    auto leaf = fetchOne(itemId);
-    if (!leaf) return;
-    lib.putItem(*leaf);
-    cacheAssets(*leaf);
-
-    if (leaf->type != plex::mediaTypeEpisode) return;
-
-    // show fiche only — once per show. We deliberately do NOT persist every
-    // season: only seasons that actually get a downloaded episode are stored
-    // (below), so the offline seasons row lists just those (SPEC AC10).
-    if (!leaf->grandparentRatingKey.empty() && !lib.hasItem(leaf->grandparentRatingKey)) {
-        if (auto show = fetchOne(leaf->grandparentRatingKey)) {
-            lib.putItem(*show);
-            cacheAssets(*show);
-        }
-    }
-    // this season's fiche + its FULL episode list — non-downloaded siblings
-    // appear greyed (SPEC AC9). Once per season (guarded on the season node).
-    if (!leaf->parentRatingKey.empty() && !lib.hasItem(leaf->parentRatingKey)) {
-        if (auto season = fetchOne(leaf->parentRatingKey)) {
-            if (season->parentRatingKey.empty()) season->parentRatingKey = leaf->grandparentRatingKey;
-            lib.putItem(*season);
-            cacheAssets(*season);
-        }
-        for (auto& ep : fetchChildren(leaf->parentRatingKey)) {
-            if (ep.ratingKey == itemId) continue;  // keep the richer leaf fiche
-            if (ep.parentRatingKey.empty()) ep.parentRatingKey = leaf->parentRatingKey;
-            if (ep.grandparentRatingKey.empty()) ep.grandparentRatingKey = leaf->grandparentRatingKey;
-            lib.putItem(ep);
-        }
-    }
+    media::Item item;
+    if (!OfflineLibrary::instance().getItem(itemId, item)) return;
+    for (const auto& path : offline::assetPaths(item)) ImageCache::store(path);
 }
 
 // Must be called with mutex held
@@ -420,10 +371,8 @@ void DownloadManager::doDownload(DownloadItem& item) {
             resetQueue("Cancelled");
             return;
         }
-        // Extension of the original file, read from Part.key (Plex:
         // /library/parts/{id}/{ts}/file.mkv). For Stremio the partKey is a full
         // stream URL, so strip any query/fragment first — otherwise ext becomes
-        // "mkv?token=…" and the filename is rejected by FAT/exFAT (Switch/Vita).
         // Keep only a sane short alphanumeric extension, else fall back to mp4.
         std::string ext = "mp4";
         std::string keyPath = partKey;

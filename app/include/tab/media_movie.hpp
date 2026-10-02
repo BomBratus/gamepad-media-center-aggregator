@@ -6,7 +6,7 @@
 
 #include <borealis.hpp>
 #include <view/presenter.hpp>
-#include <api/plex/types.hpp>
+#include <api/media/types.hpp>
 #include <utils/download.hpp>
 #include <view/svg_image.hpp>
 
@@ -18,7 +18,7 @@ class MediaMovie : public brls::Box, public Presenter {
 public:
     /// localContext = opened from the offline downloads area (render locally
     /// even when a server is reachable, SPEC AC6)
-    MediaMovie(const plex::Item& item, bool localContext = false);
+    MediaMovie(const media::Item& item, bool localContext = false);
     ~MediaMovie() override;
 
 private:

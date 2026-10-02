@@ -1,3 +1,9 @@
+# Archived: historical Jellyfin → Plex migration plan
+
+> This document records a completed historical migration and is retained for
+> attribution and project history. Current GMCA development and delivery target
+> PS4 with Stremio only; Linux is an explicit shared-behavior test bench.
+
 # Switchfin → pleNx : plan de migration Jellyfin → Plex
 
 > **État (2026-06-09) : phases 0 à 5 réalisées** — l'application compile (desktop macOS) et ne contient

@@ -1,8 +1,8 @@
 #include "tab/home_tab.hpp"
 #include "view/recyling_video.hpp"
 #include "view/loading_spinner.hpp"
-#include "api/plex.hpp"
 #include "api/backend.hpp"
+#include "utils/config.hpp"
 #include "utils/keybind.hpp"
 #include "utils/network_state.hpp"
 #include "utils/offline_library.hpp"
@@ -23,9 +23,6 @@ HomeTab::~HomeTab() { brls::Logger::debug("View HomeTab: delete"); }
 
 brls::View* HomeTab::create() { return new HomeTab(); }
 
-/// The home screen mirrors the rows configured server-side: "Continue
-/// watching" then the hubs from /hubs, with their localized titles
-/// (X-Plex-Language) — PLEX_MIGRATION.md §2.5.
 void HomeTab::doRequest() {
     // drop any previous offline empty overlay -> back to the scrollable list
     if (this->offlineEmpty) {
@@ -76,6 +73,7 @@ void HomeTab::doRequest() {
     resume->setFrameHeight(brls::getStyle()["app/card/poster/row"]);
     resume->setItemWidth(brls::getStyle()["app/card/poster/width"]);
     resume->setSidePadding(brls::getStyle()["main/content_padding_sides"]);
+    resume->setStremioContinueWatching(AppConfig::instance().backend().type() == media::BackendType::Stremio);
     resume->setVisibility(brls::Visibility::GONE);
     this->boxHome->addView(resume);
 
@@ -122,10 +120,10 @@ void HomeTab::doHubs() {
 
                 // playlist hubs mix audio/photo/video: only video playlists
                 // are playable in pleNx
-                std::vector<plex::Item> items;
+                std::vector<media::Item> items;
                 items.reserve(hub.items.size());
                 for (auto& item : hub.items) {
-                    if (item.type == plex::mediaTypePlaylist && item.playlistType != "video") continue;
+                    if (item.type == media::mediaTypePlaylist && item.playlistType != "video") continue;
                     items.push_back(item);
                 }
                 if (items.empty()) continue;
@@ -138,8 +136,8 @@ void HomeTab::doHubs() {
                 // — width = image height of the row (frame - 55 of labels,
                 // video_card.xml metrics); everything else keeps 2:3 posters
                 const std::string& t0 = items.front().type;
-                bool square = t0 == plex::mediaTypePlaylist || t0 == plex::mediaTypeArtist ||
-                              t0 == plex::mediaTypeAlbum || t0 == plex::mediaTypeTrack;
+                bool square = t0 == media::mediaTypePlaylist || t0 == media::mediaTypeArtist ||
+                              t0 == media::mediaTypeAlbum || t0 == media::mediaTypeTrack;
                 row->setItemWidth(square ? frameHeight - 55 : brls::getStyle()["app/card/poster/width"]);
                 row->setSidePadding(brls::getStyle()["main/content_padding_sides"]);
                 // truncated hub (more=1): "+" card to the full page

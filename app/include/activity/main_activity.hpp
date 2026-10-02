@@ -18,14 +18,13 @@
 
 #include <borealis.hpp>
 #include <view/auto_tab_frame.hpp>
-#include <api/plex/types.hpp>
+#include <api/media/types.hpp>
 #include <map>
 #include <set>
 #include <string>
 #include <vector>
 
 /// Main sidebar: the static tabs (home, search, downloads, settings) come
-/// from activity/main.xml, plus one tab per Plex library inserted after
 /// the home tab once /library/sections answers. A server/profile switch
 /// recreates the whole MainActivity, so the tabs follow the active server.
 class MainTabFrame : public AutoTabFrame {
@@ -62,7 +61,7 @@ public:
     ~MainTabFrame() override;
 
 private:
-    void addLibraryTabs(const std::vector<plex::Section>& sections);
+    void addLibraryTabs(const std::vector<media::Section>& sections);
     /// offline mode: build the library tabs from the local catalog instead of
     /// /library/sections (SPEC §4.4)
     void addOfflineLibraryTabs();
@@ -82,7 +81,7 @@ private:
     /// libraries in server order, then Playlists, then Watchlist.
     std::vector<std::string> naturalOrder();
 
-    std::vector<plex::Section> libs_;  // qualifying libraries (movie/show/photo)
+    std::vector<media::Section> libs_;  // qualifying libraries (movie/show/photo)
     /// Hidden reorderable tabs are removed from the sidebar tree (NOT set
     /// Visibility::GONE — display:none breaks the yoga layout of the grow spacer
     /// when a tab is shown again) and kept alive here, keyed by tab id, so they

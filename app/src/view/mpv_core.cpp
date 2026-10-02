@@ -5,36 +5,43 @@
 #include "view/mpv_core.hpp"
 #include "utils/config.hpp"
 #include "utils/misc.hpp"
+#include "utils/ps4_diagnostics.hpp"
 #include <fmt/ranges.h>
+#if defined(__PS4__)
+#include <cstdio>
+#include <sys/stat.h>
+
+extern "C" {
+extern int ps4_mpv_use_precompiled_shaders;
+extern int ps4_mpv_dump_shaders;
+}
+
+// nanovg_gl.h only exposes the backend-specific declaration when included by
+// its implementation unit. Borealis exports this GLES2 helper, so declare the
+// one function GMCA needs without pulling another NanoVG implementation in.
+extern "C" int nvglCreateImageFromHandleGLES2(
+    NVGcontext* ctx, GLuint textureId, int w, int h, int imageFlags);
+static constexpr int GMCA_NVG_IMAGE_NODELETE = 1 << 16;
+#endif
 
 static inline void check_error(int status) {
     if (status < 0) brls::Logger::error("MPV ERROR => {}", mpv_error_string(status));
 }
 
-#ifndef MPV_SW_RENDER
-#ifdef BOREALIS_USE_D3D11
-#include <borealis/platforms/driver/d3d11.hpp>
-extern std::unique_ptr<brls::D3D11Context> D3D11_CONTEXT;
-#elif defined(BOREALIS_USE_DEKO3D)
-#include <borealis/platforms/switch/switch_video.hpp>
-#elif defined(BOREALIS_USE_GXM)
-#include <borealis/platforms/psv/psv_video.hpp>
-#include <borealis/extern/nanovg/nanovg_gxm.h>
-#else
-#ifdef __SDL2__
+#if !defined(MPV_SW_RENDER)
+#if defined(__SDL2__)
 #include <SDL2/SDL.h>
 #else
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
-#if defined(__PS4__) || defined(__PSV__) || defined(__SWITCH__) || defined(ANDROID)
-#elif defined(__linux__)
+#if defined(GMCA_LINUX_TEST_BENCH)
 #define GLFW_EXPOSE_NATIVE_X11
 #define GLFW_EXPOSE_NATIVE_WAYLAND
 #include <GLFW/glfw3native.h>
 #endif
 #endif
 static void *get_proc_address(void *unused, const char *name) {
-#ifdef __SDL2__
+#if defined(__SDL2__)
     SDL_GL_GetCurrentContext();
     return (void *)SDL_GL_GetProcAddress(name);
 #else
@@ -43,36 +50,391 @@ static void *get_proc_address(void *unused, const char *name) {
 #endif
 }
 #endif
+
+
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+static int sPs4GlProbeFrames = 0;
+static bool sPs4GlProbeHadError = false;
+static unsigned sPs4GlSampleCounter = 0;
+static unsigned sPs4GlStateSampleCounter = 0;
+
+static std::string ps4MpvString(mpv_handle* mpv, const char* name) {
+    char* value = nullptr;
+    if (mpv_get_property(mpv, name, MPV_FORMAT_STRING, &value) < 0 || !value) return "-";
+    std::string out(value);
+    mpv_free(value);
+    return out;
+}
+
+static int64_t ps4MpvInt(mpv_handle* mpv, const char* name) {
+    int64_t value = -1;
+    if (mpv_get_property(mpv, name, MPV_FORMAT_INT64, &value) < 0) return -1;
+    return value;
+}
+
+static void ps4LogVideoState(mpv_handle* mpv, const char* reason) {
+    ps4diag::write(fmt::format(
+        "video-state reason={} codec={} format={} pixfmt={} hw-pixfmt={} size={}x{} "
+        "matrix={} levels={} primaries={} gamma={} hwdec={}",
+        reason,
+        ps4MpvString(mpv, "video-codec"),
+        ps4MpvString(mpv, "video-format"),
+        ps4MpvString(mpv, "video-params/pixelformat"),
+        ps4MpvString(mpv, "video-params/hw-pixelformat"),
+        ps4MpvInt(mpv, "video-params/w"),
+        ps4MpvInt(mpv, "video-params/h"),
+        ps4MpvString(mpv, "video-params/colormatrix"),
+        ps4MpvString(mpv, "video-params/colorlevels"),
+        ps4MpvString(mpv, "video-params/primaries"),
+        ps4MpvString(mpv, "video-params/gamma"),
+        ps4MpvString(mpv, "hwdec-current")));
+}
+
+static void ps4ArmGlProbe(const char* reason) {
+    sPs4GlProbeFrames = 180;  // ~3 seconds at 60 fps
+    sPs4GlProbeHadError = false;
+    ps4diag::write(fmt::format("gl-probe start reason={} frames={}", reason, sPs4GlProbeFrames));
+}
+
+static void ps4CheckGlAfterRender() {
+    const bool activeProbe = sPs4GlProbeFrames > 0;
+    ++sPs4GlSampleCounter;
+    // Outside an armed probe, sample only once every ~2 seconds. GL errors
+    // remain latched until read, so this keeps overhead negligible.
+    if (!activeProbe && (sPs4GlSampleCounter % 120) != 0) return;
+
+    bool sawError = false;
+    for (int i = 0; i < 8; ++i) {
+        GLenum error = glGetError();
+        if (error == GL_NO_ERROR) break;
+        sawError = true;
+        sPs4GlProbeHadError = true;
+        ps4diag::write(fmt::format("gl-error 0x{:04x}", static_cast<unsigned>(error)));
+    }
+
+    if (activeProbe) {
+        --sPs4GlProbeFrames;
+        if (sPs4GlProbeFrames == 0)
+            ps4diag::write(fmt::format("gl-probe complete status={}", sPs4GlProbeHadError ? "error" : "no-error"));
+    } else if (sawError) {
+        ps4diag::write("gl-sample detected-error");
+    }
+}
+
+static void ps4PrepareMpvGlState(GLuint fbo, int width, int height) {
+    // libmpv's OpenGL render API expects standard/default GL state on entry.
+    // NanoVG intentionally leaves blending enabled after its previous-frame
+    // flush, and both renderers share Piglet's context on PS4. Normalize the
+    // small set of state that can leak between them before every mpv render.
+    ++sPs4GlStateSampleCounter;
+    const bool sample = (sPs4GlStateSampleCounter % 600) == 0;
+    if (sample) {
+        GLint program = 0;
+        GLint arrayBuffer = 0;
+        GLint elementBuffer = 0;
+        GLint texture2d = 0;
+        GLint activeTexture = 0;
+        GLint currentFbo = 0;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &arrayBuffer);
+        glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &elementBuffer);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture2d);
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &currentFbo);
+        ps4diag::write(fmt::format(
+            "gl-state pre-mpv blend={} cull={} depth={} scissor={} stencil={} "
+            "program={} array={} element={} texture2d={} active=0x{:04x} fbo={}",
+            glIsEnabled(GL_BLEND) ? 1 : 0,
+            glIsEnabled(GL_CULL_FACE) ? 1 : 0,
+            glIsEnabled(GL_DEPTH_TEST) ? 1 : 0,
+            glIsEnabled(GL_SCISSOR_TEST) ? 1 : 0,
+            glIsEnabled(GL_STENCIL_TEST) ? 1 : 0,
+            program, arrayBuffer, elementBuffer, texture2d,
+            static_cast<unsigned>(activeTexture), currentFbo));
+    }
+
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+    glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_ONE, GL_ZERO);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glStencilMask(0xffffffffu);
+    glStencilFunc(GL_ALWAYS, 0, 0xffffffffu);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glViewport(0, 0, width, height);
+
+    if (sample) {
+        ps4diag::write(fmt::format(
+            "gl-state enter-mpv defaults=1 fbo={} size={}x{}",
+            fbo, width, height));
+    }
+}
+
+static void ps4ProbeVideoFbo(GLuint fbo, int width, int height) {
+    // glReadPixels is synchronous on Piglet, so keep this deliberately tiny
+    // and infrequent: a 16x16 RGBA8 center tile once every ~10 seconds at
+    // 60 fps. The default PS4 framebuffer is normally object 0, so 0 is a
+    // valid probe target in the direct-framebuffer path.
+    if (width < 16 || height < 16 || (sPs4GlSampleCounter % 600) != 0) return;
+
+    constexpr int kProbeSize = 16;
+    unsigned char pixels[kProbeSize * kProbeSize * 4]{};
+    GLint previousFbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glReadPixels(
+        (width - kProbeSize) / 2,
+        (height - kProbeSize) / 2,
+        kProbeSize,
+        kProbeSize,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        pixels);
+    const GLenum readError = glGetError();
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousFbo));
+
+    if (readError != GL_NO_ERROR) {
+        ps4diag::write(fmt::format(
+            "fbo-pixels read-error=0x{:04x} fbo={} size={}x{}",
+            static_cast<unsigned>(readError), fbo, width, height));
+        return;
+    }
+
+    uint64_t sum[4] = {0, 0, 0, 0};
+    unsigned minv[4] = {255, 255, 255, 255};
+    unsigned maxv[4] = {0, 0, 0, 0};
+    constexpr int kPixelCount = kProbeSize * kProbeSize;
+    for (int i = 0; i < kPixelCount; ++i) {
+        for (int c = 0; c < 4; ++c) {
+            const unsigned value = pixels[i * 4 + c];
+            sum[c] += value;
+            if (value < minv[c]) minv[c] = value;
+            if (value > maxv[c]) maxv[c] = value;
+        }
+    }
+
+    ps4diag::write(fmt::format(
+        "fbo-pixels fbo={} size={}x{} center={}x{} "
+        "avg={},{},{},{} range-r={}..{} range-g={}..{} range-b={}..{} range-a={}..{}",
+        fbo, width, height, kProbeSize, kProbeSize,
+        static_cast<unsigned>(sum[0] / kPixelCount),
+        static_cast<unsigned>(sum[1] / kPixelCount),
+        static_cast<unsigned>(sum[2] / kPixelCount),
+        static_cast<unsigned>(sum[3] / kPixelCount),
+        minv[0], maxv[0], minv[1], maxv[1], minv[2], maxv[2], minv[3], maxv[3]));
+}
 #endif
 
-#ifdef ANDROID
-#include <jni.h>
-extern "C" {
-#include <libavcodec/jni.h>
-}
-static JavaVM *g_vm;
-static jobject surface;
-
-static int64_t getNativeSurface() {
-    int64_t ptr = 0;
-    JNIEnv *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
-    jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
-    jclass cls = env->GetObjectClass(activity);
-    jmethodID jmethod = env->GetStaticMethodID(cls, "getMpvSurface", "()Landroid/view/Surface;");
-    jobject surface_ = env->CallStaticObjectMethod(cls, jmethod);
-    if (surface_ != nullptr) {
-        surface = env->NewGlobalRef(surface_);
-        ptr = (int64_t)(intptr_t)surface;
-        env->DeleteLocalRef(surface_);
+#if defined(__PS4__) && defined(BOREALIS_USE_OPENGL) && !defined(MPV_SW_RENDER)
+bool MPVCore::createPs4VideoTarget(int width, int height) {
+    if (width <= 0 || height <= 0) return false;
+    if (ps4_video_target_ready && ps4_video_width == width && ps4_video_height == height) {
+        mpv_fbo.fbo = static_cast<int>(ps4_video_fbo);
+        mpv_fbo.w = width;
+        mpv_fbo.h = height;
+        mpv_fbo.internal_format = GL_RGBA;
+        return true;
     }
-    env->DeleteLocalRef(cls);
-    env->DeleteLocalRef(activity);
-    return ptr;
+
+    destroyPs4VideoTarget();
+
+    GLint previousFbo = 0;
+    GLint previousTexture = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFbo);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+
+    glGenTextures(1, &ps4_video_texture);
+    if (!ps4_video_texture) goto fail;
+
+    glBindTexture(GL_TEXTURE_2D, ps4_video_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    glGenFramebuffers(1, &ps4_video_fbo);
+    if (!ps4_video_fbo) goto fail;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, ps4_video_fbo);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ps4_video_texture, 0);
+    {
+        const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+#if defined(GMCA_PS4_SAFE_SOURCES)
+            ps4diag::write(fmt::format(
+                "offscreen-target failed status=0x{:04x} texture={} fbo={} size={}x{}",
+                static_cast<unsigned>(status), ps4_video_texture, ps4_video_fbo, width, height));
+#endif
+            goto fail;
+        }
+    }
+
+    // Initialize the texture deterministically before mpv has produced its
+    // first frame, otherwise an uninitialized Piglet surface can briefly leak.
+    glViewport(0, 0, width, height);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glFinish();
+
+    ps4_video_nvg_image = nvglCreateImageFromHandleGLES2(
+        brls::Application::getNVGContext(),
+        ps4_video_texture,
+        width,
+        height,
+        GMCA_NVG_IMAGE_NODELETE);
+    if (ps4_video_nvg_image <= 0) goto fail;
+
+    ps4_video_width = width;
+    ps4_video_height = height;
+    ps4_video_target_ready = true;
+    mpv_fbo.fbo = static_cast<int>(ps4_video_fbo);
+    mpv_fbo.w = width;
+    mpv_fbo.h = height;
+    mpv_fbo.internal_format = GL_RGBA;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, previousFbo);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+    glViewport(0, 0, brls::Application::windowWidth, brls::Application::windowHeight);
+#if defined(GMCA_PS4_SAFE_SOURCES)
+    ps4diag::write(fmt::format(
+        "offscreen-target ready fbo={} texture={} nvg-image={} size={}x{} format=0x{:04x}",
+        ps4_video_fbo, ps4_video_texture, ps4_video_nvg_image, width, height,
+        static_cast<unsigned>(GL_RGBA)));
+#endif
+    return true;
+
+fail:
+    glBindFramebuffer(GL_FRAMEBUFFER, previousFbo);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+
+    if (ps4_video_nvg_image > 0) {
+        nvgDeleteImage(brls::Application::getNVGContext(), ps4_video_nvg_image);
+        ps4_video_nvg_image = 0;
+    }
+    if (ps4_video_fbo) {
+        glDeleteFramebuffers(1, &ps4_video_fbo);
+        ps4_video_fbo = 0;
+    }
+    if (ps4_video_texture) {
+        glDeleteTextures(1, &ps4_video_texture);
+        ps4_video_texture = 0;
+    }
+    ps4_video_width = 0;
+    ps4_video_height = 0;
+    ps4_video_target_ready = false;
+    mpv_fbo.fbo = default_framebuffer;
+    mpv_fbo.w = brls::Application::windowWidth;
+    mpv_fbo.h = brls::Application::windowHeight;
+    mpv_fbo.internal_format = 0;
+    glViewport(0, 0, brls::Application::windowWidth, brls::Application::windowHeight);
+#if defined(GMCA_PS4_SAFE_SOURCES)
+    ps4diag::write("offscreen-target unavailable; using default framebuffer fallback");
+#endif
+    return false;
 }
 
-static void deleteSurfaceObj() {
-    auto env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
-    env->DeleteGlobalRef(surface);
+void MPVCore::destroyPs4VideoTarget() {
+    if (ps4_video_nvg_image > 0) {
+        if (NVGcontext* vg = brls::Application::getNVGContext())
+            nvgDeleteImage(vg, ps4_video_nvg_image);
+        ps4_video_nvg_image = 0;
+    }
+    if (ps4_video_fbo) {
+        glDeleteFramebuffers(1, &ps4_video_fbo);
+        ps4_video_fbo = 0;
+    }
+    if (ps4_video_texture) {
+        glDeleteTextures(1, &ps4_video_texture);
+        ps4_video_texture = 0;
+    }
+    ps4_video_width = 0;
+    ps4_video_height = 0;
+    ps4_video_target_ready = false;
+}
+#endif
+
+#if defined(__PS4__)
+static int64_t ps4FileSize(const std::string &path) {
+    struct stat st {};
+    return stat(path.c_str(), &st) == 0 ? static_cast<int64_t>(st.st_size) : -1;
+}
+
+static bool ensurePs4SubtitleFont(const std::string &confDir) {
+    const std::string source = BRLS_ASSET("font/switch_font.ttf");
+    const std::string target = fmt::format("{}/subfont.ttf", confDir);
+    const std::string temp = target + ".tmp";
+
+    const int64_t sourceSize = ps4FileSize(source);
+    if (sourceSize <= 0) {
+        brls::Logger::error("PS4 subtitles: packaged fallback font missing: {}", source);
+        return false;
+    }
+
+    if (ps4FileSize(target) == sourceSize) {
+        brls::Logger::info("PS4 subtitles: fallback font ready: {} ({} bytes)", target, sourceSize);
+        return true;
+    }
+
+    FILE *input = std::fopen(source.c_str(), "rb");
+    if (!input) {
+        brls::Logger::error("PS4 subtitles: cannot open packaged fallback font: {}", source);
+        return false;
+    }
+
+    std::remove(temp.c_str());
+    FILE *output = std::fopen(temp.c_str(), "wb");
+    if (!output) {
+        std::fclose(input);
+        brls::Logger::error("PS4 subtitles: cannot create fallback font: {}", temp);
+        return false;
+    }
+
+    char buffer[64 * 1024];
+    bool ok = true;
+    while (true) {
+        const size_t read = std::fread(buffer, 1, sizeof(buffer), input);
+        if (read > 0 && std::fwrite(buffer, 1, read, output) != read) {
+            ok = false;
+            break;
+        }
+        if (read < sizeof(buffer)) {
+            if (std::ferror(input)) ok = false;
+            break;
+        }
+    }
+
+    if (std::fflush(output) != 0) ok = false;
+    std::fclose(output);
+    std::fclose(input);
+
+    if (!ok || ps4FileSize(temp) != sourceSize) {
+        std::remove(temp.c_str());
+        brls::Logger::error("PS4 subtitles: failed to copy packaged fallback font");
+        return false;
+    }
+
+    std::remove(target.c_str());
+    if (std::rename(temp.c_str(), target.c_str()) != 0 || ps4FileSize(target) != sourceSize) {
+        std::remove(temp.c_str());
+        brls::Logger::error("PS4 subtitles: failed to promote fallback font to {}", target);
+        return false;
+    }
+
+    brls::Logger::info("PS4 subtitles: installed fallback font: {} ({} bytes)", target, sourceSize);
+    return true;
 }
 #endif
 
@@ -80,13 +442,8 @@ void MPVCore::on_update(void *self) {
     MPVCore *mpv = reinterpret_cast<MPVCore *>(self);
     brls::sync([mpv]() {
         uint64_t flags = mpv_render_context_update(mpv->mpv_context);
-#if defined(MPV_SW_RENDER) || defined(BOREALIS_USE_GXM)
+#if defined(MPV_SW_RENDER)
         if (flags & MPV_RENDER_UPDATE_FRAME) {
-#ifdef BOREALIS_USE_GXM
-            // FBO alloc can fail under GPU-memory pressure (init() leaves
-            // render_target null): skip the render, mpv keeps decoding audio.
-            if (!mpv->mpv_fbo.render_target) return;
-#endif
             mpv_render_context_render(mpv->mpv_context, mpv->mpv_params);
             mpv_render_context_report_swap(mpv->mpv_context);
         }
@@ -106,7 +463,7 @@ MPVCore::MPVCore() {
     // Destroy mpv when application exit
     brls::Application::getExitEvent()->subscribe([this]() {
         this->clean();
-#ifdef MPV_SW_RENDER
+#if defined(MPV_SW_RENDER)
         if (this->pixels) {
             free(this->pixels);
             this->pixels = nullptr;
@@ -118,32 +475,55 @@ MPVCore::MPVCore() {
 
 void MPVCore::init() {
     std::setlocale(LC_NUMERIC, "C");
-#ifdef ANDROID
-    auto env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
-    if (!env->GetJavaVM(&g_vm) && g_vm) av_jni_set_java_vm(g_vm, NULL);
-#endif
     this->mpv = mpv_create();
     if (!mpv) {
         brls::fatal("Error Create mpv Handle");
     }
 
     auto &conf = AppConfig::instance();
-    std::string confDir = conf.configDir(); 
+    std::string confDir = conf.configDir();
+#if defined(__PS4__)
+    // Keep the stable Piglet precompiled path enabled. Bitmap subtitle
+    // rendering is handled by the GMCA PS4 libmpv alpha-mask fallback, so the
+    // failed runtime shader-dump experiment is disabled again.
+    ps4_mpv_use_precompiled_shaders = 1;
+    ps4_mpv_dump_shaders = 0;
+#endif
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+    ps4diag::init(confDir, AppVersion::getUpdateVersion(), AppVersion::getCommit());
+    ps4diag::write("mpv-init");
+    ps4diag::write("mpv-ps4 precompiled-shaders=1 dump-shaders=0 bitmap-subs=alpha-libass-fallback");
+#endif
 
     // misc
     mpv_set_option_string(mpv, "config", "yes");
     mpv_set_option_string(mpv, "config-dir", confDir.c_str());
+#if defined(__PS4__)
+    // OpenOrbis has no native/system font provider. mpv 0.36/libass treats
+    // provider=none strictly, so a family-name-only fallback can leave a
+    // selected subtitle track with no glyphs. Install the packaged TTF as
+    // config-dir/subfont.ttf: mpv passes that file directly to libass as its
+    // default font, independent of system font discovery/family matching.
+    ensurePs4SubtitleFont(confDir);
+    mpv_set_option_string(mpv, "sub-font-provider", "none");
+    mpv_set_option_string(mpv, "sub-fonts-dir", BRLS_ASSET("font"));
+    mpv_set_option_string(mpv, "sub-visibility", "yes");
+#else
     mpv_set_option_string(mpv, "sub-fonts-dir", confDir.c_str());
+#endif
     mpv_set_option_string(mpv, "watch-later-dir", fmt::format("{}/watch-later", confDir).c_str());
     mpv_set_option_string(mpv, "gpu-shader-cache-dir", fmt::format("{}/cache", confDir).c_str());
     mpv_set_option_string(mpv, "ytdl", "no");
+    // Keep the hardware-tested pre-00.73 network behavior on PS4. The system
+    // CA store used by the OpenOrbis mbedTLS stack is not yet validated for
+    // GMCA HTTPS playback/subtitle traffic.
     mpv_set_option_string(mpv, "referrer", conf.getUrl().c_str());
     mpv_set_option_string(mpv, "osd-level", "0");
     mpv_set_option_string(mpv, "video-timing-offset", "0");  // 60fps
     mpv_set_option_string(mpv, "reset-on-next-file", "speed,pause");
     mpv_set_option_string(mpv, "subs-fallback", SUBS_FALLBACK ? "yes" : "no");
     mpv_set_option_string(mpv, "vo", MPVCore::VO.c_str());
-#if defined(__PS4__) || defined(__PSV__) || defined(TRIMUI)
+#if defined(__PS4__)
     mpv_set_option_string(mpv, "audio-channels", "stereo");
 #else
     mpv_set_option_string(mpv, "audio-channels", MPVCore::AUDIO_CHANNELS.c_str());
@@ -168,29 +548,11 @@ void MPVCore::init() {
         mpv_set_option_string(mpv, "cache", "no");
     }
     // Making the loading process faster
-#if defined(__SWITCH__)
-    mpv_set_option_string(mpv, "vd-lavc-dr", "yes");
-    mpv_set_option_string(mpv, "vd-lavc-threads", "3");
-    // This should fix random crash, but I don't know why.
-    mpv_set_option_string(mpv, "opengl-glfinish", "yes");
-    // Set default subfont
-    std::string locale = brls::Application::getPlatform()->getLocale();
-    if (locale == brls::LOCALE_ZH_HANS)
-        mpv_set_option_string(mpv, "sub-font", "nintendo_udsg-r_org_zh-cn_003");
-    else if (locale == brls::LOCALE_ZH_HANT)
-        mpv_set_option_string(mpv, "sub-font", "nintendo_udjxh-db_zh-tw_003");
-    else if (locale == brls::LOCALE_Ko)
-        mpv_set_option_string(mpv, "sub-font", "nintendo_udsg-r_ko_003");
-#elif defined(__PS4__)
+#if defined(__PS4__)
     mpv_set_option_string(mpv, "vd-lavc-threads", "6");
-#elif defined(__PSV__)
-    mpv_set_option_string(mpv, "vd-lavc-threads", "4");
-    mpv_set_option_string(mpv, "fbo-format", "rgba8");
-    // Fix vo_wait_frame() cannot be wakeup
-    mpv_set_option_string(mpv, "video-latency-hacks", "yes");
-#elif defined(ANDROID)
-    mpv_set_option_string(mpv, "gpu-context", "android");
-    mpv_set_option_string(mpv, "opengl-es", "yes");
+#if defined(GMCA_PS4_SAFE_SOURCES)
+    ps4diag::write("mpv-option fbo-format=auto (00.50 rgba8 experiment removed)");
+#endif
 #endif
 
     // hardware decoding
@@ -201,6 +563,16 @@ void MPVCore::init() {
         mpv_set_option_string(mpv, "hwdec", "no");
     }
 
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+    // 00.55 diagnostic build: ra_ps4 reports the generated shader SHA and
+    // whether the embedded Piglet binary was found only at MP_VERBOSE. Request
+    // verbose callbacks for this hardware test, but persist only shader lines
+    // (plus the existing warn/error messages) in eventMainLoop().
+    const int ps4LogRequestResult = mpv_request_log_messages(mpv, "v");
+    ps4diag::write(fmt::format(
+        "mpv-log-request level=v shader-diagnostic=1 result={}", ps4LogRequestResult));
+#endif
+
     if (MPVCore::DEBUG) {
         mpv_set_option_string(mpv, "terminal", "yes");
         //  mpv_set_option_string(mpv, "msg-level", "all=no");
@@ -209,7 +581,7 @@ void MPVCore::init() {
         mpv_request_log_messages(mpv, "info");
     }
 
-#if (defined(__APPLE__) || defined(__linux__) || defined(_WIN32)) && !defined(ANDROID)
+#if defined(GMCA_LINUX_TEST_BENCH)
     if (conf.getItem(AppConfig::SINGLE, false)) {
         mpv_set_option_string(mpv, "input-ipc-server", conf.ipcSocket().c_str());
     }
@@ -230,102 +602,28 @@ void MPVCore::init() {
     check_error(mpv_observe_property(mpv, 5, "cache-speed", MPV_FORMAT_INT64));
     check_error(mpv_observe_property(mpv, 9, "speed", MPV_FORMAT_DOUBLE));
     check_error(mpv_observe_property(mpv, 10, "volume", MPV_FORMAT_INT64));
+#if defined(__PS4__)
+    // Runtime diagnostics for the real OpenOrbis subtitle pipeline. These log
+    // selection/visibility and only whether decoded text is present, never the
+    // subtitle contents themselves.
+    check_error(mpv_observe_property(mpv, 30, "sid", MPV_FORMAT_STRING));
+    check_error(mpv_observe_property(mpv, 31, "sub-visibility", MPV_FORMAT_FLAG));
+    check_error(mpv_observe_property(mpv, 32, "sub-text", MPV_FORMAT_STRING));
+#endif
 
 // init renderer params
-#ifdef ANDROID
-    int64_t wid = getNativeSurface();
-    mpv_set_option(mpv, "wid", MPV_FORMAT_INT64, (void *)&wid);
-    mpv_set_option_string(mpv, "force-window", "yes");
-#elif defined(MPV_SW_RENDER)
+#if defined(MPV_SW_RENDER)
     mpv_render_param params[] = {
         {MPV_RENDER_PARAM_API_TYPE, const_cast<char *>(MPV_RENDER_API_TYPE_SW)},
         {MPV_RENDER_PARAM_INVALID, nullptr},
     };
-#elif defined(BOREALIS_USE_D3D11)
-    mpv_dxgi_init_params init_params{D3D11_CONTEXT->getDevice(), D3D11_CONTEXT->getSwapChain()};
-    mpv_render_param params[] = {
-        {MPV_RENDER_PARAM_API_TYPE, const_cast<char *>(MPV_RENDER_API_TYPE_DXGI)},
-        {MPV_RENDER_PARAM_DXGI_INIT_PARAMS, &init_params},
-        {MPV_RENDER_PARAM_INVALID, nullptr},
-    };
-#elif defined(BOREALIS_USE_DEKO3D)
-    auto videoContext = dynamic_cast<brls::SwitchVideoContext *>(brls::Application::getPlatform()->getVideoContext());
-    mpv_deko3d_init_params deko_init_params{videoContext->getDeko3dDevice()};
-    mpv_render_param params[] = {
-        {MPV_RENDER_PARAM_API_TYPE, const_cast<char *>(MPV_RENDER_API_TYPE_DEKO3D)},
-        {MPV_RENDER_PARAM_DEKO3D_INIT_PARAMS, &deko_init_params},
-        {MPV_RENDER_PARAM_INVALID, nullptr},
-    };
-#elif defined(BOREALIS_USE_GXM)
-    auto videoContext = dynamic_cast<brls::PsvVideoContext *>(brls::Application::getPlatform()->getVideoContext());
-    NVGXMwindow *gxm = videoContext->getWindow();
-    NVGcontext *vg = brls::Application::getNVGContext();
-    mpv_gxm_init_params gxm_params = {
-        .context = gxm->context,
-        .shader_patcher = gxm->shader_patcher,
-        .buffer_index = 0,
-        // The video FBO is a fullscreen quad — MSAA antialiases geometry edges,
-        // of which it has none, so 4X only wastes CDRAM. NONE here must match
-        // the FBO's render target (framebufferOpts.msaa below): it drops the
-        // FBO depth/stencil surface from ~8 MB to ~2 MB (960x544), ~6 MB of
-        // CDRAM freed exactly during playback, where GPU memory is tightest and
-        // the FBO alloc already fails first under pressure. The window UI keeps
-        // its own MSAA (nanovg has edgeAntiAlias off, so that AA is load-bearing).
-        .msaa = SCE_GXM_MULTISAMPLE_NONE,
-    };
-    mpv_render_param params[] = {
-        {MPV_RENDER_PARAM_API_TYPE, const_cast<char *>(MPV_RENDER_API_TYPE_GXM)},
-        {MPV_RENDER_PARAM_GXM_INIT_PARAMS, &gxm_params},
-        {MPV_RENDER_PARAM_INVALID, nullptr},
-    };
-
-    if (!mpv_fbo.render_target) {
-        int texture_width = DISPLAY_WIDTH;
-        int texture_height = DISPLAY_HEIGHT;
-        int texture_stride = ALIGN(texture_width, 8);
-        // Every step of this chain allocates GPU memory and the player is
-        // created AFTER browsing already filled LPDDR/CDRAM with artwork, so
-        // each one can fail right here. On failure leave render_target null:
-        // on_update/setFrameSize skip the FBO render (audio keeps playing,
-        // video stays black) instead of handing gxmCreateFramebuffer a NULL
-        // texture and data-aborting.
-        nvg_image = nvgCreateImageRGBA(vg, texture_width, texture_height, 0, nullptr);
-        NVGXMtexture *texture = nvg_image > 0 ? nvgxmImageHandle(vg, nvg_image) : nullptr;
-        if (texture != nullptr && texture->data != nullptr) {
-            NVGXMframebufferInitOptions framebufferOpts = {
-                .display_buffer_count = 1,  // Must be 1 for custom FBOs
-                .scenesPerFrame = 1,
-                .render_target = texture,
-                .color_format = SCE_GXM_COLOR_FORMAT_U8U8U8U8_ABGR,
-                .color_surface_type = SCE_GXM_COLOR_SURFACE_LINEAR,
-                .display_width = texture_width,
-                .display_height = texture_height,
-                .display_stride = texture_stride,
-                // No MSAA for the video FBO (must match gxm_params.msaa above):
-                // saves ~6 MB CDRAM on its depth/stencil, no visual cost.
-                .msaa = SCE_GXM_MULTISAMPLE_NONE,
-            };
-            NVGXMframebuffer *fbo = gxmCreateFramebuffer(&framebufferOpts);
-            if (fbo != nullptr && fbo->gxm_render_target != nullptr) {
-                mpv_fbo.render_target = fbo->gxm_render_target;
-                mpv_fbo.color_surface = &fbo->gxm_color_surfaces[0].surface;
-                mpv_fbo.depth_stencil_surface = &fbo->gxm_depth_stencil_surface;
-                mpv_fbo.w = texture_width;
-                mpv_fbo.h = texture_height;
-            } else if (fbo != nullptr) {
-                gxmDeleteFramebuffer(fbo);
-            }
-        }
-        if (!mpv_fbo.render_target) {
-            if (nvg_image > 0) {
-                nvgDeleteImage(vg, nvg_image);
-                nvg_image = 0;
-            }
-            brls::Logger::error("mpv: GXM FBO allocation failed (GPU memory exhausted), video output disabled");
-        }
-    }
 #else
     mpv_opengl_init_params gl_init_params{get_proc_address, nullptr};
+#if defined(__PS4__)
+    // Keep advanced control disabled for the shader experiment. 00.53 showed a
+    // real HEVC playback regression with MPV_RENDER_PARAM_ADVANCED_CONTROL=1,
+    // while the blue-frame bug predates that diagnostic change.
+#endif
     mpv_render_param params[] = {
         {MPV_RENDER_PARAM_API_TYPE, const_cast<char *>(MPV_RENDER_API_TYPE_OPENGL)},
         {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl_init_params},
@@ -339,14 +637,14 @@ void MPVCore::init() {
     };
 #endif
 
-#ifndef ANDROID
     if (mpv_render_context_create(&mpv_context, mpv, params) < 0) {
         mpv_terminate_destroy(mpv);
         brls::fatal("failed to initialize mpv context");
     }
-#endif
-#ifdef BOREALIS_USE_D3D11
-    misc::initCrashDump();
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+    ps4diag::write(fmt::format(
+        "render-context created advanced-control=0 precompiled-shaders=1 client-api=0x{:x}",
+        static_cast<unsigned long long>(mpv_client_api_version())));
 #endif
     brls::Logger::info("version: {} ffmpeg {}", mpv_get_property_string(mpv, "mpv-version"),
         mpv_get_property_string(mpv, "ffmpeg-version"));
@@ -354,10 +652,8 @@ void MPVCore::init() {
     this->command("set", "audio-client-name", AppVersion::getPackageName().c_str());
     // set event callback
     mpv_set_wakeup_callback(mpv, on_wakeup, this);
-#ifndef ANDROID
     // set render callback
     mpv_render_context_set_update_callback(mpv_context, on_update, this);
-#endif
 
     focusSubscription = brls::Application::getWindowFocusChangedEvent()->subscribe([this](bool focus) {
         // Music (audio-only, VO disabled) keeps playing in the background: don't
@@ -372,16 +668,10 @@ void MPVCore::init() {
         } else if (playing) {  // application is on top
             command("set", "pause", "no");
         }
-#if defined(ANDROID)
-        this->enableVO(focus);
-#endif
     });
 
     sizeSubscription = brls::Application::getWindowSizeChangedEvent()->subscribe([this]() {
-        // Docking/undocking the Switch swaps the framebuffer between 1280x720
-        // and 1920x1080 while the borealis layout stays in 1280x720 points, so
-        // the rect guard in draw() never fires; refresh mpv_fbo.w/h (pixels)
-        // from the new Application::windowWidth/Height here.
+        // Keep the renderer's pixel dimensions synchronized with resizes.
         setFrameSize(this->rect);
     });
 
@@ -390,6 +680,30 @@ void MPVCore::init() {
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &default_framebuffer);
     glBindFramebuffer(GL_FRAMEBUFFER, default_framebuffer);
     mpv_fbo.fbo = default_framebuffer;
+    mpv_fbo.w = brls::Application::windowWidth;
+    mpv_fbo.h = brls::Application::windowHeight;
+    // The default framebuffer format is not exposed reliably by Piglet. mpv's
+    // API explicitly allows 0 here to mean "unknown"; this is deterministic and
+    // avoids passing stack/object garbage as a GL internal format.
+    mpv_fbo.internal_format = 0;
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+    // Match the PS4 path used by upstream wiliwili: render libmpv directly into
+    // Piglet's system/default framebuffer and let Borealis flush its UI over it.
+    // The dedicated texture-backed FBO used by 00.48-00.51 produced a stable
+    // solid-blue frame inside libmpv itself on real hardware.
+    ps4diag::write("render-path=default-framebuffer direct=1 offscreen=0");
+    const GLubyte* glVendor = glGetString(GL_VENDOR);
+    const GLubyte* glRenderer = glGetString(GL_RENDERER);
+    const GLubyte* glVersion = glGetString(GL_VERSION);
+    ps4diag::write(fmt::format("gl-info vendor={} renderer={} version={} default-fbo={} size={}x{} internal-format={}",
+        glVendor ? reinterpret_cast<const char*>(glVendor) : "-",
+        glRenderer ? reinterpret_cast<const char*>(glRenderer) : "-",
+        glVersion ? reinterpret_cast<const char*>(glVersion) : "-",
+        default_framebuffer,
+        mpv_fbo.w,
+        mpv_fbo.h,
+        mpv_fbo.internal_format));
+#endif
 #endif
 }
 
@@ -403,6 +717,9 @@ void MPVCore::clean() {
         mpv_render_context_free(this->mpv_context);
         this->mpv_context = nullptr;
     }
+#if defined(__PS4__) && defined(BOREALIS_USE_OPENGL) && !defined(MPV_SW_RENDER)
+    destroyPs4VideoTarget();
+#endif
 
     brls::Logger::info("trying terminate mpv");
     if (this->mpv) {
@@ -410,9 +727,6 @@ void MPVCore::clean() {
         // mpv_destroy(this->mpv);
         this->mpv = nullptr;
     }
-#ifdef ANDROID
-    deleteSurfaceObj();
-#endif
 }
 
 void MPVCore::restart() {
@@ -452,13 +766,8 @@ void MPVCore::setFrameSize(brls::Rect area) {
     rect = area;
     if (std::isnan(rect.getWidth()) || std::isnan(rect.getHeight())) return;
 
-#ifdef MPV_SW_RENDER
-#ifdef BOREALIS_USE_D3D11
-    // 使用 dx11 的拷贝交换，否则视频渲染异常
-    const static int mpvImageFlags = NVG_IMAGE_STREAMING | NVG_IMAGE_COPY_SWAP;
-#else
+#if defined(MPV_SW_RENDER)
     const static int mpvImageFlags = 0;
-#endif
     int drawWidth = rect.getWidth() * brls::Application::windowScale;
     int drawHeight = rect.getHeight() * brls::Application::windowScale;
     if (drawWidth == 0 || drawHeight == 0) return;
@@ -482,36 +791,28 @@ void MPVCore::setFrameSize(brls::Rect area) {
     sw_size[0] = drawWidth;
     sw_size[1] = drawHeight;
     pitch = PIXCEL_SIZE * drawWidth;
-#elif defined(BOREALIS_USE_GXM)
-    // This line will be called between beginFrame() and endFrame() in Application::frame(),
-    // but mpvRenderContextRender(...) will call functions similar to beginFrame() and endFrame() to draw content to FBO,
-    // and that will cause error in GXM, so call in brls::sync to make the mpv drawing calls outside the brls::Application::frame().
-    brls::sync([this]() {
-        // no FBO (GPU OOM at init): nothing to render into
-        if (!this->mpv_fbo.render_target) return;
-        mpv_render_context_render(this->mpv_context, mpv_params);
-        mpv_render_context_report_swap(this->mpv_context);
-    });
-#elif !defined(BOREALIS_USE_D3D11)
-    // Using default framebuffer
+#else
+#if defined(__PS4__) && defined(BOREALIS_USE_OPENGL)
+    // PS4 follows the upstream MPV_NO_FB strategy: mpv always targets Piglet's
+    // default framebuffer. Keep the target description synchronized with the
+    // actual drawable size, including Neo/alternate output modes.
+    this->mpv_fbo.fbo = default_framebuffer;
+    this->mpv_fbo.internal_format = 0;
+#endif
     this->mpv_fbo.w = brls::Application::windowWidth;
     this->mpv_fbo.h = brls::Application::windowHeight;
 #endif
 }
 
 bool MPVCore::isValid() {
-#ifdef ANDROID
-    return true;
-#else
     return mpv_context != nullptr;
-#endif
 }
 
 void MPVCore::draw(brls::Rect area, float alpha) {
     if (mpv_context == nullptr) return;
     if (!(this->rect == area)) this->setFrameSize(area);
 
-#ifdef MPV_SW_RENDER
+#if defined(MPV_SW_RENDER)
     if (!pixels) return;
 
     auto *vg = brls::Application::getNVGContext();
@@ -528,36 +829,34 @@ void MPVCore::draw(brls::Rect area, float alpha) {
     nvgRect(vg, rect.getMinX(), rect.getMinY(), rect.getWidth(), rect.getHeight());
     nvgFillPaint(vg, nvgImagePattern(vg, 0, 0, rect.getWidth(), rect.getHeight(), 0, nvg_image, alpha));
     nvgFill(vg);
-#elif defined(BOREALIS_USE_GXM)
-    // FBO init failed (GPU OOM): nothing to draw. Today nvg_image == 0 would
-    // fall back to the 1x1 dummy texture deep in nanovg_gxm, but don't rely
-    // on that implicit guarantee.
-    if (!mpv_fbo.render_target) return;
-    NVGcontext *vg = brls::Application::getNVGContext();
-    NVGpaint img =
-        nvgImagePattern(vg, area.getMinX(), area.getMinY(), area.getWidth(), area.getHeight(), 0, nvg_image, alpha);
-    nvgBeginPath(vg);
-    nvgRect(vg, area.getMinX(), area.getMinY(), area.getWidth(), area.getHeight());
-    nvgFillPaint(vg, img);
-    nvgFill(vg);
-#elif defined(ANDROID)
 #else
     // 只在非透明时绘制视频，可以避免退出页面时视频画面残留
     if (alpha >= 1 && !this->video_stopped) {
-#ifdef BOREALIS_USE_DEKO3D
-        static auto videoContext =
-            dynamic_cast<brls::SwitchVideoContext *>(brls::Application::getPlatform()->getVideoContext());
-        this->mpv_fbo.tex = videoContext->getFramebuffer();
-        videoContext->queueSignalFence(&readyFence);
-        videoContext->queueFlush();
-#endif
         // 绘制视频
+#if defined(__PS4__) && defined(BOREALIS_USE_OPENGL)
+        // PS4/OpenOrbis: render directly to Piglet's default framebuffer, as
+        // upstream wiliwili does with MPV_NO_FB. A default framebuffer needs
+        // mpv's vertical flip; the 00.51 no-flip rule only applied to the
+        // texture-backed offscreen target.
+        mpv_fbo.fbo = default_framebuffer;
+        mpv_fbo.w = brls::Application::windowWidth;
+        mpv_fbo.h = brls::Application::windowHeight;
+        mpv_fbo.internal_format = 0;
+        flip_y = 1;
+#endif
+#if defined(__PS4__) && defined(BOREALIS_USE_OPENGL) && defined(GMCA_PS4_SAFE_SOURCES)
+        ps4PrepareMpvGlState(
+            static_cast<GLuint>(mpv_fbo.fbo), mpv_fbo.w, mpv_fbo.h);
+#endif
         mpv_render_context_render(this->mpv_context, mpv_params);
-#ifdef BOREALIS_USE_D3D11
-        D3D11_CONTEXT->beginFrame();
-#elif defined(BOREALIS_USE_DEKO3D)
-        videoContext->queueWaitFence(&doneFence);
-#elif defined(BOREALIS_USE_OPENGL)
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+        ps4CheckGlAfterRender();
+#if defined(BOREALIS_USE_OPENGL)
+        ps4ProbeVideoFbo(
+            static_cast<GLuint>(mpv_fbo.fbo), mpv_fbo.w, mpv_fbo.h);
+#endif
+#endif
+#if defined(BOREALIS_USE_OPENGL)
         glBindFramebuffer(GL_FRAMEBUFFER, default_framebuffer);
         glViewport(0, 0, brls::Application::windowWidth, brls::Application::windowHeight);
 #endif
@@ -589,6 +888,34 @@ void MPVCore::eventMainLoop() {
             return;
         case MPV_EVENT_LOG_MESSAGE: {
             auto log = (mpv_event_log_message *)event->data;
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+            bool shaderDiagnostic = false;
+            if (log) {
+                std::string text = log->text ? log->text : "";
+                while (!text.empty() && (text.back() == '\n' || text.back() == '\r'))
+                    text.pop_back();
+
+                // The PS4 libmpv ra_ps4 patch emits these at MP_VERBOSE. Keep
+                // only the shader-selection diagnostics instead of copying the
+                // full verbose mpv stream to disk or the Borealis logger.
+                shaderDiagnostic =
+                    text.find("compile_attach_shader:") != std::string::npos ||
+                    text.find("ps4_mpv_use_precompiled_shaders:") != std::string::npos ||
+                    text.find("PS4 BGRA subtitle fallback:") != std::string::npos;
+
+                if (log->log_level <= MPV_LOG_LEVEL_WARN || shaderDiagnostic) {
+                    if (text.size() > 512) text.resize(512);
+                    ps4diag::write(fmt::format(
+                        "mpv-log level={} prefix={} shader={} text={}",
+                        static_cast<int>(log->log_level),
+                        log->prefix ? log->prefix : "-",
+                        shaderDiagnostic ? 1 : 0,
+                        text));
+                }
+            }
+            if (!log || (log->log_level > MPV_LOG_LEVEL_WARN && !shaderDiagnostic))
+                break;
+#endif
             if (log->log_level <= MPV_LOG_LEVEL_ERROR) {
                 brls::Logger::error("{}: {}", log->prefix, log->text);
             } else if (log->log_level <= MPV_LOG_LEVEL_WARN) {
@@ -604,22 +931,44 @@ void MPVCore::eventMainLoop() {
         }
         case MPV_EVENT_SHUTDOWN:
             brls::Logger::debug("MPVCore => EVENT_SHUTDOWN");
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+            ps4diag::write("event shutdown");
+#endif
             return;
         case MPV_EVENT_FILE_LOADED:
             brls::Logger::info("MPVCore => EVENT_FILE_LOADED");
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+            ps4diag::write("event file-loaded");
+            ps4LogVideoState(this->mpv, "file-loaded");
+            ps4ArmGlProbe("file-loaded");
+#endif
             // event 8: 文件预加载结束，准备解码
             mpvCoreEvent.fire(MpvEventEnum::MPV_LOADED);
             break;
         case MPV_EVENT_START_FILE:
             // event 6: 开始加载文件
             brls::Logger::info("MPVCore => EVENT_START_FILE");
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+            ps4diag::write("event start-file");
+#endif
             mpvCoreEvent.fire(MpvEventEnum::START_FILE);
             mpvCoreEvent.fire(MpvEventEnum::LOADING_START);
+            break;
+        case MPV_EVENT_SEEK:
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+            ps4diag::write("event seek");
+            ps4ArmGlProbe("seek");
+#endif
+            mpvCoreEvent.fire(MpvEventEnum::SEEK_START);
             break;
         case MPV_EVENT_PLAYBACK_RESTART:
             // event 21: 开始播放文件（一般是播放或调整进度结束之后触发）
             brls::Logger::info("MPVCore => EVENT_PLAYBACK_RESTART");
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+            ps4diag::write("event playback-restart");
+#endif
             this->video_stopped = false;
+            mpvCoreEvent.fire(MpvEventEnum::PLAYBACK_RESTART);
             if (this->isPaused())
                 mpvCoreEvent.fire(MpvEventEnum::MPV_PAUSE);
             else
@@ -629,6 +978,10 @@ void MPVCore::eventMainLoop() {
             // event 7: 文件播放结束
             this->video_stopped = true;
             auto node = (mpv_event_end_file *)event->data;
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+            ps4diag::write(fmt::format("event end-file reason={} error={}",
+                static_cast<int>(node->reason), node->error));
+#endif
             if (node->reason == MPV_END_FILE_REASON_ERROR) {
                 this->last_error = node->error;
                 brls::Logger::error("MPVCore => FILE ERROR: {}", mpv_error_string(node->error));
@@ -643,6 +996,16 @@ void MPVCore::eventMainLoop() {
             }
             break;
         }
+#if defined(__PS4__) && defined(GMCA_PS4_SAFE_SOURCES)
+        case MPV_EVENT_VIDEO_RECONFIG:
+            ps4diag::write("event video-reconfig");
+            ps4LogVideoState(this->mpv, "video-reconfig");
+            ps4ArmGlProbe("video-reconfig");
+            break;
+        case MPV_EVENT_QUEUE_OVERFLOW:
+            ps4diag::write("event queue-overflow");
+            break;
+#endif
         case MPV_EVENT_COMMAND_REPLY: {
             mpv_event_command *cmd = (mpv_event_command *)event->data;
             if (event->error) {
@@ -715,6 +1078,31 @@ void MPVCore::eventMainLoop() {
                 }
                 this->volume = *(int64_t *)prop->data;
                 break;
+#if defined(__PS4__)
+            case 30: {  // sid
+                char *value = *(char **)prop->data;
+                brls::Logger::info("PS4 subtitles: sid={}", value ? value : "<none>");
+#if defined(GMCA_PS4_SAFE_SOURCES)
+                ps4diag::write(fmt::format("subtitle sid={}", value ? value : "<none>"));
+                ps4ArmGlProbe("subtitle-sid");
+#endif
+                break;
+            }
+            case 31:  // sub-visibility
+                brls::Logger::info("PS4 subtitles: visibility={}", *(int *)prop->data ? "yes" : "no");
+#if defined(GMCA_PS4_SAFE_SOURCES)
+                ps4diag::write(fmt::format("subtitle visibility={}", *(int *)prop->data ? "yes" : "no"));
+#endif
+                break;
+            case 32: {  // sub-text
+                char *value = *(char **)prop->data;
+                brls::Logger::info("PS4 subtitles: decoded text {}", value && value[0] ? "present" : "empty");
+#if defined(GMCA_PS4_SAFE_SOURCES)
+                ps4diag::write(fmt::format("subtitle decoded-text={}", value && value[0] ? "present" : "empty"));
+#endif
+                break;
+            }
+#endif
             default:
                 brls::Logger::debug("MPVCore => PROPERTY_CHANGE `{}` type {}", prop->name, int(prop->format));
             }
@@ -804,9 +1192,9 @@ std::string MPVCore::getString(const std::string &key) {
     return result;
 }
 
-double MPVCore::getDouble(const std::string &key) {
+double MPVCore::getDouble(const std::string &key, double fallback) {
     double value = 0;
-    mpv_get_property(mpv, key.c_str(), MPV_FORMAT_DOUBLE, &value);
+    if (!mpv || mpv_get_property(mpv, key.c_str(), MPV_FORMAT_DOUBLE, &value) < 0) return fallback;
     return value;
 }
 

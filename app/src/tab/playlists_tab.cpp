@@ -2,9 +2,9 @@
     GMCA — "Playlists" sidebar tab (see playlists_tab.hpp).
 */
 
+#include "utils/config.hpp"
 #include "tab/playlists_tab.hpp"
 #include "tab/playlist_view.hpp"
-#include "api/plex.hpp"
 #include "api/backend.hpp"
 #include "view/recycling_grid.hpp"
 #include "view/svg_image.hpp"
@@ -23,7 +23,7 @@ using namespace brls::literals;  // for _i18n
 /// contextual action applies to a playlist.
 class PlaylistsDataSource : public RecyclingGridDataSource {
 public:
-    using MediaList = std::vector<plex::Item>;
+    using MediaList = std::vector<media::Item>;
 
     explicit PlaylistsDataSource(const MediaList& r) : list(std::move(r)) {}
 
@@ -100,7 +100,6 @@ void PlaylistsTab::doRequest() {
     }
 
     ASYNC_RETAIN
-    // requested offset, not r.StartIndex: Jellyfin/Emby omit StartIndex on an
     // empty past-the-end page (it parses to 0) and would wipe a filled grid
     size_t reqStart = this->startIndex;
     AppConfig::instance().backend().getPlaylists(this->startIndex, this->pageSize,

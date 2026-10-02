@@ -5,7 +5,7 @@
 #pragma once
 
 #include <borealis.hpp>
-#include <api/plex/types.hpp>
+#include <api/media/types.hpp>
 
 class ButtonClose;
 
@@ -18,16 +18,14 @@ public:
 
     View* getDefaultFocus() override { return this->settings->getDefaultFocus(); }
 
-    /// Plex Stream IDs selected for the transcoder (0 = none)
     inline static int64_t selectedSubtitle = 0;
     inline static int64_t selectedAudio = 0;
 
     /// Direct-access OSD pickers (subtitle/audio buttons). `src` carries the
-    /// Plex Media for transcode-side stream selection; nullptr (local
     /// downloads) falls back to the embedded mpv tracks only. The subtitle
     /// picker also exposes a sync (sub-delay) offset.
-    static void showSubtitleMenu(const plex::Media* src);
-    static void showAudioMenu(const plex::Media* src);
+    static void showSubtitleMenu(const media::Media* src);
+    static void showAudioMenu(const media::Media* src);
 
     enum class Equalizer {
         BRIGHTNESS,

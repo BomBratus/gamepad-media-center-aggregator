@@ -5,7 +5,7 @@
 //       tests/test_offline_catalog.cpp -o /tmp/t && /tmp/t
 //
 // Exercises the PURE catalog logic (offline_catalog.hpp) that turns a flat set
-// of plex::Item nodes into a navigable libraries -> shows -> seasons -> episodes
+// of media::Item nodes into a navigable libraries -> shows -> seasons -> episodes
 // tree, including synthesis of missing ancestors for legacy downloads.
 
 #include <cstdio>
@@ -20,10 +20,10 @@ static int failures = 0;
         }                                                    \
     } while (0)
 
-static plex::Item movie(const std::string& key, const std::string& title, const std::string& sec) {
-    plex::Item it;
+static media::Item movie(const std::string& key, const std::string& title, const std::string& sec) {
+    media::Item it;
     it.ratingKey = key;
-    it.type = plex::mediaTypeMovie;
+    it.type = media::mediaTypeMovie;
     it.title = title;
     it.librarySectionID = sec;
     it.librarySectionTitle = "Films";
@@ -31,10 +31,10 @@ static plex::Item movie(const std::string& key, const std::string& title, const 
 }
 
 // legacy episode: no real ancestor ratingKeys, only grandparentTitle + indexes
-static plex::Item legacyEpisode(const std::string& key, const std::string& show, int season, int ep) {
-    plex::Item it;
+static media::Item legacyEpisode(const std::string& key, const std::string& show, int season, int ep) {
+    media::Item it;
     it.ratingKey = key;
-    it.type = plex::mediaTypeEpisode;
+    it.type = media::mediaTypeEpisode;
     it.title = "Ep " + std::to_string(ep);
     it.grandparentTitle = show;
     it.parentIndex = season;
@@ -43,7 +43,7 @@ static plex::Item legacyEpisode(const std::string& key, const std::string& show,
 }
 
 int main() {
-    std::vector<plex::Item> nodes;
+    std::vector<media::Item> nodes;
     nodes.push_back(movie("m1", "Zodiac", "1"));
     nodes.push_back(movie("m2", "Amelie", "1"));
     // two legacy episodes of the same show/season, added out of order
@@ -55,10 +55,10 @@ int main() {
     // a show node and a season node must have been synthesized
     int shows = 0, seasons = 0, episodes = 0, movies = 0;
     for (auto& it : full) {
-        if (it.type == plex::mediaTypeShow) ++shows;
-        else if (it.type == plex::mediaTypeSeason) ++seasons;
-        else if (it.type == plex::mediaTypeEpisode) ++episodes;
-        else if (it.type == plex::mediaTypeMovie) ++movies;
+        if (it.type == media::mediaTypeShow) ++shows;
+        else if (it.type == media::mediaTypeSeason) ++seasons;
+        else if (it.type == media::mediaTypeEpisode) ++episodes;
+        else if (it.type == media::mediaTypeMovie) ++movies;
     }
     CHECK(movies == 2);
     CHECK(shows == 1);
@@ -101,12 +101,12 @@ int main() {
     // find the synthesized show and walk down to episodes
     std::string showKey;
     for (auto& it : full)
-        if (it.type == plex::mediaTypeShow) showKey = it.ratingKey;
+        if (it.type == media::mediaTypeShow) showKey = it.ratingKey;
     CHECK(!showKey.empty());
 
     auto seasonsOf = offline::childrenOf(full, showKey);
     CHECK(seasonsOf.size() == 1);
-    CHECK(seasonsOf.size() == 1 && seasonsOf[0].type == plex::mediaTypeSeason);
+    CHECK(seasonsOf.size() == 1 && seasonsOf[0].type == media::mediaTypeSeason);
 
     std::string seasonKey = seasonsOf.empty() ? "" : seasonsOf[0].ratingKey;
     auto eps = offline::childrenOf(full, seasonKey);
@@ -115,35 +115,35 @@ int main() {
     CHECK(eps.size() == 2 && eps[0].ratingKey == "e1" && eps[1].ratingKey == "e2");
 
     // idempotence: real ancestor nodes already present must not be duplicated
-    plex::Item show;
+    media::Item show;
     show.ratingKey = "S9";
-    show.type = plex::mediaTypeShow;
+    show.type = media::mediaTypeShow;
     show.title = "Real Show";
-    plex::Item season;
+    media::Item season;
     season.ratingKey = "S9-1";
-    season.type = plex::mediaTypeSeason;
+    season.type = media::mediaTypeSeason;
     season.parentRatingKey = "S9";
     season.index = 1;
-    plex::Item epReal;
+    media::Item epReal;
     epReal.ratingKey = "E100";
-    epReal.type = plex::mediaTypeEpisode;
+    epReal.type = media::mediaTypeEpisode;
     epReal.parentRatingKey = "S9-1";
     epReal.grandparentRatingKey = "S9";
     epReal.index = 1;
-    std::vector<plex::Item> real = {show, season, epReal};
+    std::vector<media::Item> real = {show, season, epReal};
     auto real2 = offline::synthesizeAncestors(real);
     CHECK(real2.size() == 3);  // nothing synthesized
     CHECK(offline::childrenOf(real2, "S9").size() == 1);
     CHECK(offline::childrenOf(real2, "S9-1").size() == 1);
 
     // asset paths to cache for a fiche (T3): non-empty images only
-    plex::Item art;
+    media::Item art;
     art.thumb = "/t";
     art.art = "/a";
     art.clearLogo = "/l";
-    plex::Role withFace;
+    media::Role withFace;
     withFace.thumb = "/r1";
-    plex::Role noFace;  // empty thumb must be skipped
+    media::Role noFace;  // empty thumb must be skipped
     art.roles = {withFace, noFace};
     auto assets = offline::assetPaths(art);
     CHECK(assets.size() == 4);
@@ -152,22 +152,22 @@ int main() {
     {
         auto mk = [](const std::string& key, const std::string& type, const std::string& parent,
                       const std::string& grand) {
-            plex::Item it;
+            media::Item it;
             it.ratingKey = key;
             it.type = type;
             it.parentRatingKey = parent;
             it.grandparentRatingKey = grand;
             return it;
         };
-        std::vector<plex::Item> pn;
-        pn.push_back(mk("m1", plex::mediaTypeMovie, "", ""));      // downloaded
-        pn.push_back(mk("m2", plex::mediaTypeMovie, "", ""));      // NOT downloaded
-        pn.push_back(mk("S", plex::mediaTypeShow, "", ""));
-        pn.push_back(mk("S1", plex::mediaTypeSeason, "S", ""));    // has a download
-        pn.push_back(mk("S2", plex::mediaTypeSeason, "S", ""));    // no download
-        pn.push_back(mk("e1", plex::mediaTypeEpisode, "S1", "S")); // downloaded
-        pn.push_back(mk("e2", plex::mediaTypeEpisode, "S1", "S")); // sibling, not downloaded
-        pn.push_back(mk("e3", plex::mediaTypeEpisode, "S2", "S")); // not downloaded
+        std::vector<media::Item> pn;
+        pn.push_back(mk("m1", media::mediaTypeMovie, "", ""));      // downloaded
+        pn.push_back(mk("m2", media::mediaTypeMovie, "", ""));      // NOT downloaded
+        pn.push_back(mk("S", media::mediaTypeShow, "", ""));
+        pn.push_back(mk("S1", media::mediaTypeSeason, "S", ""));    // has a download
+        pn.push_back(mk("S2", media::mediaTypeSeason, "S", ""));    // no download
+        pn.push_back(mk("e1", media::mediaTypeEpisode, "S1", "S")); // downloaded
+        pn.push_back(mk("e2", media::mediaTypeEpisode, "S1", "S")); // sibling, not downloaded
+        pn.push_back(mk("e3", media::mediaTypeEpisode, "S2", "S")); // not downloaded
 
         std::unordered_set<std::string> dl = {"m1", "e1"};
         auto keep = offline::survivors(pn, [&](const std::string& k) { return dl.count(k) > 0; });

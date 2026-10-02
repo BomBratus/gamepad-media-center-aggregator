@@ -1,4 +1,5 @@
 build*/
+/test-results/
 /.idea/
 /cmake-*/
 /.xmake/
@@ -32,4 +33,3 @@ plezy/
 /.wip/
 # Local dev tooling hook (points at an untracked .github/skills/)
 /.github/hooks/
-

@@ -58,11 +58,9 @@ public:
     static std::string encode_form(const Form& form);
     void _get(const std::string& url, std::ostream* out);
     bool getinfo(char** arg);
-    int propfind(const std::string& url, std::ostream* out);
     std::string _post(const std::string& url, const std::string& data);
     std::string _put(const std::string& url, const std::string& data);
     void set_user_agent(const std::string& agent);
-    void set_basic_auth(const std::string& user, const std::string& passwd);
     void _delete(const std::string& url, std::ostream* out);
 
     template <typename... Ts>
@@ -103,7 +101,6 @@ public:
         return s._post(url, s.encode_form(form));
     }
 
-    // Put methods (the plex.tv provider API uses PUT for watchlist actions;
     // parameters go in the query string, empty body)
     template <typename... Ts>
     static std::string put(const std::string& url, const std::string& data, Ts&&... ts) {

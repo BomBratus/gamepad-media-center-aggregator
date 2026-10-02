@@ -11,7 +11,6 @@
 std::string OfflineLibrary::metaDir() const { return AppConfig::instance().configDir() + "/downloads/meta"; }
 
 std::string OfflineLibrary::metaPath(const std::string& ratingKey) const {
-    // filename is a sanitized key (real Plex keys are numeric; synthetic keys
     // never reach disk). The authoritative ratingKey is read back from the JSON
     // content, not the filename.
     std::string safe;
@@ -47,7 +46,7 @@ void OfflineLibrary::load() {
         try {
             std::ifstream f(entry.path().string());
             nlohmann::json j = nlohmann::json::parse(f);
-            this->nodes.push_back(j.get<plex::Item>());
+            this->nodes.push_back(j.get<media::Item>());
         } catch (const std::exception& e) {
             brls::Logger::error("OfflineLibrary: bad meta {}: {}", entry.path().string(), e.what());
         }
@@ -56,7 +55,7 @@ void OfflineLibrary::load() {
 
 void OfflineLibrary::rebuild() { this->derived = offline::synthesizeAncestors(this->nodes); }
 
-void OfflineLibrary::writeMeta(const plex::Item& item) const {
+void OfflineLibrary::writeMeta(const media::Item& item) const {
     try {
         nlohmann::json j = item;
         std::ofstream f(this->metaPath(item.ratingKey));
@@ -66,7 +65,7 @@ void OfflineLibrary::writeMeta(const plex::Item& item) const {
     }
 }
 
-void OfflineLibrary::putItem(const plex::Item& item) {
+void OfflineLibrary::putItem(const media::Item& item) {
     if (item.ratingKey.empty()) return;
     std::lock_guard<std::mutex> lock(this->mutex);
     this->writeMeta(item);
@@ -89,7 +88,7 @@ bool OfflineLibrary::hasItem(const std::string& ratingKey) const {
     return false;
 }
 
-bool OfflineLibrary::getItem(const std::string& ratingKey, plex::Item& out) const {
+bool OfflineLibrary::getItem(const std::string& ratingKey, media::Item& out) const {
     std::lock_guard<std::mutex> lock(this->mutex);
     for (auto& n : this->derived) {
         if (n.ratingKey == ratingKey) {
@@ -100,27 +99,27 @@ bool OfflineLibrary::getItem(const std::string& ratingKey, plex::Item& out) cons
     return false;
 }
 
-std::vector<plex::Section> OfflineLibrary::sections() const {
+std::vector<media::Section> OfflineLibrary::sections() const {
     std::lock_guard<std::mutex> lock(this->mutex);
     return offline::buildSections(this->derived);
 }
 
-std::vector<plex::Item> OfflineLibrary::sectionItems(const std::string& sectionKey) const {
+std::vector<media::Item> OfflineLibrary::sectionItems(const std::string& sectionKey) const {
     std::lock_guard<std::mutex> lock(this->mutex);
     return offline::sectionItems(this->derived, sectionKey);
 }
 
-std::vector<plex::Item> OfflineLibrary::children(const std::string& ratingKey) const {
+std::vector<media::Item> OfflineLibrary::children(const std::string& ratingKey) const {
     std::lock_guard<std::mutex> lock(this->mutex);
     return offline::childrenOf(this->derived, ratingKey);
 }
 
-std::vector<plex::Item> OfflineLibrary::leaves(const std::string& showRatingKey) const {
+std::vector<media::Item> OfflineLibrary::leaves(const std::string& showRatingKey) const {
     std::lock_guard<std::mutex> lock(this->mutex);
     return offline::leavesOf(this->derived, showRatingKey);
 }
 
-std::vector<plex::Item> OfflineLibrary::search(const std::string& term) const {
+std::vector<media::Item> OfflineLibrary::search(const std::string& term) const {
     std::lock_guard<std::mutex> lock(this->mutex);
     return offline::search(this->derived, term);
 }
@@ -144,7 +143,7 @@ void OfflineLibrary::removeItem(const std::string& ratingKey) {
         brls::Logger::error("OfflineLibrary: cannot remove meta {}: {}", ratingKey, e.what());
     }
     this->nodes.erase(std::remove_if(this->nodes.begin(), this->nodes.end(),
-                          [&](const plex::Item& n) { return n.ratingKey == ratingKey; }),
+                          [&](const media::Item& n) { return n.ratingKey == ratingKey; }),
         this->nodes.end());
     this->rebuild();
 }
@@ -157,7 +156,7 @@ void OfflineLibrary::prune() {
     auto keep =
         offline::survivors(this->nodes, [&dm](const std::string& k) { return dm.isDownloaded(k); });
 
-    std::vector<plex::Item> kept;
+    std::vector<media::Item> kept;
     kept.reserve(this->nodes.size());
     for (auto& n : this->nodes) {
         if (keep.count(n.ratingKey)) {
@@ -193,20 +192,20 @@ void OfflineLibrary::migrateLegacy() {
         if (dl.status != DownloadStatus::Completed) continue;
         if (this->hasItem(dl.itemId)) continue;
 
-        plex::Item it;
+        media::Item it;
         it.ratingKey = dl.itemId;
         it.title = dl.name;
         it.year = dl.productionYear;
         it.duration = dl.durationMs;
         it.thumb = dl.thumb;
-        if (dl.type == plex::mediaTypeEpisode) {
-            it.type = plex::mediaTypeEpisode;
+        if (dl.type == media::mediaTypeEpisode) {
+            it.type = media::mediaTypeEpisode;
             it.index = dl.episodeIndex;
             it.parentIndex = dl.seasonIndex;
             it.grandparentTitle = dl.seriesName;
         } else {
             // movie or clip -> browsable as a top-level movie
-            it.type = plex::mediaTypeMovie;
+            it.type = media::mediaTypeMovie;
         }
         this->putItem(it);
     }

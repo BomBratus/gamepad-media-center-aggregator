@@ -502,7 +502,6 @@ int gmca_ps4_mpv_render_context_render(mpv_render_context *ctx, mpv_render_param
 
     const int result = mpv_render_context_render(guard->real, params);
 
-    // PS4's GLES path is deliberately serialized. Switchfin already needed a
     // similar glFinish workaround on another constrained GL backend; here it
     // also prevents the next NanoVG frame from racing unfinished video work.
     glFinish();

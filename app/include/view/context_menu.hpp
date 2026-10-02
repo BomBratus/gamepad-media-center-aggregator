@@ -1,7 +1,7 @@
 #pragma once
 
 #include <borealis.hpp>
-#include <api/plex/types.hpp>
+#include <api/media/types.hpp>
 
 class SVGImage;
 
@@ -31,7 +31,7 @@ private:
 /// presented in its AppletFrame after the menu closes.
 class ContextMenu : public brls::Box {
 public:
-    ContextMenu(const plex::Item& item, brls::Box* host);
+    ContextMenu(const media::Item& item, brls::Box* host);
 
     bool isTranslucent() override { return true; }
 

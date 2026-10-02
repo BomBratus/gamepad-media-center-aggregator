@@ -92,8 +92,6 @@ inline std::string requestKey(const std::string& url, long timeout) {
 }
 
 inline size_t batchWidth() {
-    // Reuse the platform-tuned worker count (Vita=2, most console targets=4),
-    // but never flood a desktop with hardware_concurrency() requests at once.
     size_t width = ThreadPool::max_thread_num;
     if (width == 0) width = 1;
     return std::min<size_t>(width, 4);

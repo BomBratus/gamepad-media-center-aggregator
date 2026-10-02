@@ -15,7 +15,7 @@ OfflineCollection::OfflineCollection(const std::string& sectionKey) {
     this->setPadding(70, side, brls::getStyle()["main/content_padding_top_bottom"], side);
 
     auto& lib = OfflineLibrary::instance();
-    std::vector<plex::Item> items;
+    std::vector<media::Item> items;
     if (sectionKey.empty()) {
         for (auto& s : lib.sections()) {
             auto part = lib.sectionItems(s.key);

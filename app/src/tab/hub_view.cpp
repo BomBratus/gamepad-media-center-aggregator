@@ -4,8 +4,9 @@
     X/long-press context menu included (video_card.cpp).
 */
 
+#include "utils/config.hpp"
 #include "tab/hub_view.hpp"
-#include "api/plex.hpp"
+#include "api/backend.hpp"
 #include "api/backend.hpp"
 #include "view/recycling_grid.hpp"
 #include "view/video_card.hpp"
@@ -48,13 +49,13 @@ brls::View* HubView::getDefaultFocus() { return this->recycler; }
 
 void HubView::doRequest() {
     ASYNC_RETAIN
-    // requested offset, not r.StartIndex: Jellyfin/Emby omit StartIndex on an
-    // empty past-the-end page (it parses to 0) and would wipe a filled grid
     size_t reqStart = this->startIndex;
     AppConfig::instance().backend().getHubPage(this->hubKey, this->startIndex, this->pageSize,
         [ASYNC_TOKEN, reqStart](const media::Container<media::Item>& r) {
             ASYNC_RELEASE
-            this->startIndex = reqStart + this->pageSize;
+            const bool stremioPagination =
+                AppConfig::instance().backend().type() == media::BackendType::Stremio;
+            this->startIndex = reqStart + (stremioPagination ? r.Items.size() : this->pageSize);
             if (r.TotalRecordCount == 0 && reqStart == 0) {
                 this->recycler->setEmpty();
             } else if (reqStart == 0) {
@@ -65,8 +66,12 @@ void HubView::doRequest() {
                 this->recycler->setDataSource(new VideoDataSource(r.Items));
             } else if (r.Items.size() > 0) {
                 auto dataSrc = dynamic_cast<VideoDataSource*>(this->recycler->getDataSource());
-                dataSrc->appendData(r.Items);
-                this->recycler->notifyDataChanged();
+                if (stremioPagination) {
+                    if (dataSrc->appendUniqueData(r.Items) > 0) this->recycler->notifyDataChanged();
+                } else {
+                    dataSrc->appendData(r.Items);
+                    this->recycler->notifyDataChanged();
+                }
             }
         },
         [ASYNC_TOKEN, reqStart](const std::string& ex) {

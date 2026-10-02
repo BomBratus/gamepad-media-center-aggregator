@@ -24,7 +24,6 @@ void LoadingOverlay::onContentAvailable() {
     if (!this->slowHintText.empty()) this->hint->setText(this->slowHintText);
 
     // A custom message without a custom slow hint should not reveal the
-    // Plex-specific "taking longer" copy from the XML.
     if (!this->messageText.empty() && this->slowHintText.empty()) return;
 
     this->slowTimer.setEndCallback([this](bool finished) {

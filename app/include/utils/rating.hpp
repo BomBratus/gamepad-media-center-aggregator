@@ -8,7 +8,6 @@
 
 #include "view/svg_image.hpp"
 
-/// Plex exposes a rating "source" per item — ratingImage (critic) and
 /// audienceRatingImage (audience) — as opaque URIs (imdb://…,
 /// rottentomatoes://image.rating.ripe, …). This maps them to the official
 /// icon + a display value, mirroring the plezy reference (rating_utils.dart).

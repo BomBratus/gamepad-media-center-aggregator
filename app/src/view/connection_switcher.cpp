@@ -5,13 +5,8 @@
 #include "view/connection_switcher.hpp"
 #include "activity/main_activity.hpp"
 #include "activity/loading_activity.hpp"
-#ifdef GMCA_STREMIO_ONLY
 #include "tab/stremio_add.hpp"
-#else
-#include "tab/server_type_choose.hpp"
-#include "api/plex/auth.hpp"
-#include <optional>
-#endif
+
 #include "tab/media_collection.hpp"
 #include "utils/config.hpp"
 #include "utils/image.hpp"
@@ -27,7 +22,6 @@ using namespace brls::literals;  // for _i18n
 
 namespace {
 
-/// Middle-elides an overly long URL: "https://90-105-213-…plex.direct:32400".
 std::string elideMiddle(const std::string& s, size_t budget) {
     if (s.size() <= budget) return s;
     size_t keep = budget - 1;  // 1 slot for the "…" ellipsis
@@ -43,12 +37,7 @@ NVGcolor mix(NVGcolor a, NVGcolor b, float t) {
     return c;
 }
 
-std::string displayType(const std::string& t) {
-    if (t == "jellyfin") return "Jellyfin";
-    if (t == "emby") return "Emby";
-    if (t == "stremio") return "Stremio";
-    return "Plex";
-}
+std::string displayType(const std::string&) { return "Stremio"; }
 
 std::string toUpper(std::string s) {
     for (char& c : s) c = (char)std::toupper((unsigned char)c);
@@ -75,7 +64,6 @@ std::string plusSVG(const std::string& color) {
 }
 
 /// A server "name" is a real identity only when it is not empty and not a bare
-/// machine id (a long pure-hex string, e.g. Jellyfin's "db942b3f334d").
 bool isReadableName(const std::string& s) {
     if (s.empty()) return false;
     if (s.size() >= 8 && std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isxdigit(c); }))
@@ -98,49 +86,15 @@ bool iequals(const std::string& a, const std::string& b) {
 static void connectWithUser(const AppUser& u) {
     brls::Application::blockInputs();
     brls::Application::pushActivity(new LoadingActivity(), brls::TransitionAnimation::NONE);
-    std::string unreachable = "main/plex/unreachable"_i18n;
+    std::string unreachable = "main/server/unreachable"_i18n;
 
     brls::async([u, unreachable]() {
         try {
-            AppServer target;
-            bool found = false;
-            for (auto& s : AppConfig::instance().getServers()) {
-                if (s.id == u.server_id) {
-                    target = s;
-                    found = true;
-                }
-            }
-            if (!found) throw std::runtime_error(unreachable);
-
-#ifdef GMCA_STREMIO_ONLY
-            // The lean PS4 profile has exactly one connection model: Stremio.
-            // Never reinterpret a legacy Plex/Jellyfin entry as Stremio; old
-            // config is preserved on disk and simply ignored by this profile.
-            if (target.type != "stremio") throw std::runtime_error(unreachable);
+            const auto* selected = selectedStremioServer(AppConfig::instance().getServers(), u.server_id);
+            if (!selected) throw std::runtime_error(unreachable);
+            AppServer target = *selected;
             std::string base = target.urls.empty() ? std::string() : target.urls.front();
-#else
-            // Plex only: refresh this profile's server token from plex.tv.
-            std::optional<plex::ServerResource> fresh;
-            if (target.type == "plex") {
-                try {
-                    for (auto& r : plex::getResources(u.access_token)) {
-                        if (r.clientIdentifier != target.id) continue;
-                        if (!r.accessToken.empty()) target.access_token = r.accessToken;
-                        fresh = r;
-                    }
-                } catch (const std::exception& ex) {
-                    brls::Logger::warning("refresh resources: {}", ex.what());
-                }
-            }
 
-            // Stremio has no single reachable endpoint: accept the stored url.
-            // Otherwise race the stored candidates in parallel so an unreachable
-            // LAN address does not block a reachable remote/relay one (GH #36).
-            std::string base = target.type == "stremio"
-                                   ? (target.urls.empty() ? std::string() : target.urls.front())
-                                   : plex::raceConnections(target.urls, target.access_token);
-            if (base.empty() && fresh) base = plex::findBestConnection(*fresh);
-#endif
             if (base.empty()) throw std::runtime_error(unreachable);
 
             brls::sync([u, target, base]() {
@@ -320,11 +274,8 @@ public:
         this->applyVisual(false);
 
         this->registerClickAction([](brls::View* view) {
-#ifdef GMCA_STREMIO_ONLY
             view->present(new StremioAdd());
-#else
-            view->present(new ServerTypeChoose());
-#endif
+
             return true;
         });
         this->addGestureRecognizer(new brls::TapGestureRecognizer(this));
@@ -390,10 +341,8 @@ void ConnectionSwitcher::rebuild() {
     this->firstFocus = nullptr;
 
     const auto& servers = AppConfig::instance().getServers();
-    auto serverFor = [&](const std::string& id) -> const AppServer* {
-        for (auto& s : servers)
-            if (s.id == id) return &s;
-        return nullptr;
+    auto serverFor = [&servers](const std::string& id) {
+        return selectedStremioServer(servers, id);
     };
 
     // Flat list of tiles: one per connection + the trailing "+" tile.
@@ -401,9 +350,7 @@ void ConnectionSwitcher::rebuild() {
     for (auto& u : AppConfig::instance().getUsers()) {
         const AppServer* srv = serverFor(u.server_id);
         if (!srv) continue;  // orphan profile (server removed) — skip
-#ifdef GMCA_STREMIO_ONLY
-        if (srv->type != "stremio") continue;  // preserve legacy config, hide unsupported backends
-#endif
+        if (!supportedStremioAccount(*srv)) continue;  // preserve legacy config, hide unsupported backends
         auto* tile = new ConnectionTile(u, *srv, this);
         tiles.push_back(tile);
         if (u.id == AppConfig::instance().getUserId()) this->firstFocus = tile;

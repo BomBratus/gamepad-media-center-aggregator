@@ -1,16 +1,20 @@
 #pragma once
 
 #include <view/recycling_grid.hpp>
-#include <api/plex/types.hpp>
+#include <api/media/types.hpp>
 
 class VideoDataSource : public RecyclingGridDataSource {
 public:
-    using MediaList = std::vector<plex::Item>;
+    using MediaList = std::vector<media::Item>;
 
     explicit VideoDataSource(const MediaList& r);
     explicit VideoDataSource(const MediaList& r, const std::string& parentId);
 
     size_t getItemCount() override;
+#ifdef GMCA_TEST_HARNESS
+    const MediaList& testItems() const { return list; }
+    bool testContinueWatching() const { return stremioContinueWatching; }
+#endif
 
     RecyclingGridItem* cellForRow(RecyclingView* recycler, size_t index) override;
 
@@ -24,6 +28,11 @@ public:
 
     void appendData(const MediaList& data);
 
+    /// Append only items whose non-empty ratingKey is not already present.
+    /// Used by Stremio pagination as a safety net for addons that return
+    /// overlapping pages or ignore `skip`. Generic backend append semantics stay unchanged.
+    size_t appendUniqueData(const MediaList& data);
+
     /// End-of-list "+" card (hubs with more=1): opens the full hub page
     /// (HubView on `key`). The host recycler MUST have registered the
     /// "More" cell (MoreCardCell) — cf. RecylingVideo.
@@ -33,10 +42,13 @@ public:
     /// local catalog and a selected episode/movie plays its local file.
     void setLocalContext(bool v) { this->localContext = v; }
 
+    void setStremioContinueWatching(bool v) { this->stremioContinueWatching = v; }
+
 protected:
     MediaList list;
     std::string parentId;
     std::string moreTitle;
     std::string moreKey;
     bool localContext = false;
+    bool stremioContinueWatching = false;
 };

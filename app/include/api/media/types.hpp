@@ -1,19 +1,4 @@
-/*
-    GMCA — neutral pivot model shared by every media backend.
-
-    These structs are produced by each backend (Plex, Jellyfin/Emby, Stremio):
-    the UI consumes `media::Item` / `media::Container<T>` and never sees a
-    provider-specific shape. See MULTI_BACKEND.md §2.
-
-    Units: durations/positions in MILLISECONDS, timestamps in epoch SECONDS
-    (each backend converts: Jellyfin ticks ÷ 10 000 = ms, Stremio "120m" parsed).
-
-    NOTE: the `from_json` overloads below decode the PLEX wire shape (ratingKey,
-    viewOffset, MediaContainer...). They are the Plex backend's default mapper,
-    kept here for now; Jellyfin/Stremio backends use their own explicit mappers
-    and never rely on these. Extracting them fully into PlexBackend is a noted
-    cleanup (MULTI_BACKEND.md §9).
-*/
+/* GMCA media models and playback. Persisted field names remain compatible. */
 
 #pragma once
 
@@ -160,6 +145,11 @@ struct Part {
     std::string container;
     int64_t size = 0;
     int64_t duration = 0;  // ms
+    // Optional physical-file identity. Most backends leave these empty; Stremio
+    // fills them from stream.behaviorHints so subtitle providers can match the
+    // exact selected release without GMCA hashing/range-reading the video.
+    std::string videoHash;
+    std::string filename;
     bool accessible = true;
     bool exists = true;
     std::vector<Stream> streams;
@@ -175,9 +165,6 @@ inline void from_json(const nlohmann::json& j, Part& r) {
     if (j.contains("Stream") && j["Stream"].is_array()) r.streams = j["Stream"].get<std::vector<Stream>>();
 }
 
-/// Nature of a playback source — drives the Stremio source picker's badge and
-/// whether the source is directly playable on a console (no torrent engine).
-/// Plex/Jellyfin only ever produce Direct.
 enum class SourceKind {
     Direct,    // plain HTTP(S) file — playable
     Debrid,    // HTTP(S) link served by a debrid (RealDebrid/AllDebrid…) — playable
@@ -197,10 +184,14 @@ struct Media {
     int height = 0;
     int64_t duration = 0;  // ms
     std::vector<Part> parts;
-    // ---- source presentation (Stremio picker; empty/default on Plex/Jellyfin) ----
     std::string label;   // primary line: source/addon name (+ release group)
     std::string detail;  // secondary line: codec · size · seeders (our own re-render)
+    std::string sourceName;   // original addon language/compatibility hints
+    std::string sourceTitle;  // release identity/presentation
     SourceKind kind = SourceKind::Direct;
+    std::string sourceIdentity;  // stable addon/release identity for saved playback
+    size_t sourceProviderOrder = 0; // configured addon order, retained through targeted resume
+    size_t sourceReleaseOrder = 0;  // provider response order, retained through saved selection
     bool cached = true;  // debrid cache hint (best-effort; ⚡ vs pending). false = uncached
     // A source is directly playable iff it carries a real URL (parts[0].key).
     bool playable() const { return !parts.empty() && !parts.front().key.empty(); }
@@ -261,9 +252,9 @@ inline void from_json(const nlohmann::json& j, Role& r) {
 
 /// Library item (a movie, show, season, episode, clip, collection, playlist...)
 struct Item {
-    std::string ratingKey;  // opaque id, backend-specific (Plex ratingKey, Jellyfin Id, Stremio tt...)
+    std::string ratingKey;  // compatible media field
     std::string key;        // detail path (/library/metadata/{ratingKey})
-    std::string guid;       // cross-source identity (plex://, ProviderIds, IMDB id)
+    std::string guid;       // compatible media field
     std::string type;       // movie | show | season | episode | clip | collection
     std::string title;
     std::string summary;
@@ -299,20 +290,14 @@ struct Item {
     std::string grandparentTitle;
     std::string grandparentThumb;
     std::string grandparentArt;
-    // Owning-library grouping for the offline cache (SPEC §4.1). Neutral in
-    // meaning (the library/collection an item belongs to) but Plex-named on
-    // purpose: these strings are persisted as JSON keys in the on-disk offline
-    // cache, so renaming them would orphan caches already written by shipped
-    // clients (offline landed in v0.1.11+). Backends that don't populate them
-    // (Jellyfin/Stremio today) leave them empty and the catalog falls back to a
-    // synthetic bucket — expected, non-breaking degradation. Populate per backend
-    // to get real library buckets there (tracked as a feature follow-up).
     std::string librarySectionID;     // numeric id of the owning library (as string)
     std::string librarySectionTitle;  // display name of the owning library
     std::vector<std::string> genres;
     std::vector<Role> roles;
     std::vector<Role> directors;  // Director: same shape as Role (id/tag/thumb)
     std::vector<Media> media;
+    // False only for a Stremio saved-provider fast path; alternatives remain lazy.
+    bool sourcesComplete = true;
     std::vector<Chapter> chapters;
     std::vector<Marker> markers;
 
@@ -371,15 +356,6 @@ inline void from_json(const nlohmann::json& j, Item& r) {
     if (j.contains("Marker") && j["Marker"].is_array()) r.markers = j["Marker"].get<std::vector<Marker>>();
 }
 
-/// ---- Serialization for the offline cache (SPEC §4.1) -----------------------
-/// to_json mirrors the exact JSON keys read by the matching from_json above so a
-/// fetched Item can be persisted to disk (meta/{ratingKey}.json) and re-read
-/// identically offline. Kept next to from_json in the neutral model: the offline
-/// snapshot round-trips through the same PLEX wire shape these from_json decode.
-/// Nested overloads are declared before to_json(Item) so `j["Role"] = r.roles;`
-/// resolves them. (The Stremio-only presentation fields on Media — label/detail/
-/// kind/cached — are not persisted; they reset to their Direct defaults on read,
-/// which is exactly right for cached Plex/Jellyfin content.)
 inline void to_json(nlohmann::json& j, const Stream& r) {
     j = nlohmann::json::object();
     j["id"] = r.id;
@@ -537,8 +513,6 @@ inline void from_json(const nlohmann::json& j, Hub& r) {
     if (j.contains("Metadata") && j["Metadata"].is_array()) r.items = j["Metadata"].get<std::vector<Item>>();
 }
 
-/// Paginated envelope — equivalent of the old Jellyfin Result<T>
-/// (Items + total + offset). The Plex from_json reads MediaContainer.
 template <typename T>
 struct Container {
     std::vector<T> Items;

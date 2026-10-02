@@ -3,8 +3,8 @@
     "title": "pleNx は GMCA になりました",
     "intro": "同じアプリが、さらに進化しました。pleNx は GMCA（Gamepad Media Center Aggregator）へと生まれ変わり、できることが大きく広がりました。",
     "whats_new": "新機能",
-    "feature_backends": "ひとつのアプリで、すべてのサーバーを — Plex、Jellyfin、Emby、Stremio",
-    "feature_music": "映画やドラマと並んで、あなたの音楽ライブラリも",
+    "feature_backends": "Stremio catalogs, library and playback on PS4",
+    "feature_music": "Multiple Stremio accounts, with your own library and history",
     "feature_offline": "オフラインダウンロードで、接続なしでどこでも視聴",
     "feature_updates": "アプリに直接届く、定期的なアップデート",
     "reassure": "ログイン・設定・ダウンロードは自動的に引き継がれました。設定し直す必要はありません。どうぞお楽しみください。",
@@ -16,8 +16,7 @@
     "suggest": "おすすめ",
     "search": "検索",
     "downloads": "ダウンロード",
-    "setting": "設定",
-    "remote": "サーバー"
+    "setting": "設定"
   },
   "home": {
     "resume": "視聴を続ける",
@@ -86,7 +85,8 @@
     "go_series": "番組へ移動",
     "go_season": "シーズンへ移動",
     "director": "監督",
-    "open": "表示"
+    "open": "表示",
+    "type": "Type"
   },
   "search": {
     "hint": "キーワードと頭文字に対応",
@@ -147,41 +147,6 @@
     "on_server": "サーバーにあり",
     "not_on_server": "サーバーになし"
   },
-  "remote": {
-    "empty_title": "ファイルがありません",
-    "empty_sub": "ローカルストレージや WebDAV、FTP、SFTP サーバーを参照できます。",
-    "local": "ファイル",
-    "folder": "フォルダー",
-    "up": "上へ",
-    "bluray": "Blu-rayを再生",
-    "add_server": "サーバーを追加",
-    "edit_server": "サーバーを編集",
-    "manage": "サーバーを管理",
-    "edit": "編集",
-    "delete": "削除",
-    "delete_confirm": "「{}」を削除しますか？",
-    "type": "種類",
-    "name": "名前",
-    "host": "ホスト",
-    "port": "ポート",
-    "username": "ユーザー名",
-    "password": "パスワード",
-    "path": "開始パス",
-    "optional": "任意",
-    "save": "テストして保存",
-    "test_failed": "接続に失敗しました：{}",
-    "retry": "再試行しますか？",
-    "required": "名前とホストを入力してください。",
-    "sort": "ファイルを並べ替え",
-    "date": "更新日時",
-    "size": "サイズ",
-    "pin": "ファイルにピン留め",
-    "unpin": "ファイルから削除",
-    "pinned": "ファイルにピン留めしました",
-    "unpinned": "ファイルから削除しました",
-    "already_pinned": "すでにピン留め済み",
-    "pin_missing": "このフォルダーは利用できなくなりました。ファイルから削除しますか？"
-  },
   "download": {
     "start": "ダウンロード",
     "cancel": "ダウンロードをキャンセル",
@@ -212,8 +177,7 @@
     "section_done": "ダウンロード済み",
     "remove_all": "すべて削除",
     "confirm_remove_all": "すべてのダウンロードを削除しますか？",
-    "empty_sub": "ダウンロードした映画やエピソードはここに表示され、オフラインで視聴できます。",
-    "eta": "残り {}"
+    "empty_sub": "ダウンロードした映画やエピソードはここに表示され、オフラインで視聴できます。"
   },
   "setting": {
     "quit_hint": "アプリケーションを終了しようとしています。設定は次回起動時から有効になります。",
@@ -382,25 +346,6 @@
     "hint_confirm": "NSP フォワーダーのインストールは BAN される可能性があります\n再度ご確認ください",
     "remove_old": "GMCA がHOMEメニューにあります。古い pleNx タイルが残っている場合は、本体設定 > データ管理 > ソフトの削除 から削除してください。"
   },
-  "plex": {
-    "title": "Plex アカウントにサインイン",
-    "generating": "コードを生成中…",
-    "waiting": "確認を待っています…",
-    "connected": "接続しました！",
-    "expired": "コードの有効期限が切れました。もう一度お試しください",
-    "step1": "1. スマートフォンまたはパソコンで plex.tv/link を開く",
-    "step2": "2. Plex アカウントにサインインする",
-    "step3": "3. 上に表示されたコードを入力する",
-    "regenerate": "新しいコードを生成",
-    "choose_server": "サーバーを選択",
-    "choose_profile": "プロフィールを選択",
-    "profile_pin": "プロフィール PIN",
-    "wrong_pin": "PIN が違います",
-    "no_server": "このアカウントにサーバーが見つかりません",
-    "connecting": "サーバーに接続しています…",
-    "unreachable": "サーバーに接続できません",
-    "connecting_slow": "いつもより時間がかかっています — サーバーへの接続を試みています。お待ちください…"
-  },
   "empty": {
     "title": "表示する項目がありません",
     "error": "読み込みできません"
@@ -422,21 +367,16 @@
     "choose_type": "接続の種類を選択",
     "switch_title": "接続先",
     "add": "追加",
-    "jellyfin": {
-      "title_jellyfin": "Jellyfin にサインイン",
-      "title_emby": "Emby にサインイン",
-      "url": "サーバーアドレス",
-      "username": "ユーザー名",
-      "password": "パスワード",
-      "connect": "接続"
-    },
     "stremio": {
       "title": "Stremio にサインイン",
       "email": "メールアドレス",
       "password": "パスワード",
       "connect": "接続",
       "invalid": "メールアドレスとパスワードを入力してください"
-    }
+    },
+    "connecting": "サーバーに接続しています…",
+    "unreachable": "サーバーに接続できません",
+    "connecting_slow": "いつもより時間がかかっています — サーバーへの接続を試みています。お待ちください…"
   },
   "stremio": {
     "subtitle": {
@@ -444,6 +384,11 @@
     },
     "movies": "映画",
     "series": "シリーズ",
+    "anime": {
+      "title": "アニメ",
+      "empty_title": "アニメカタログが見つかりません",
+      "empty_sub": "Stremioでアニメカタログのアドオンをインストールまたは同期すると、ここでアニメを閲覧できます。"
+    },
     "popular": "人気",
     "new": "新着",
     "featured": "注目",

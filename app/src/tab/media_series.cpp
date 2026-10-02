@@ -2,11 +2,14 @@
     Copyright 2023 dragonflylee
 */
 
+#include "utils/config.hpp"
 #include "activity/player_view.hpp"
 #include "activity/loading_overlay.hpp"
-#include "api/plex.hpp"
-#include "api/plex/watchlist.hpp"
 #include "api/backend.hpp"
+#include "api/backend.hpp"
+#include "api/stremio/types.hpp"
+#include "api/stremio/source_audio.hpp"
+#include "api/stremio/source_safety.hpp"
 #include "tab/media_series.hpp"
 #include "view/h_recycling.hpp"
 #include "view/auto_tab_frame.hpp"
@@ -16,6 +19,7 @@
 #include "view/video_card.hpp"
 #include "view/people_source.hpp"
 #include "view/video_source.hpp"
+#include "view/recycling_grid.hpp"
 #include "view/recyling_video.hpp"
 #include "view/presenter.hpp"
 #include "view/context_menu.hpp"
@@ -26,10 +30,260 @@
 #include "utils/media_source.hpp"
 #include "utils/offline_library.hpp"
 #include "utils/network_state.hpp"
-#include "tab/remote_view.hpp"
+#include "api/stremio/backend.hpp"
+#include "activity/local_player.hpp"
+#include <borealis/views/dialog.hpp>
+#include <borealis/views/label.hpp>
+#include <borealis/views/scrolling_frame.hpp>
 #include <fmt/ranges.h>
 
 using namespace brls::literals;  // for _i18n
+
+#if defined(GMCA_LINUX_TEST_BENCH) || defined(GMCA_PS4_SAFE_SOURCES)
+namespace {
+
+brls::Label* episodeSourceLabel(const std::string& text, float size, NVGcolor color, bool grow = false) {
+    auto* label = new brls::Label();
+    label->setText(text);
+    label->setFontSize(size);
+    label->setTextColor(color);
+    label->setSingleLine(true);
+    // Keep generic labels static. Long source title/detail labels explicitly
+    // opt back into autoAnimate below; Borealis clips marquee text to its bounds.
+    label->setAutoAnimate(false);
+    if (grow) {
+        label->setGrow(1);
+        label->setShrink(1);
+        label->setMinWidth(0);
+    }
+    return label;
+}
+
+brls::Box* episodeSourcePill(const std::string& text, NVGcolor bg, NVGcolor fg) {
+    auto* box = new brls::Box();
+    box->setAxis(brls::Axis::ROW);
+    box->setAlignItems(brls::AlignItems::CENTER);
+    box->setHeight(22);
+    box->setCornerRadius(11);
+    box->setBackgroundColor(bg);
+    box->setPaddingLeft(9);
+    box->setPaddingRight(9);
+    box->setMarginRight(8);
+    box->addView(episodeSourceLabel(text, 12, fg));
+    return box;
+}
+
+class EpisodeSourceRow : public brls::Box {
+public:
+    EpisodeSourceRow() {
+        this->setAxis(brls::Axis::COLUMN);
+        this->setWidthPercentage(100);
+        this->setHeight(96);
+        this->setCornerRadius(8);
+        this->setHighlightCornerRadius(8);
+        this->setFocusable(true);
+        this->setPaddingTop(7);
+        this->setPaddingBottom(7);
+        this->setPaddingLeft(12);
+        this->setPaddingRight(12);
+        this->setMarginBottom(6);
+        this->setHideHighlightBackground(true);
+    }
+
+    void onFocusGained() override {
+        brls::Box::onFocusGained();
+        NVGcolor c = brls::Application::getTheme().getColor("color/app");
+        c.a = 0.22f;
+        this->setBackgroundColor(c);
+    }
+
+    void onFocusLost() override {
+        brls::Box::onFocusLost();
+        this->setBackgroundColor(nvgRGBA(0, 0, 0, 0));
+    }
+};
+
+struct EpisodePickerOrigin {
+    RecyclingGrid* grid = nullptr;
+    size_t index = 0;
+    float offset = 0;
+};
+
+std::string episodeDisplayTitle(const media::Item& item) {
+    return item.grandparentTitle.empty()
+               ? fmt::format("S{}E{} — {}", item.parentIndex, item.index, item.title)
+               : fmt::format("{} · S{}E{} — {}", item.grandparentTitle, item.parentIndex, item.index, item.title);
+}
+
+void playResolvedEpisode(const media::Item& item, int64_t seekMs, int mediaIndex) {
+    media::Item episode = item;
+    episode.viewOffset = seekMs;
+    PlayerView* view = new PlayerView(episode, seekMs, mediaIndex);
+    view->setTitie(episodeDisplayTitle(item));
+    if (!item.grandparentRatingKey.empty()) view->setSeries(item.grandparentRatingKey);
+    brls::sync([view]() { brls::Application::giveFocus(view); });
+}
+
+void showEpisodeSourcePicker(const media::Item& item, int64_t seekMs, EpisodePickerOrigin origin = {}) {
+    std::vector<int> playable;
+    for (size_t i = 0; i < item.media.size(); ++i)
+        if (item.media[i].playable()) playable.push_back((int)i);
+
+    if (playable.empty()) {
+        Dialog::show("main/stremio/source/none"_i18n);
+        return;
+    }
+
+    auto theme = brls::Application::getTheme();
+    NVGcolor pillBg = theme.getColor("color/pill");
+    NVGcolor textCol = theme.getColor("brls/text");
+    NVGcolor greyCol = theme.getColor("font/grey");
+#if defined(GMCA_PS4_SAFE_SOURCES)
+    NVGcolor warningBg = theme.getColor("color/app");
+    NVGcolor warningFg = theme.getColor("brls/button/primary_enabled_text");
+#endif
+
+    auto* content = new brls::Box();
+    content->setId("stremio/source-picker");
+    content->setAxis(brls::Axis::COLUMN);
+    content->setWidthPercentage(100);
+    content->setHeight(610);
+    content->setPaddingTop(18);
+    content->setPaddingBottom(10);
+    content->setPaddingLeft(20);
+    content->setPaddingRight(20);
+
+    auto* heading = episodeSourceLabel("main/stremio/playback/choose_source"_i18n + " · " + episodeDisplayTitle(item), 22, textCol);
+    heading->setHeight(42);
+    content->addView(heading);
+
+    auto* scroll = new brls::ScrollingFrame();
+    scroll->setGrow(1);
+    scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
+    auto* list = new brls::Box();
+    list->setAxis(brls::Axis::COLUMN);
+    list->setWidthPercentage(100);
+    scroll->setContentView(list);
+    content->addView(scroll);
+
+    auto* dialog = new brls::Dialog(content);
+    dialog->addButton("hints/cancel"_i18n, []() {});
+    dialog->setCancelable(true);
+    EpisodeSourceRow* firstRow = nullptr;
+
+    for (int mediaIndex : playable) {
+        const media::Media& m = item.media[(size_t)mediaIndex];
+        auto* row = new EpisodeSourceRow();
+        row->setId("stremio/source/" + std::to_string(mediaIndex));
+        if (!firstRow) firstRow = row;
+
+        auto* top = new brls::Box();
+        top->setAxis(brls::Axis::ROW);
+        top->setAlignItems(brls::AlignItems::CENTER);
+        top->setHeight(28);
+        top->setWidthPercentage(100);
+        if (!m.videoResolution.empty())
+            top->addView(episodeSourcePill(m.videoResolution, pillBg, textCol));
+        if (stremio::hasItalianAudio(m.sourceName + " " + m.sourceTitle))
+            top->addView(episodeSourcePill("main/stremio/source/italian_audio"_i18n, pillBg, textCol));
+        if (!m.videoCodec.empty())
+            top->addView(episodeSourcePill(m.videoCodec, pillBg, textCol));
+#if defined(GMCA_PS4_SAFE_SOURCES)
+        std::string warning = stremio::ps4WarningLabel(m);
+        if (!warning.empty()) top->addView(episodeSourcePill(fmt::format("main/stremio/source/ps4_risk"_i18n, warning), warningBg, warningFg));
+#endif
+        row->addView(top);
+
+        // Give the release title the full row width instead of squeezing it
+        // between quality/codec badges. Focused rows marquee long text.
+        std::string primary = !m.sourceTitle.empty() ? m.sourceTitle : (!m.sourceName.empty() ? m.sourceName : m.label);
+        auto* title = episodeSourceLabel(primary, 16, textCol, true);
+        title->setHeight(26);
+        title->setAutoAnimate(true);
+        row->addView(title);
+
+        std::string secondary = m.label;
+        if (!m.detail.empty()) secondary += (secondary.empty() ? "" : " · ") + m.detail;
+        if (m.kind == media::SourceKind::Debrid)
+            secondary += (secondary.empty() ? "" : " · ") + (m.cached ? "main/stremio/source/debrid_cached"_i18n : "main/stremio/source/debrid"_i18n);
+        auto* sub = episodeSourceLabel(secondary, 13, greyCol);
+        sub->setHeight(24);
+        sub->setAutoAnimate(true);
+        row->addView(sub);
+
+        row->registerClickAction([dialog, item, seekMs, mediaIndex](...) {
+            dialog->close([item, seekMs, mediaIndex]() { playResolvedEpisode(item, seekMs, mediaIndex); });
+            return true;
+        });
+        list->addView(row);
+    }
+
+    if (origin.grid) {
+        // Returning focus to the CENTERED season grid can start a new scroll
+        // animation. Freeze the saved pixel offset before the dialog takes focus.
+        origin.grid->setContentOffsetY(origin.offset, false);
+        origin.grid->setDefaultCellFocus(origin.index);
+    }
+    // Dialog::addButton() makes the first button its last/default focus. Override
+    // that with the first playable source before open(), so the Activity starts
+    // on a source row instead of Cancel without any post-open focus race.
+    if (firstRow) dialog->setLastFocusedView(firstRow);
+    dialog->open();
+    // The underlying CENTERED grid can still recompute during the dialog's
+    // layout transition; restore its exact position on the next UI tick.
+    brls::sync([origin]() {
+        if (origin.grid) {
+            origin.grid->setContentOffsetY(origin.offset, false);
+            origin.grid->setDefaultCellFocus(origin.index);
+        }
+    });
+}
+
+void resolveAndShowEpisodeSourcePicker(
+    const media::Item& item, brls::Box* recycler = nullptr, size_t index = 0) {
+    const std::string id = item.ratingKey;
+    const int64_t seekMs = item.viewOffset;
+    EpisodePickerOrigin origin;
+    if (auto* grid = dynamic_cast<RecyclingGrid*>(recycler)) {
+        origin.grid = grid;
+        origin.index = index;
+        origin.offset = grid->getContentOffsetY();
+        // A CENTERED RecyclingGrid may still be finishing the focus-centering
+        // animation when A is pressed. Stop it at the exact visible offset
+        // before pushing the loading Activity; otherwise the dimmed list keeps
+        // moving underneath and can recycle/rebind a cell several rows away.
+        grid->setContentOffsetY(origin.offset, false);
+        grid->setDefaultCellFocus(index);
+    }
+    brls::Application::blockInputs();
+    brls::Application::pushActivity(
+        new LoadingOverlay("main/stremio/playback/fetching_sources"_i18n), brls::TransitionAnimation::NONE);
+    // pushActivity temporarily removes focus from the episode cell. Reassert
+    // the frozen offset synchronously so no frame can expose a recentered list.
+    if (origin.grid) origin.grid->setContentOffsetY(origin.offset, false);
+    auto* backend = dynamic_cast<stremio::StremioBackend*>(&AppConfig::instance().backend());
+    backend->getResumeDetail(
+        id, seekMs > 0,
+        [seekMs, origin](const media::Item& resolved) {
+            brls::Application::unblockInputs();
+            brls::Application::popActivity(brls::TransitionAnimation::NONE);
+            const int64_t resumeMs = seekMs == 0 ? 0 : resolved.viewOffset;
+            const int saved = seekMs > 0 ? stremio::savedPlaybackSource(resolved) : -1;
+            if (saved >= 0) {
+                playResolvedEpisode(resolved, resumeMs, saved);
+                return;
+            }
+            showEpisodeSourcePicker(resolved, resumeMs, origin);
+        },
+        [](const std::string& error) {
+            brls::Application::unblockInputs();
+            brls::Application::popActivity(brls::TransitionAnimation::NONE);
+            Dialog::show(error);
+        });
+}
+
+}  // namespace
+#endif
 
 class EpisodeCardCell : public BaseCardCell {
 public:
@@ -37,7 +291,7 @@ public:
 
     BRLS_BIND(brls::Label, labelName, "episode/card/name");
     BRLS_BIND(brls::Label, labelOverview, "episode/card/overview");
-    BRLS_BIND(SVGImage, badgeTopRight, "video/card/badge/top");
+    BRLS_BIND(brls::Box, watchedStatus, "episode/card/watched");
     BRLS_BIND(brls::Rectangle, rectProgress, "video/card/progress");
     BRLS_BIND(brls::Box, badgeDownload, "video/card/badge/download");
 };
@@ -59,7 +313,7 @@ public:
         });
     }
 
-    void setItem(const plex::Item& item, const std::string& fallbackSummary) {
+    void setItem(const media::Item& item, const std::string& fallbackSummary) {
         this->picture->clear();
         const std::string& thumb = item.thumb.empty() ? item.parentThumb : item.thumb;
         if (!thumb.empty()) Image::load(this->picture, thumb, 225);
@@ -113,10 +367,10 @@ public:
     static constexpr float HEADER_HEIGHT = 255;  // cover 225 + air 30
     static constexpr float CARD_HEIGHT = 190;    // thumbnail 180 + padding 2x5
 
-    using MediaList = std::vector<plex::Item>;
+    using MediaList = std::vector<media::Item>;
 
     SeasonEpisodesDataSource(
-        const plex::Item& season, const std::string& fallback, const MediaList& episodes, bool localContext = false)
+        const media::Item& season, const std::string& fallback, const MediaList& episodes, bool localContext = false)
         : season(season), fallbackSummary(fallback), list(episodes), localContext(localContext) {}
 
     size_t getItemCount() override { return this->list.size() + 1; }
@@ -154,16 +408,14 @@ public:
         }
         cell->labelOverview->setText(item.summary);
 
-        if (item.played()) {
-            cell->badgeTopRight->setImageFromSVGRes("icon/ico-checkmark.svg");
-            cell->badgeTopRight->setVisibility(brls::Visibility::VISIBLE);
+        const bool watched = item.played();
+        cell->watchedStatus->setVisibility(watched ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+        if (watched) {
             cell->rectProgress->getParent()->setVisibility(brls::Visibility::GONE);
         } else if (item.viewOffset > 0 && item.duration > 0) {
             cell->rectProgress->setWidthPercentage(float(item.viewOffset) / float(item.duration) * 100.f);
             cell->rectProgress->getParent()->setVisibility(brls::Visibility::VISIBLE);
-            cell->badgeTopRight->setVisibility(brls::Visibility::GONE);
         } else {
-            cell->badgeTopRight->setVisibility(brls::Visibility::GONE);
             cell->rectProgress->getParent()->setVisibility(brls::Visibility::GONE);
         }
 
@@ -197,7 +449,7 @@ public:
                                     ? fmt::format("S{}E{} — {}", item.parentIndex, item.index, item.title)
                                     : fmt::format("{} · S{}E{} — {}", item.grandparentTitle, item.parentIndex,
                                           item.index, item.title);
-            RemoteView::play(local, title, "Local");
+            LocalPlayer::play(local, title, "Local");
             return;
         }
         // not downloaded: offline it is unavailable; online (downloads area) it
@@ -213,6 +465,13 @@ public:
             });
             return;
         }
+
+#if defined(GMCA_LINUX_TEST_BENCH) || defined(GMCA_PS4_SAFE_SOURCES)
+        if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
+            resolveAndShowEpisodeSourcePicker(item, recycler, index);
+            return;
+        }
+#endif
 
         PlayerView* view = new PlayerView(item);
         view->setTitie(item.grandparentTitle.empty()
@@ -234,7 +493,7 @@ public:
     /// used at the next header bind
     void setFallbackSummary(const std::string& s) { this->fallbackSummary = s; }
 
-    const plex::Item& getSeason() const { return this->season; }
+    const media::Item& getSeason() const { return this->season; }
 
     void clearData() override { this->list.clear(); }
 
@@ -257,7 +516,7 @@ private:
         });
     }
 
-    plex::Item season;
+    media::Item season;
     std::string fallbackSummary;
     MediaList list;
     bool localContext;  // offline downloads area (grey non-downloaded episodes)
@@ -344,7 +603,7 @@ private:
 /// doRequest).
 class MediaSeason : public brls::Box, public Presenter {
 public:
-    MediaSeason(const plex::Item& item, const std::string& fallbackSummary, bool localContext = false)
+    MediaSeason(const media::Item& item, const std::string& fallbackSummary, bool localContext = false)
         : season(item), fallbackSummary(fallbackSummary), localContext(localContext) {
         this->inflateFromXMLRes("xml/tabs/seasons.xml");
 
@@ -432,7 +691,7 @@ private:
 
     BRLS_BIND(RecyclingGrid, recycler, "media/episodes");
 
-    plex::Item season;
+    media::Item season;
     std::string fallbackSummary;
     bool localContext;  // offline downloads area
 };
@@ -441,7 +700,7 @@ private:
 /// by the server + "N episodes"). Click -> stacked season view.
 class SeasonDataSource : public RecyclingGridDataSource {
 public:
-    using MediaList = std::vector<plex::Item>;
+    using MediaList = std::vector<media::Item>;
 
     /// `fallbackSummary` points to MediaSeries::seriesSummary (stable
     /// address, shared lifetime: the source dies with the page's recycler)
@@ -502,12 +761,12 @@ private:
     bool localContext;  // offline downloads area (propagated to the season view)
 };
 
-MediaSeries::MediaSeries(const plex::Item& item, bool localContext)
-    : seriesId(item.type == plex::mediaTypeSeason && !item.parentRatingKey.empty() ? item.parentRatingKey
+MediaSeries::MediaSeries(const media::Item& item, bool localContext)
+    : seriesId(item.type == media::mediaTypeSeason && !item.parentRatingKey.empty() ? item.parentRatingKey
                                                                                    : item.ratingKey)
     , localContext(localContext) {
     brls::Logger::debug("Tab MediaSeries: create");
-    if (item.type == plex::mediaTypeSeason) this->wantedSeason = item.ratingKey;
+    if (item.type == media::mediaTypeSeason) this->wantedSeason = item.ratingKey;
     // Inflate the tab from the XML file
     this->inflateFromXMLRes("xml/tabs/series.xml");
 
@@ -578,8 +837,16 @@ void MediaSeries::doPlay() {
     }
     // copy: "Replay" (finished show) forces the start at 0 — PlayerView
     // would otherwise resume at the episode's residual viewOffset (player_view.cpp:101)
-    plex::Item item = this->onDeck;
+    media::Item item = this->onDeck;
     if (this->replay) item.viewOffset = 0;
+#if defined(GMCA_LINUX_TEST_BENCH) || defined(GMCA_PS4_SAFE_SOURCES)
+    if (AppConfig::instance().backend().type() == media::BackendType::Stremio) {
+        // PS4 resolves sources only on explicit Play. Avoid the old hidden
+        // next-up prefetch while preserving the same picker/loading feedback.
+        resolveAndShowEpisodeSourcePicker(item);
+        return;
+    }
+#endif
     PlayerView* view = new PlayerView(item);
     view->setTitie(item.grandparentTitle.empty()
                        ? fmt::format("S{}E{} — {}", item.parentIndex, item.index, item.title)
@@ -622,7 +889,6 @@ void MediaSeries::initWatchlist(const media::Item& item) {
     auto& be = AppConfig::instance().backend();
     if (be.caps().listKind == media::ListKind::None || !be.canList(item)) return;
     this->listItem = item;
-    // label matches the backend's personal list: Plex → Watchlist, Jellyfin/Emby → Favoris
     this->btnWatchlist->setText(be.caps().listKind == media::ListKind::Favorites
                                     ? "main/favorites/title"_i18n
                                     : "main/watchlist/title"_i18n);
@@ -669,7 +935,6 @@ void MediaSeries::toggleWatchlist() {
 }
 
 void MediaSeries::updateWatchlistButton() {
-    // filled bookmark = already in the Watchlist (Plex convention)
     this->btnWatchlist->setIcon(
         this->watchlisted ? "@res/icon/ico-bookmark-fill-light.svg" : "@res/icon/ico-bookmark-light.svg");
 }
@@ -794,7 +1059,7 @@ void MediaSeries::doSeason() {
                     // doSeason runs inside the constructor, before this view is
                     // attached; defer so presentDetail resolves the tab-frame
                     // detail stack (not the unattached-parent fallback)
-                    plex::Item season = it;
+                    media::Item season = it;
                     std::string summary = this->seriesSummary;
                     ASYNC_RETAIN
                     brls::sync([ASYNC_TOKEN, season, summary]() {
@@ -866,8 +1131,8 @@ void MediaSeries::doNextup() {
 
             auto& be = AppConfig::instance().backend();
             if (be.type() == media::BackendType::Stremio) {
-#if defined(GMCA_PS4_SAFE_SOURCES)
-                // PS4: do not resolve /stream just to decide whether Play should
+#if defined(GMCA_PS4_SAFE_SOURCES) || defined(GMCA_LINUX_TEST_BENCH)
+                // Stremio-only: do not resolve /stream just to decide whether Play should
                 // be enabled. That hidden prefetch competes with the series/meta
                 // requests and can make opening a show feel as slow as the source
                 // picker. Resolve lazily only when the user actually presses Play.

@@ -3,7 +3,7 @@
 #include "view/video_card.hpp"
 #include "view/video_source.hpp"
 #include "view/more_card.hpp"
-#include "api/plex.hpp"
+#include "api/backend.hpp"
 
 const std::string recylingVideoContentXML = R"xml(
     <brls:Box
@@ -42,8 +42,6 @@ RecylingVideo::RecylingVideo() {
 
     this->registerFloatXMLAttribute("pageSize", [this](float value) { this->setPageSize(value); });
 
-    this->registerAutoXMLAttribute(
-        "nextPage", [this]() { this->recycler->onNextPage([this]() { this->doRequest(); }); });
 
     this->recycler->registerCell("Cell", VideoCardCell::create);
     this->recycler->registerCell("More", MoreCardCell::create);
@@ -70,85 +68,19 @@ void RecylingVideo::setItemWidth(float width) {
 
 void RecylingVideo::setPageSize(size_t pageSize) { this->pageSize = pageSize; }
 
-void RecylingVideo::onQuery(const Callback& callback) { this->queryCallback = callback; }
 
-void RecylingVideo::setItems(const std::vector<plex::Item>& items) { this->setItems(items, "", ""); }
+void RecylingVideo::setItems(const std::vector<media::Item>& items) { this->setItems(items, "", ""); }
 
 void RecylingVideo::setItems(
-    const std::vector<plex::Item>& items, const std::string& moreTitle, const std::string& moreKey) {
+    const std::vector<media::Item>& items, const std::string& moreTitle, const std::string& moreKey) {
     if (items.empty()) {
         this->setVisibility(brls::Visibility::GONE);
         this->recycler->clearData();
     } else {
         this->setVisibility(brls::Visibility::VISIBLE);
         auto* source = new VideoDataSource(items);
+        source->setStremioContinueWatching(this->stremioContinueWatching);
         if (!moreKey.empty()) source->setMore(moreTitle, moreKey);
         this->recycler->setDataSource(source);
     }
-}
-
-void RecylingVideo::doRequest(bool refresh) {
-    // row fed by setItems (hubs): the nextPage XML attribute can trigger
-    // doRequest without a queryCallback
-    if (!this->queryCallback) return;
-    if (refresh) {
-        this->start = 0;
-        this->recycler->showSkeleton(this->pageSize);
-    }
-    auto& conf = AppConfig::instance();
-    ASYNC_RETAIN
-    // the relative path is already formatted by queryCallback -> fmt "{}"
-    plex::getJSON<plex::Container<plex::Item>>(
-        conf.getUrl(), conf.getToken(),
-        [ASYNC_TOKEN](const plex::Container<plex::Item>& r) {
-            ASYNC_RELEASE
-            this->start = r.StartIndex + this->pageSize;
-            if (r.TotalRecordCount == 0) {
-                this->setVisibility(brls::Visibility::GONE);
-                this->recycler->clearData();
-            } else if (r.StartIndex == 0) {
-                this->setVisibility(brls::Visibility::VISIBLE);
-                this->recycler->setDataSource(new VideoDataSource(r.Items));
-            } else if (r.Items.size() > 0) {
-                auto dataSrc = dynamic_cast<VideoDataSource*>(this->recycler->getDataSource());
-                dataSrc->appendData(r.Items);
-                this->recycler->notifyDataChanged();
-            }
-        },
-        [ASYNC_TOKEN](const std::string& ex) {
-            ASYNC_RELEASE
-            this->title->setSubtitle(ex);
-            brls::Application::notify(ex);
-        },
-        "{}", this->queryCallback(this->start, this->pageSize));
-}
-
-void RecylingVideo::doLatest(bool refresh) {
-    if (!this->queryCallback) return;
-    if (refresh) {
-        this->start = 0;
-        this->recycler->showSkeleton(this->pageSize);
-    }
-    auto& conf = AppConfig::instance();
-    ASYNC_RETAIN
-    // the response is also a MediaContainer (no more bare array on the Plex side)
-    plex::getJSON<plex::Container<plex::Item>>(
-        conf.getUrl(), conf.getToken(),
-        [ASYNC_TOKEN](const plex::Container<plex::Item>& r) {
-            ASYNC_RELEASE
-            if (r.Items.empty()) {
-                this->setVisibility(brls::Visibility::GONE);
-                this->recycler->clearData();
-            } else {
-                this->setVisibility(brls::Visibility::VISIBLE);
-                this->recycler->setDataSource(new VideoDataSource(r.Items));
-            }
-        },
-        [ASYNC_TOKEN](const std::string& ex) {
-            ASYNC_RELEASE
-            this->recycler->setVisibility(brls::Visibility::GONE);
-            this->title->setSubtitle(ex);
-            brls::Application::notify(ex);
-        },
-        "{}", this->queryCallback(0, this->pageSize));
 }

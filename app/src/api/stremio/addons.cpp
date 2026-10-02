@@ -51,7 +51,7 @@ void AddonEngine::ensureLoaded() {
         try {
             nlohmann::json j = getSync(transport);
             if (j.empty()) {
-                brls::Logger::warning("stremio: empty manifest from {}", transport);
+                brls::Logger::warning("stremio: empty manifest from {}", redactUrlForLog(transport));
                 continue;
             }
             Addon a;
@@ -60,7 +60,7 @@ void AddonEngine::ensureLoaded() {
             a.manifest = parseManifest(j);
             addons.push_back(std::move(a));
         } catch (const std::exception& ex) {
-            brls::Logger::warning("stremio: manifest load failed {}: {}", transport, ex.what());
+            brls::Logger::warning("stremio: manifest load failed {}: {}", redactUrlForLog(transport), ex.what());
         }
     }
     loaded = true;

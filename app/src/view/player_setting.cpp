@@ -137,7 +137,7 @@ PlayerSetting::PlayerSetting() {
     auto& conf = AppConfig::instance();
 
 /// Fullscreen
-#if (defined(__APPLE__) || defined(__linux__) || defined(_WIN32)) && !defined(ANDROID)
+#if defined(GMCA_LINUX_TEST_BENCH)
     btnFullscreen->init(
         "main/setting/others/fullscreen"_i18n, conf.getItem(AppConfig::FULLSCREEN, false), [](bool value) {
             VideoContext::FULLSCREEN = value;
@@ -249,7 +249,7 @@ PlayerSetting::PlayerSetting() {
 
 PlayerSetting::~PlayerSetting() { brls::Logger::debug("PlayerSetting: delete"); }
 
-void PlayerSetting::showAudioMenu(const plex::Media* src) {
+void PlayerSetting::showAudioMenu(const media::Media* src) {
     auto& mpv = MPVCore::instance();
 
     // embedded tracks (direct play, or the single track of a transcode)
@@ -275,12 +275,11 @@ void PlayerSetting::showAudioMenu(const plex::Media* src) {
         return;
     }
 
-    // transcode: tracks come from the Plex Media (re-transcode on change)
     std::vector<std::string> names;
     std::vector<int64_t> ids;
     if (src != nullptr && !src->parts.empty()) {
         for (auto& s : src->parts.front().streams) {
-            if (s.streamType != plex::streamTypeAudio) continue;
+            if (s.streamType != media::streamTypeAudio) continue;
             names.push_back(s.displayTitle);
             ids.push_back(s.id);
         }
@@ -303,7 +302,7 @@ void PlayerSetting::showAudioMenu(const plex::Media* src) {
     brls::Application::notify("main/player/audio"_i18n);
 }
 
-void PlayerSetting::showSubtitleMenu(const plex::Media* src) {
+void PlayerSetting::showSubtitleMenu(const media::Media* src) {
     auto& mpv = MPVCore::instance();
 
     std::vector<std::string> names = {"main/player/none"_i18n};
@@ -314,7 +313,6 @@ void PlayerSetting::showSubtitleMenu(const plex::Media* src) {
     }};
     int current = 0;
 
-    // embedded subtitle tracks (sid). Sidecar Plex subs are sub-add'ed into
     // mpv on direct play, so they show up here too.
     int64_t count = mpv.getInt("track-list/count");
     int64_t sidActive = mpv.getInt("sid");
@@ -332,11 +330,10 @@ void PlayerSetting::showSubtitleMenu(const plex::Media* src) {
         });
     }
 
-    // transcode: no embedded subs in the HLS stream -> Plex stream ids
     // (burned in, re-transcode on change)
     if (names.size() == 1 && src != nullptr && !src->parts.empty()) {
         for (auto& s : src->parts.front().streams) {
-            if (s.streamType != plex::streamTypeSubtitle) continue;
+            if (s.streamType != media::streamTypeSubtitle) continue;
             int64_t id = s.id;
             if (id == selectedSubtitle) current = (int)names.size();
             names.push_back(s.displayTitle);

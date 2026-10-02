@@ -22,6 +22,8 @@ typedef enum MpvEventEnum {
     VIDEO_UNMUTE,
     MPV_FILE_ERROR,
     RESET,
+    PLAYBACK_RESTART,  // actual mpv restart, distinct from pause property updates
+    SEEK_START,
 } MpvEventEnum;
 
 typedef brls::Event<MpvEventEnum> MPVEvent;

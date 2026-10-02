@@ -1,12 +1,12 @@
+#include "utils/config.hpp"
 #include "tab/media_person.hpp"
 #include "view/recyling_video.hpp"
-#include "api/plex.hpp"
 #include "api/backend.hpp"
 #include "utils/image.hpp"
 
 using namespace brls::literals;  // for _i18n
 
-MediaPerson::MediaPerson(const plex::Role& role) : personId(role.id) {
+MediaPerson::MediaPerson(const media::Role& role) : personId(role.id) {
     brls::Logger::debug("Tab MediaPerson: create");
     this->inflateFromXMLRes("xml/view/people.xml");
 
@@ -17,7 +17,6 @@ MediaPerson::MediaPerson(const plex::Role& role) : personId(role.id) {
         this->labelRole->setVisibility(brls::Visibility::VISIBLE);
     }
     if (!role.thumb.empty()) {
-        // a Role portrait is either an absolute URL (provider.plex.tv) or a
         // server-relative path
         if (role.thumb.rfind("http", 0) == 0) {
             Image::with(this->imagePhoto, role.thumb);
@@ -38,10 +37,10 @@ void MediaPerson::doMedia() {
     AppConfig::instance().backend().getPersonMedia(this->personId, 60,
         [ASYNC_TOKEN](const media::Container<media::Item>& r) {
             ASYNC_RELEASE
-            std::vector<plex::Item> movies, shows;
+            std::vector<media::Item> movies, shows;
             for (auto& it : r.Items) {
-                if (it.type == plex::mediaTypeMovie) movies.push_back(it);
-                if (it.type == plex::mediaTypeShow) shows.push_back(it);
+                if (it.type == media::mediaTypeMovie) movies.push_back(it);
+                if (it.type == media::mediaTypeShow) shows.push_back(it);
             }
             // "12 · Movies" pills: count + plural label, neutral in every
             // language (no agreement to handle)

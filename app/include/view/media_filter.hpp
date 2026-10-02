@@ -19,7 +19,6 @@ public:
     inline static int selectedOrder = 1;
     inline static bool selectedUnplayed = false;
 
-    /// Plex sort fields, aligned with the selector labels;
     /// descending order = ":desc" suffix
     inline static std::string sortList[] = {
         "titleSort",
