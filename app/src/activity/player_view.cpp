@@ -278,10 +278,12 @@ bool PlayerView::playIndex(int index) {
         return VideoView::close();
     }
     this->dismissUpNext();
-    this->episodeIndex = index;
     this->upNextDismissed = false;
     this->view->setAutoNext(AppConfig::instance().getItem(AppConfig::PLAYER_AUTOPLAY_NEXT, true));
+    // reset synchronously reports the old episode; retain its navigation index
+    // until that checkpoint has updated the loaded episode list.
     MPVCore::instance().reset();
+    this->episodeIndex = index;
 
     auto next = this->episodes.at(index);
     this->itemId = next.ratingKey;
