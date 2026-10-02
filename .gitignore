@@ -33,3 +33,6 @@ plezy/
 /.wip/
 # Local dev tooling hook (points at an untracked .github/skills/)
 /.github/hooks/
+
+# Local staging directories used by PS4 CI caches.
+.ps4-cache/

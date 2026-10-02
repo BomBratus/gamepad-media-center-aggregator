@@ -3,6 +3,7 @@ name: build PS4 Stremio-only
 on:
   push:
     branches:
+      - dev
       - 'release/ps4-*-stremio-only'
   pull_request:
     branches: [ dev ]
@@ -17,6 +18,13 @@ on:
       - .gitmodules
       - .github/workflows/build-ps4-stremio-only.yml
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps4-stremio-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-ps4-stremio-only:
@@ -57,69 +65,73 @@ jobs:
           git config --global --add safe.directory '*'
           git -C library/borealis apply --verbose ../../scripts/patches/borealis-fixes.patch
 
+      - name: Restore PS4 package downloads
+        id: packages
+        uses: actions/cache/restore@v4
+        with:
+          path: .ps4-cache/packages
+          key: ps4-packages-v1-${{ runner.arch }}-${{ hashFiles('scripts/ps4/dependencies.txt', 'scripts/ps4/install-dependencies.sh', '.github/workflows/build-ps4-stremio-only.yml') }}
+
       - name: Update dependencies
-        run: |
-          for pkg in musl-1.5-3 mbedtls-2.28.10-2 sdl2-2.0.18-19 libcurl-7.80.0-5 dav1d-1.5.4-1 ffmpeg-7.1.5-3 libmpv-0.36.0-2; do
-            pacman --noconfirm -U $BASE_URL/ps4-openorbis-${pkg}-any.pkg.tar.gz
-          done
-          git config --system --add safe.directory $GITHUB_WORKSPACE
+        shell: bash
+        run: bash scripts/ps4/install-dependencies.sh
+
+      - name: Save PS4 package downloads
+        if: github.event_name != 'pull_request' && steps.packages.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .ps4-cache/packages
+          key: ${{ steps.packages.outputs.cache-primary-key }}
+
+      - name: Restore patched PS4 libmpv
+        id: libmpv
+        uses: actions/cache/restore@v4
+        with:
+          path: .ps4-cache/libmpv
+          # Exact matches only: include every dependency and build recipe input.
+          key: ps4-libmpv-v1-pacbrew-250221-${{ runner.arch }}-${{ hashFiles('scripts/ps4/dependencies.txt', 'scripts/ps4/install-dependencies.sh', 'scripts/ps4/build-patched-libmpv.sh', 'scripts/ps4/libmpv/**', '.github/workflows/build-ps4-stremio-only.yml') }}
 
       - name: Set up Python for local libmpv build
+        if: steps.libmpv.outputs.cache-hit != 'true'
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
       - name: Build GMCA patched PS4 libmpv
+        if: steps.libmpv.outputs.cache-hit != 'true'
         shell: bash
         env:
           OPENORBIS: /opt/pacbrew/ps4/openorbis
         run: |
-          set -euxo pipefail
-          work=/tmp/gmca-ps4-libmpv
-          rm -rf "$work"
-          mkdir -p "$work"
-          cp scripts/ps4/libmpv/mpv.patch "$work/"
-          cp scripts/ps4/libmpv/gmca-bitmap-subs.patch "$work/"
+          bash scripts/ps4/build-patched-libmpv.sh
+          mkdir -p .ps4-cache/libmpv/lib/pkgconfig .ps4-cache/libmpv/include
+          cp "$OPENORBIS/usr/lib/libmpv.a" .ps4-cache/libmpv/lib/
+          cp "$OPENORBIS/usr/lib/pkgconfig/mpv.pc" .ps4-cache/libmpv/lib/pkgconfig/
+          cp -a "$OPENORBIS/usr/include/mpv" .ps4-cache/libmpv/include/
 
-          python3 - <<'PY'
-          import hashlib
-          import pathlib
-          import urllib.request
-
-          url = "https://github.com/mpv-player/mpv/archive/v0.36.0.tar.gz"
-          out = pathlib.Path("/tmp/gmca-ps4-libmpv/libmpv-0.36.0.tar.gz")
-          with urllib.request.urlopen(url, timeout=60) as src, out.open("wb") as dst:
-              while True:
-                  chunk = src.read(1024 * 1024)
-                  if not chunk:
-                      break
-                  dst.write(chunk)
-          digest = hashlib.sha256(out.read_bytes()).hexdigest()
-          expected = "29abc44f8ebee013bb2f9fe14d80b30db19b534c679056e4851ceadf5a5e8bf6"
-          if digest != expected:
-              raise SystemExit(f"mpv source SHA256 mismatch: {digest}")
-          print(f"mpv source SHA256: {digest}")
-          PY
-
-          cd "$work"
-          tar -xzf libmpv-0.36.0.tar.gz
-          cd mpv-0.36.0
-          patch -Np1 -i ../mpv.patch
-          patch -Np1 -i ../gmca-bitmap-subs.patch
-          ./bootstrap.py
+      - name: Install and verify patched PS4 libmpv
+        shell: bash
+        env:
+          OPENORBIS: /opt/pacbrew/ps4/openorbis
+        run: |
+          set -euo pipefail
+          cp -a .ps4-cache/libmpv/. "$OPENORBIS/usr/"
           source "$OPENORBIS/ps4vars.sh"
-          TARGET=x86_64 ./waf configure --prefix="$OPENORBIS/usr" \
-            --disable-libmpv-shared --enable-libmpv-static --disable-cplayer \
-            --disable-iconv --disable-jpeg --disable-libavdevice \
-            --enable-sdl2 --enable-sdl2-audio --disable-sdl2-gamepad --disable-sdl2-video
-          ./waf build -j2
-          ./waf install
-
           test -s "$OPENORBIS/usr/lib/libmpv.a"
-          strings "$OPENORBIS/usr/lib/libmpv.a" | grep -F "PS4 BGRA subtitle fallback: using alpha-mask LIBASS path." >/dev/null
-          strings "$OPENORBIS/usr/lib/libmpv.a" | grep -F "precompiled shader found, using it" >/dev/null
+          test -s "$OPENORBIS/usr/include/mpv/client.h"
+          test -s "$OPENORBIS/usr/lib/pkgconfig/mpv.pc"
+          # Avoid grep exiting early with pipefail on a large archive.
+          strings "$OPENORBIS/usr/lib/libmpv.a" > /tmp/gmca-libmpv-strings.txt
+          grep -F "PS4 BGRA subtitle fallback: using alpha-mask LIBASS path." /tmp/gmca-libmpv-strings.txt >/dev/null
+          grep -F "precompiled shader found, using it" /tmp/gmca-libmpv-strings.txt >/dev/null
           pkg-config --modversion mpv
-          echo "GMCA patched PS4 libmpv installed and verified"
+
+      - name: Save patched PS4 libmpv
+        if: github.event_name != 'pull_request' && steps.libmpv.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .ps4-cache/libmpv
+          key: ${{ steps.libmpv.outputs.cache-primary-key }}
 
       - name: Build Stremio-only PS4 package
         env:

@@ -1,0 +1,7 @@
+musl-1.5-3
+mbedtls-2.28.10-2
+sdl2-2.0.18-19
+libcurl-7.80.0-5
+dav1d-1.5.4-1
+ffmpeg-7.1.5-3
+libmpv-0.36.0-2
