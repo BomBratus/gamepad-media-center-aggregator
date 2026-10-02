@@ -7,6 +7,13 @@ namespace stremio {
 inline bool episodeCompleted(const media::Item& episode) {
     return episode.viewCount > 0 || completedPosition(episode.viewOffset, episode.duration);
 }
+// Hydrate either local or account checkpoints with the same completion rule.
+inline void applyContinuationCheckpoint(media::Item& item, int64_t position, int64_t duration) {
+    if (duration > 0) item.duration = duration;
+    item.viewOffset = position;
+    item.viewCount = completedPosition(position, item.duration) ? 1 : 0;
+}
+
 inline bool episodePartial(const media::Item& episode) {
     return !episodeCompleted(episode) && episode.viewOffset > 0;
 }

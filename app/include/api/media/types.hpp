@@ -209,6 +209,8 @@ struct Media {
     std::string sourceTitle;  // release identity/presentation
     SourceKind kind = SourceKind::Direct;
     std::string sourceIdentity;  // stable addon/release identity for saved playback
+    size_t sourceProviderOrder = 0; // configured addon order, retained through targeted resume
+    size_t sourceReleaseOrder = 0;  // provider response order, retained through saved selection
     bool cached = true;  // debrid cache hint (best-effort; ⚡ vs pending). false = uncached
     // A source is directly playable iff it carries a real URL (parts[0].key).
     bool playable() const { return !parts.empty() && !parts.front().key.empty(); }

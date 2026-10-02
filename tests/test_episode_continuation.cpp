@@ -35,5 +35,11 @@ int main() {
     assert(stremio::playbackResourceKey("series:tt123:1:3") == stremio::playbackResourceKey("series:tt123:1:4"));
     assert(stremio::playbackResourceKey(episodes[0].ratingKey) == stremio::playbackResourceKey(episodes[3].ratingKey));
     assert(stremio::playbackResourceKey("movie:tt123") != stremio::playbackResourceKey("series:tt123:1:3"));
+    auto remoteOnly = episodes;
+    for (auto& e : remoteOnly) { e.viewCount = 0; e.viewOffset = 0; }
+    stremio::applyContinuationCheckpoint(remoteOnly[2], stremio::remotePlaybackOffset(true, true, 10000), 10000);
+    assert(stremio::episodeCompleted(remoteOnly[2]));
+    assert(stremio::episodeContinuationIndex(remoteOnly, remoteOnly[2].ratingKey) == 3);
+    assert(stremio::remotePlaybackOffset(false, true, 9000) == 0);
     std::puts("episode continuation: PASS");
 }

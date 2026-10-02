@@ -4,6 +4,7 @@
 #include "api/backend.hpp"
 #include "api/stremio/types.hpp"
 #include "api/stremio/backend.hpp"
+#include "api/stremio/playback_resume.hpp"
 #include "tab/media_collection.hpp"
 #include "tab/media_series.hpp"
 #include "tab/media_movie.hpp"
@@ -38,7 +39,8 @@ void showStremioResumeSourcePicker(const media::Item& card, int64_t seekMs, bool
         [seekMs, reuseSource](const media::Item& detail) {
             // Zero is an explicit Restart request. For Resume, fresh local/detail
             // progress takes precedence over a stale Home card.
-            const int64_t resumeMs = seekMs == 0 ? 0 : detail.viewOffset;
+            const int64_t resumeMs = stremio::resumePosition(seekMs, detail.viewOffset,
+                !stremio::savedPlayback(detail.ratingKey).empty());
             auto play = [detail, resumeMs](int source) {
                 media::Item episode = detail;
                 episode.viewOffset = resumeMs;

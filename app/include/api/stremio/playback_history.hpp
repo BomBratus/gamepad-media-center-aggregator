@@ -226,36 +226,23 @@ public:
         return local > remote;
     }
 
-    /// Match a saved source against the current source list. Exact URLs take
-    /// priority; a changed URL can fall back to one unique stable identity.
+    /// A refreshed stable identity must be unique and playable. URL matching
+    /// is only a legacy fallback when no stable identity was ever recorded.
     static int chooseSource(const nlohmann::json& record, const std::vector<media::Media>& sources) {
         const auto saved = record.find("source");
         if (saved == record.end() || !saved->is_object()) return -1;
-        const std::string savedUrl = playback_history_detail::jsonString(*saved, "url");
-        const std::string savedIdentity = playback_history_detail::jsonString(*saved, "identity");
-
-        int urlMatch = -1;
-        size_t urlMatches = 0;
-        if (!savedUrl.empty()) {
-            for (size_t i = 0; i < sources.size(); ++i) {
-                if (playback_history_detail::sourceUrl(sources[i]) == savedUrl) {
-                    urlMatch = static_cast<int>(i);
-                    ++urlMatches;
-                }
-            }
-            if (urlMatches == 1) return urlMatch;
-        }
-
-        if (savedIdentity.empty()) return -1;
-        int identityMatch = -1;
-        size_t identityMatches = 0;
+        const std::string url = playback_history_detail::jsonString(*saved, "url");
+        const std::string identity = playback_history_detail::jsonString(*saved, "identity");
+        int match = -1;
+        size_t matches = 0;
         for (size_t i = 0; i < sources.size(); ++i) {
-            if (sources[i].playable() && sources[i].sourceIdentity == savedIdentity) {
-                identityMatch = static_cast<int>(i);
-                ++identityMatches;
-            }
+            const auto& source = sources[i];
+            if (!source.playable()) continue;
+            const bool same = !identity.empty() ? source.sourceIdentity == identity
+                : !url.empty() && playback_history_detail::sourceUrl(source) == url;
+            if (same) { match = static_cast<int>(i); ++matches; }
         }
-        return identityMatches == 1 ? identityMatch : -1;
+        return matches == 1 ? match : -1;
     }
 
 private:

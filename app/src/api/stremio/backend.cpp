@@ -423,19 +423,15 @@ void applyEpisodeProgress(media::Item& item, const EpisodeProgress& remote,
         }
         if (p.timeOffset > 0 && (p.duration <= 0 || p.timeOffset < p.duration)) {
             if (p.videoId != remote.videoId || localAtLeastAsNew(p, remote.updatedIso)) {
-                item.viewOffset = p.timeOffset;
-                if (p.duration > 0) item.duration = p.duration;
-                item.viewCount = 0;
+                applyContinuationCheckpoint(item, p.timeOffset, p.duration);
                 return;
             }
         }
     }
 
-    if (item.guid != remote.videoId || remote.timeOffset <= 0 ||
-        (remote.duration > 0 && remote.timeOffset >= remote.duration) || watched.count(item.ratingKey) > 0)
+    if (item.guid != remote.videoId || remote.timeOffset <= 0 || watched.count(item.ratingKey) > 0)
         return;
-    item.viewOffset = remote.timeOffset;
-    if (remote.duration > 0) item.duration = remote.duration;
+    applyContinuationCheckpoint(item, remote.timeOffset, remote.duration);
 }
 
 /// A datastore libraryItem JSON -> media::Item (movie/show row). ratingKey is the
@@ -857,6 +853,9 @@ std::vector<media::Media> resolveAllStreams(
     }
     if (complete) *complete = true;
     auto providers = engine.addonsFor("stream", stremioType, stremioId);
+    std::map<std::string, size_t> providerOrder;
+    for (size_t i = 0; i < providers.size(); ++i)
+        providerOrder[engine.resourceUrl(providers[i], "stream", stremioType, stremioId)] = i;
     const std::string preferredRequest = savedProviderRequest(savedIdentity);
     if (!preferredRequest.empty()) {
         std::stable_partition(providers.begin(), providers.end(), [&](const Addon& addon) {
@@ -873,8 +872,11 @@ std::vector<media::Media> resolveAllStreams(
             brls::Logger::warning("stremio stream {}: {}", redactUrlForLog(url), ex.what());
             continue;
         }
-        for (auto& s : streams) {
+        for (size_t release = 0; release < streams.size(); ++release) {
+            const auto& s = streams[release];
             media::Media media = streamToMedia(s, a.manifest.name);
+            media.sourceProviderOrder = providerOrder[url];
+            media.sourceReleaseOrder = release;
             // Scope release identity to the exact provider request so two
             // addons with the same display name cannot collide in playback history.
             if (!media.sourceIdentity.empty())
@@ -910,6 +912,7 @@ std::vector<media::Media> resolveAllStreams(
             }
         }
     }
+    restoreAddonSourceOrder(all);
 #if defined(__PSV__)
     // PS Vita: >1080p exceeds the hardware H.264 decoder (level 4.x) and
     // hard-crashes the GPU on play (the "blue light of death" users report),
@@ -1126,8 +1129,10 @@ void StremioBackend::getHomeHubs(
 
             media::Container<media::Hub> out;
             const size_t maxHubs = 8;
+            size_t requests = 0;
             for (auto& pc : cats) {
-                if (out.Items.size() >= maxHubs) break;
+                if (out.Items.size() >= maxHubs || requests >= 12) break;
+                ++requests;
                 const Catalog& cat = pc.catalog;
                 std::string url = animeCatalogUrl(pc);
                 CatalogResult res;
@@ -2142,7 +2147,10 @@ void StremioBackend::reportProgress(
             std::lock_guard<std::mutex> lock(libraryWriteMutex);
             if (!isLatestRemoteProgressSync(key, rk, generation)) return;
             upsertLibrary(*engine, key, rk, [pos, dur, videoId, episode, watched](nlohmann::json& st) {
-                st["timeOffset"] = watched ? 0 : pos;
+                // Local completed checkpoints are cleared, but account episode
+                // progress retains the terminal offset. A second device can then
+                // infer the same >=90% completion without GMCA's local watched set.
+                st["timeOffset"] = remotePlaybackOffset(episode, watched, pos);
                 if (dur > 0) st["duration"] = dur;
                 if (episode) {
                     st["flaggedWatched"] = 0;

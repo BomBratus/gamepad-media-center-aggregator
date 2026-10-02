@@ -7,6 +7,12 @@ inline bool completedPosition(int64_t position, int64_t duration) {
     return duration > 0 && double(position) / double(duration) >= 0.90;
 }
 
+// Movie completion clears account resume; episode completion needs its final
+// position to distinguish it from a deliberate restart at zero on another device.
+inline int64_t remotePlaybackOffset(bool episode, bool completed, int64_t position) {
+    return completed && !episode ? 0 : position;
+}
+
 // Caller holds its checkpoint mutex through enqueueing the accepted mutation.
 // A source reload shares the session; explicit replay starts a new session.
 class PlaybackCompletion {
