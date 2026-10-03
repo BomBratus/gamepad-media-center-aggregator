@@ -38,20 +38,16 @@ public:
             if (stopping) return;
 
             // The running SQLite statement observes this through
-            // sqlite3_progress_handler. Pending supersedable work has no value
-            // once a newer UI generation exists, so discard it completely.
+            // sqlite3_progress_handler. Pending supersedable tasks keep their
+            // callback/lifetime cleanup, but are marked cancelled so they skip
+            // SQLite work when eventually drained.
             if (activeCancel) activeCancel->store(true);
-            for (auto it = tasks.begin(); it != tasks.end();) {
-                if (it->cancel) {
-                    it->cancel->store(true);
-                    it = tasks.erase(it);
-                } else {
-                    ++it;
-                }
-            }
+            for (auto& pending : tasks)
+                if (pending.cancel) pending.cancel->store(true);
 
             // Status polling is cheap and does not need to delay an interactive
-            // filter change that arrived later.
+            // filter change that arrived later. Put the newest request first;
+            // cancelled older requests drain afterward without doing SQL.
             tasks.push_front({[task = std::move(task), cancel] { task(cancel); }, cancel});
         }
         changed.notify_one();
@@ -65,7 +61,6 @@ public:
             if (activeCancel) activeCancel->store(true);
             for (auto& task : tasks)
                 if (task.cancel) task.cancel->store(true);
-            tasks.clear();
         }
         changed.notify_one();
         if (worker.joinable()) worker.join();
