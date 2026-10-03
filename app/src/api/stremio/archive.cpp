@@ -142,11 +142,19 @@ void Cache::resumeAfterPlayback() {
 void Cache::query(const Filter& filter, size_t offset, size_t limit, bool random,
         std::function<void(Result)> callback, std::shared_ptr<const Snapshot> snapshot) {
     auto job = current();
-    if (limit || random) ps4diag::write("archive query queued");
+    const bool interactive = limit || random;
+    if (interactive) ps4diag::write("archive query queued");
     const auto queued = std::chrono::steady_clock::now();
-    queries.submit([job, filter, offset, limit, random, callback, snapshot, queued] {
+
+    auto execute = [job, filter, offset, limit, random, callback, snapshot, queued, interactive](
+                       const IndexCancel& cancel) {
         Result result;
-        if (limit || random) ps4diag::write("archive query begin");
+        const auto started = std::chrono::steady_clock::now();
+        const auto queueMs = std::chrono::duration_cast<std::chrono::milliseconds>(started - queued).count();
+        int64_t sqlMs = 0;
+        if (interactive)
+            ps4diag::write("archive query begin queue-ms=" + std::to_string(queueMs));
+
         try {
             job->load();
             std::shared_ptr<const Snapshot> data;
@@ -159,23 +167,41 @@ void Cache::query(const Filter& filter, size_t offset, size_t limit, bool random
             result.refreshed = data->refreshed;
             result.snapshot = data;
             if (data->index) {
-                auto found = data->index->query(filter, offset, limit, random);
+                const auto sqlStarted = std::chrono::steady_clock::now();
+                auto found = data->index->query(filter, offset, limit, random, cancel);
+                sqlMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - sqlStarted).count();
                 result.indexed = found.indexed; result.total = found.total;
                 result.options.genres = std::move(found.genres);
                 result.options.hasVotes = true;
                 for (const auto& record : found.records) result.items.push_back(parseMetaPreview(record.meta));
             } else result.indexed = job->building;
         } catch (const std::exception& detail) {
-            ps4diag::write("archive query failed detail=" + std::string(detail.what()));
-            result.error = "main/archive/cache_error";
-        } catch (...) { result.error = "main/archive/cache_error"; }
-        if (limit || random) {
-            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            if (!(cancel && cancel->load())) {
+                ps4diag::write("archive query failed detail=" + std::string(detail.what()));
+                result.error = "main/archive/cache_error";
+            }
+        } catch (...) {
+            if (!(cancel && cancel->load())) result.error = "main/archive/cache_error";
+        }
+
+        if (interactive) {
+            const auto totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - queued).count();
-            ps4diag::write("archive query complete items=" + std::to_string(result.items.size()) +
-                " elapsed-ms=" + std::to_string(elapsed));
+            const bool cancelled = cancel && cancel->load();
+            ps4diag::write(std::string("archive query ") + (cancelled ? "cancelled" : "complete") +
+                " items=" + std::to_string(result.items.size()) +
+                " queue-ms=" + std::to_string(queueMs) +
+                " sql-ms=" + std::to_string(sqlMs) +
+                " total-ms=" + std::to_string(totalMs));
         }
         brls::sync([callback, result = std::move(result)]() mutable { callback(std::move(result)); });
-    });
+    };
+
+    if (interactive) {
+        queries.submitLatest(std::move(execute));
+    } else {
+        queries.submit([execute = std::move(execute)]() mutable { execute({}); });
+    }
 }
 } // namespace stremio::archive
