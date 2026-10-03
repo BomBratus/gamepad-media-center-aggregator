@@ -98,18 +98,6 @@ struct Statement {
     int64_t number(int i) { return sqlite3_column_int64(stmt, i); }
     double real(int i) { return sqlite3_column_double(stmt, i); }
 };
-// A slow filter must return an error to the UI instead of monopolizing the
-// reader forever. This also covers cold index scans when reopening after boot.
-struct QueryBudget {
-    sqlite3* db;
-    std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
-    explicit QueryBudget(sqlite3* db) : db(db) {
-        sqlite3_progress_handler(db, 1000, [](void* value) {
-            return std::chrono::steady_clock::now() >= static_cast<QueryBudget*>(value)->deadline ? 1 : 0;
-        }, this);
-    }
-    ~QueryBudget() { sqlite3_progress_handler(db, 0, nullptr, nullptr); }
-};
 int64_t setting(sqlite3* db, const char* key) {
     Statement stmt(db, "SELECT value FROM settings WHERE key=?");
     stmt.text(1, key);
@@ -171,7 +159,6 @@ int64_t timestamp() {
 
 ImdbIndex::ImdbIndex(const std::string& path) {
     Database connection(path, SQLITE_OPEN_READONLY);
-    QueryBudget budget(connection.db);
     if (setting(connection.db, "version") != 1 || !setting(connection.db, "complete"))
         throw std::runtime_error("Incomplete IMDb index");
     count = setting(connection.db, "browsable");
@@ -200,7 +187,6 @@ IndexResult ImdbIndex::query(const Filter& filter, size_t offset, size_t limit, 
     IndexResult result;
     result.indexed = count; result.refreshed = refreshed;
     if (!limit && !random) return result;
-    QueryBudget budget(db);
     result.genres = genreOptions;
     // IMDb does not supply country, streaming availability, views or synopses.
     // Preserve their meaning instead of presenting votes as public views.
@@ -226,7 +212,10 @@ IndexResult ImdbIndex::query(const Filter& filter, size_t offset, size_t limit, 
     };
     if (where == " WHERE t.adult=0") result.total = count;
     else {
-        Statement total(db, "SELECT count(*) FROM titles t" + where); bind(total);
+        // Substring search cannot seek a sort index. Scan titles in primary-key
+        // order so the title and correlated alias reads remain sequential.
+        const std::string scan = filter.search.empty() ? "" : " NOT INDEXED";
+        Statement total(db, "SELECT count(*) FROM titles t" + scan + where); bind(total);
         if (total.row()) result.total = total.number(0);
     }
     if (!result.total) return result;
@@ -248,7 +237,7 @@ IndexResult ImdbIndex::query(const Filter& filter, size_t offset, size_t limit, 
     // Without a type constraint SQLite can choose a kind/name covering index
     // for adult=0, then read and sort every title before returning 60 cards.
     // Select the matching ordered index so LIMIT can stop after one page.
-    const std::string index = sortIndex.empty() ? "" :
+    const std::string index = !filter.search.empty() ? " NOT INDEXED" : sortIndex.empty() ? "" :
         " INDEXED BY title_" + (filter.type.empty() ? std::string{} : "kind_") + sortIndex;
     Statement rows(db, "SELECT t.id,t.kind,t.name,t.year,t.rating,t.votes FROM titles t" + index + where +
         " ORDER BY " + order + (filter.descending ? " DESC" : " ASC") + ",t.id ASC LIMIT ?8 OFFSET ?9");

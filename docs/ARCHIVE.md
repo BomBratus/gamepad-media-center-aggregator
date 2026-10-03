@@ -50,9 +50,9 @@ disk but are no longer loaded or crawled.
 Local Archive queries use their own serial reader worker, independently of the
 addon/network task queue. Reopening an index seeks its small genre list instead
 of scanning every title/genre pair; new indexes also store the browsable count.
-Existing published indexes remain readable without a new download. SQLite
-reader work has a 15-second execution budget so expensive queries report an
-error and clear the loading state. Index opening and result-query stages are
+Existing published indexes remain readable without a new download. Substring
+search scans titles and their aliases in primary-key order instead of making
+random title reads through a sort index. Index opening and result-query stages are
 recorded in the PS4 diagnostic log without filter text or credentials.
 
 PS4 uses `gmca-ps4-index`, a wrapper around SQLite's `unix-none` VFS. It copies
