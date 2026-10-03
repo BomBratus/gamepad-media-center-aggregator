@@ -1,4 +1,5 @@
 #include "api/stremio/imdb_index.hpp"
+#include "api/stremio/types.hpp"
 #include <zlib.h>
 #include <cassert>
 #include <filesystem>
@@ -54,6 +55,9 @@ int main() {
     filter.search = "ENGLISH ALIAS";
     auto found = old->query(filter, 0, 60, false);
     assert(found.total == 1 && found.records[0].meta["name"] == "Italiano");
+    auto card = stremio::parseMetaPreview(found.records[0].meta);
+    assert(card.ratingKey == "movie:tt1" && card.year == 2020 && card.rating == 8.0);
+    assert(card.title == "Italiano" && card.thumb.find("/tt1/") != std::string::npos);
     filter.search = "Original 1";
     assert(old->query(filter, 0, 60, false).total > 1);
     filter.search = "Ignore This";

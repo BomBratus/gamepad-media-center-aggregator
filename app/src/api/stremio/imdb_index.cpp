@@ -191,7 +191,8 @@ IndexResult ImdbIndex::query(const Filter& filter, size_t offset, size_t limit, 
     while (rows.row()) {
         Record record;
         record.meta = {{"id", rows.text(0)}, {"type", rows.text(1)}, {"name", rows.text(2)},
-            {"year", std::to_string(rows.number(3))}, {"imdbRating", rows.real(4)}, {"votes", rows.number(5)},
+            {"year", std::to_string(rows.number(3))}, {"releaseInfo", std::to_string(rows.number(3))},
+            {"imdbRating", rows.real(4)}, {"votes", rows.number(5)},
             {"poster", "https://images.metahub.space/poster/small/" + rows.text(0) + "/img"}};
         record.added = record.updated = refreshed;
         result.records.push_back(std::move(record));

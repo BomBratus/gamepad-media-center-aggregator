@@ -6,7 +6,7 @@ add_executable(test_imdb_index ../test_imdb_index.cpp ../../app/src/api/stremio/
 target_compile_features(test_imdb_index PRIVATE cxx_std_17)
 target_compile_options(test_imdb_index PRIVATE -Wall -Wextra -UNDEBUG)
 target_compile_definitions(test_imdb_index PRIVATE GMCA_INDEX_NOLOCK)
-target_include_directories(test_imdb_index PRIVATE ../../app/include
+target_include_directories(test_imdb_index PRIVATE ../support ../../app/include
     "${GMCA_JSON_INCLUDE}")
 target_link_libraries(test_imdb_index PRIVATE gmca_sqlite gmca_index_zlib Threads::Threads ${CMAKE_DL_LIBS} m)
 add_executable(test_archive_playback_gate ../test_archive_playback_gate.cpp)
