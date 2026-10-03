@@ -28,11 +28,11 @@ private:
     size_t count = 0;
     int64_t refreshed = 0;
     std::vector<std::string> genreOptions;
-    // One disk-backed match set per reader generation. Paging, sorting and
-    // Random reuse it without scanning all translated aliases again.
+    // Disk-backed search IDs and filtered rows belong to this generation.
+    // Paging, sorting and Random reuse them without scanning titles/aliases.
     std::string cachedSearch;
-    bool searchReady = false, totalReady = false;
-    Filter countedFilter;
+    bool searchReady = false, resultReady = false;
+    Filter cachedFilter;
     size_t cachedTotal = 0;
 };
 

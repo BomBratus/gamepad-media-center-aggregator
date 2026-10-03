@@ -198,7 +198,7 @@ IndexResult ImdbIndex::query(const Filter& filter, size_t offset, size_t limit, 
         // of seeks on PS4. Scan aliases sequentially once, deduplicate IDs on
         // disk, then look up only matching titles. No published file is changed.
         searchReady = false;
-        totalReady = false;
+        resultReady = false;
         exec(db, "CREATE TEMP TABLE IF NOT EXISTS archive_search(id TEXT PRIMARY KEY) WITHOUT ROWID;"
             "DELETE FROM temp.archive_search;");
         Statement collect(db, "INSERT OR IGNORE INTO temp.archive_search "
@@ -212,12 +212,20 @@ IndexResult ImdbIndex::query(const Filter& filter, size_t offset, size_t limit, 
     }
     // CROSS JOIN fixes the match set as the outer loop: sort/filter only those
     // titles rather than visiting the entire ordered title index for each page.
-    const std::string source = search.empty() ? "titles t" :
+    const bool materialize = !search.empty() || !filter.genre.empty() || filter.yearFrom ||
+        filter.yearTo || filter.minRating || filter.minVotes;
+    // Genre rows are ordered by title ID. Stream distinct matching IDs first,
+    // avoiding one correlated genre lookup for every title in the database.
+    const bool genreScan = search.empty() && !filter.genre.empty();
+    const std::string source = genreScan ?
+        "(SELECT DISTINCT id FROM genres NOT INDEXED WHERE lower(genre)=?3 ORDER BY id) g "
+        "CROSS JOIN titles t ON t.id=g.id" : search.empty() ?
+        (materialize ? "titles t NOT INDEXED" : "titles t") :
         "temp.archive_search s CROSS JOIN titles t ON t.id=s.id";
     // Add only selected predicates so SQLite can use its sort/type indices.
     std::string where = " WHERE t.adult=0";
     if (!filter.type.empty()) where += " AND t.kind=?1";
-    if (!filter.genre.empty()) where += " AND EXISTS(SELECT 1 FROM genres g WHERE g.id=t.id AND lower(g.genre)=?3)";
+    if (!filter.genre.empty() && !genreScan) where += " AND EXISTS(SELECT 1 FROM genres g WHERE g.id=t.id AND lower(g.genre)=?3)";
     if (filter.yearFrom) where += " AND t.year>=?4";
     if (filter.yearTo) where += " AND t.year>0 AND t.year<=?5";
     if (filter.minRating) where += " AND t.rating>=?6";
@@ -230,20 +238,35 @@ IndexResult ImdbIndex::query(const Filter& filter, size_t offset, size_t limit, 
         if (filter.minRating) stmt.real(6, filter.minRating);
         if (filter.minVotes) stmt.number(7, filter.minVotes);
     };
-    const bool sameCount = totalReady && search == lower(countedFilter.search) &&
-        filter.type == countedFilter.type && filter.genre == countedFilter.genre &&
-        filter.yearFrom == countedFilter.yearFrom && filter.yearTo == countedFilter.yearTo &&
-        filter.minRating == countedFilter.minRating && filter.minVotes == countedFilter.minVotes;
-    if (sameCount) result.total = cachedTotal;
+    const bool sameFilter = resultReady && search == lower(cachedFilter.search) &&
+        filter.type == cachedFilter.type && filter.genre == cachedFilter.genre &&
+        filter.yearFrom == cachedFilter.yearFrom && filter.yearTo == cachedFilter.yearTo &&
+        filter.minRating == cachedFilter.minRating && filter.minVotes == cachedFilter.minVotes;
+    if (sameFilter) result.total = cachedTotal;
     else {
-        if (search.empty() && where == " WHERE t.adult=0") result.total = count;
+        resultReady = false;
+        if (materialize) {
+            // Raw rating is different from the Bayesian score sort key. With
+            // rating>=9 SQLite otherwise scans a non-covering sort index and
+            // seeks every title just to count matches, then does it again for
+            // the page. Read title rows sequentially once and cache the full
+            // filtered subset on disk for all page/sort/Random requests.
+            exec(db, "CREATE TEMP TABLE IF NOT EXISTS archive_results("
+                "id TEXT PRIMARY KEY,kind TEXT,name TEXT,year INTEGER,"
+                "rating REAL,votes INTEGER,score REAL) WITHOUT ROWID;"
+                "DELETE FROM temp.archive_results;");
+            Statement collect(db, "INSERT INTO temp.archive_results "
+                "SELECT t.id,t.kind,t.name,t.year,t.rating,t.votes,t.score FROM " + source + where);
+            bind(collect); collect.run();
+            result.total = sqlite3_changes(db);
+        } else if (where == " WHERE t.adult=0") result.total = count;
         else {
             Statement total(db, "SELECT count(*) FROM " + source + where); bind(total);
             if (total.row()) result.total = total.number(0);
         }
-        countedFilter = filter;
+        cachedFilter = filter;
         cachedTotal = result.total;
-        totalReady = true;
+        resultReady = true;
     }
     if (!result.total) return result;
     // Count + one uniformly sampled offset avoids random-sort of the whole DB.
@@ -264,11 +287,15 @@ IndexResult ImdbIndex::query(const Filter& filter, size_t offset, size_t limit, 
     // Without a type constraint SQLite can choose a kind/name covering index
     // for adult=0, then read and sort every title before returning 60 cards.
     // Select the matching ordered index so LIMIT can stop after one page.
-    const std::string index = !search.empty() ? "" : sortIndex.empty() ? "" :
+    if (random) { order = "t.id"; sortIndex.clear(); }
+    const std::string index = materialize || sortIndex.empty() ? "" :
         " INDEXED BY title_" + (filter.type.empty() ? std::string{} : "kind_") + sortIndex;
-    Statement rows(db, "SELECT t.id,t.kind,t.name,t.year,t.rating,t.votes FROM " + source + index + where +
+    const auto rowSource = materialize ? "temp.archive_results t" : source;
+    const auto rowWhere = materialize ? "" : where;
+    Statement rows(db, "SELECT t.id,t.kind,t.name,t.year,t.rating,t.votes FROM " + rowSource + index + rowWhere +
         " ORDER BY " + order + (filter.descending ? " DESC" : " ASC") + ",t.id ASC LIMIT ?8 OFFSET ?9");
-    bind(rows); rows.number(8, limit); rows.number(9, offset);
+    if (!materialize) bind(rows);
+    rows.number(8, limit); rows.number(9, offset);
     while (rows.row()) {
         Record record;
         record.meta = {{"id", rows.text(0)}, {"type", rows.text(1)}, {"name", rows.text(2)},

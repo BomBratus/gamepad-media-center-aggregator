@@ -35,7 +35,7 @@ int main() {
         std::string body;
         if (name == "title.ratings.tsv.gz") {
             body = "tconst\taverageRating\tnumVotes\n";
-            for (int i = 1; i <= 2505; ++i) body += "tt" + std::to_string(i) + "\t8.0\t1000\n";
+            for (int i = 1; i <= 2505; ++i) body += "tt" + std::to_string(i) + (i == 2505 ? "\t9.2\t1000\n" : "\t8.0\t1000\n");
             body += "ttlow\t9.0\t99\n";
         } else if (name == "title.basics.tsv.gz") {
             body = "tconst\ttitleType\tprimaryTitle\toriginalTitle\tisAdult\tstartYear\tendYear\truntimeMinutes\tgenres\n";
@@ -80,7 +80,7 @@ int main() {
     // aliases, pagination, sort changes, Random and changes to other filters.
     filter.search = "title";
     auto titles = old->query(filter, 0, 60, false);
-    assert(titles.total == 2503); // adult title excluded; tt1 is now Italiano
+    assert(titles.total == 2504); // adult excluded; tt1 still matches its original alias
     auto titlesNext = old->query(filter, 60, 60, false);
     assert(titlesNext.total == titles.total && titlesNext.records.size() == 60);
     std::set<std::string> titleIds;
@@ -88,7 +88,7 @@ int main() {
     for (const auto& record : titlesNext.records) assert(!titleIds.count(record.meta["id"]));
     filter.sort = Sort::Name; filter.descending = false;
     auto named = old->query(filter, 0, 60, false);
-    assert(named.total == titles.total && named.records.front().meta["name"] == "Title 10");
+    assert(named.total == titles.total && named.records.front().meta["name"] == "Italiano");
     filter.type = "series";
     assert(old->query(filter, 0, 60, false).total == 1252);
     filter.yearTo = 2019;
@@ -103,6 +103,41 @@ int main() {
     assert(old->query(filter, 0, 60, false).total == 0); // literal, not LIKE syntax
     filter.search = "ENGLISH ALIAS";
     assert(old->query(filter, 0, 60, false).total == 1);
+    // Change each pre-existing filter on a cached match set; an identical
+    // search must not preserve a count or page from the previous predicates.
+    Filter base; base.search = "title";
+    auto check = [&](Filter value, size_t expected) {
+        auto page = old->query(value, 0, 60, false);
+        assert(page.total == expected && page.records.size() == std::min<size_t>(60, expected));
+        for (const auto& record : page.records) {
+            assert(rating(record) >= value.minRating);
+            if (!value.type.empty()) assert(record.meta["type"] == value.type);
+            if (value.yearFrom) assert(year(record) >= value.yearFrom);
+            if (value.yearTo) assert(year(record) <= value.yearTo);
+        }
+        assert(old->query(value, 60, 60, false).total == expected);
+        auto picked = old->query(value, 0, 60, true);
+        assert(picked.total == expected && picked.records.size() == (expected ? 1 : 0));
+    };
+    check(base, 2504);
+    { auto f = base; f.minRating = 9; check(f, 1); f.minRating = 8; check(f, 2504); }
+    { auto f = base; f.minVotes = 1001; check(f, 0); f.minVotes = 1000; check(f, 2504); }
+    { auto f = base; f.yearFrom = 2021; check(f, 0); f.yearFrom = 2020; check(f, 2504); }
+    { auto f = base; f.yearTo = 2019; check(f, 0); f.yearTo = 2020; check(f, 2504); }
+    { auto f = base; f.type = "movie"; check(f, 1252); f.type = "series"; check(f, 1252); }
+    { auto f = base; f.genre = "missing"; check(f, 0); f.genre = "COMEDY"; check(f, 2504); }
+    for (auto field : {&Filter::country, &Filter::service, &Filter::addon}) {
+        auto f = base; f.*field = "unavailable"; check(f, 0);
+    }
+    { auto f = base; f.minViews = 1; check(f, 0); }
+    { auto f = base; f.other = 1; check(f, 2504); f.other = 2; check(f, 0); }
+    for (auto sort : {Sort::Release, Sort::Rating, Sort::Votes, Sort::Name, Sort::Added, Sort::Updated}) {
+        for (bool descending : {false, true}) {
+            auto f = base; f.sort = sort; f.descending = descending; check(f, 2504);
+        }
+    }
+    // Rating-only queries (no text) use the same bounded sequential path.
+    { Filter f; f.minRating = 9; check(f, 1); f.minRating = 8; check(f, 2504); }
     filter.search = "Ignore This";
     assert(old->query(filter, 0, 60, false).total == 0);
     filter = {}; filter.type = "series"; filter.genre = "drama"; filter.minRating = 7; filter.minVotes = 1000;
