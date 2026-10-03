@@ -8,6 +8,7 @@
 #include "activity/player_view.hpp"
 #include "api/backend.hpp"
 #include "api/stremio/backend.hpp"
+#include "api/stremio/archive.hpp"
 #include "api/stremio/episode_continuation.hpp"
 #include "tab/media_series.hpp"
 #include "utils/dialog.hpp"
@@ -43,6 +44,7 @@ static Ps4SubtitleSidecarSafety ps4SubtitleSidecarSafety(const std::string& rawU
 
 PlayerView::PlayerView(const media::Item& item, const int64_t seekMs, int versionIndex)
     : itemId(item.ratingKey), item(item), preferredVersion(versionIndex) {
+    stremio::archive::Cache::instance().pauseForPlayback();
     // take sole ownership of MPVCore: if music was playing, the audio controller
     // must stop owning the shared event bus (else it reports this video's
     // progress against the audio track and auto-advances over it). SPEC.md §11.
@@ -211,6 +213,8 @@ PlayerView::~PlayerView() {
     // Free the server-side transcode session on exit (else it lingers orphaned).
     brls::Application::getExitEvent()->unsubscribe(this->exitSubscribeID);
     brls::Logger::debug("trying delete PlayerView...");
+    // Box destroys its VideoView (and stops mpv) after this destructor returns.
+    brls::sync([] { stremio::archive::Cache::instance().resumeAfterPlayback(); });
 }
 
 void PlayerView::setSeries(const std::string& showRatingKey) {
@@ -476,6 +480,7 @@ void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
     ASYNC_RETAIN
     brls::async([ASYNC_TOKEN, item, version, opts, generation]() {
         try {
+            stremio::archive::Cache::instance().waitForPlayback();
             media::PlaybackSource src = AppConfig::instance().backend().resolvePlayback(item, version, opts);
             brls::sync([ASYNC_TOKEN, src, generation]() {
                 ASYNC_RELEASE

@@ -1,0 +1,100 @@
+#include "api/stremio/imdb_index.hpp"
+#include <zlib.h>
+#include <cassert>
+#include <filesystem>
+#include <iostream>
+#include <set>
+#include <unistd.h>
+using namespace stremio::archive;
+
+int main() {
+    const auto directory = std::filesystem::temp_directory_path() / ("gmca-imdb-test-" + std::to_string(getpid()));
+    std::filesystem::create_directories(directory);
+    const auto path = (directory / "index.sqlite").string();
+    auto cancel = std::make_shared<std::atomic_bool>(false);
+    int downloads = 0;
+    auto fixtures = [&](const std::string& name, const std::string& output, const IndexCancel&) {
+        ++downloads;
+        std::string body;
+        if (name == "title.ratings.tsv.gz") {
+            body = "tconst\taverageRating\tnumVotes\n";
+            for (int i = 1; i <= 2505; ++i) body += "tt" + std::to_string(i) + "\t8.0\t1000\n";
+            body += "ttlow\t9.0\t99\n";
+        } else if (name == "title.basics.tsv.gz") {
+            body = "tconst\ttitleType\tprimaryTitle\toriginalTitle\tisAdult\tstartYear\tendYear\truntimeMinutes\tgenres\n";
+            for (int i = 1; i <= 2505; ++i)
+                body += "tt" + std::to_string(i) + "\t" + (i % 2 ? "movie" : "tvSeries") + "\tTitle " + std::to_string(i) +
+                    "\tOriginal " + std::to_string(i) + "\t" + (i == 3 ? "1" : "0") + "\t2020\t\\N\t90\tDrama,Comedy\n";
+            body += "ttlow\tmovie\tLow\tLow\t0\t2020\t\\N\t90\tDrama\n";
+            body += "ttepisode\ttvEpisode\tEpisode\tEpisode\t0\t2020\t\\N\t20\tDrama\n";
+        } else {
+            body = "titleId\tordering\ttitle\tregion\tlanguage\ttypes\tattributes\tisOriginalTitle\n"
+                "tt1\t1\tItaliano\tIT\tit\t\\N\t\\N\t0\n"
+                "tt1\t2\tSecond Italian\tIT\tit\t\\N\t\\N\t0\n"
+                "tt1\t3\tEnglish Alias\tUS\ten\t\\N\t\\N\t0\n"
+                "tt1\t4\tIgnore This\tFR\tfr\t\\N\t\\N\t0\n";
+        }
+        auto gzip = gzopen(output.c_str(), "wb"); assert(gzip);
+        assert(gzwrite(gzip, body.data(), body.size()) == static_cast<int>(body.size()));
+        assert(gzclose(gzip) == Z_OK);
+    };
+    bool paused = false;
+    assert(!buildImdbIndex(path, cancel, fixtures, [&](size_t count) {
+        if (count >= 2000 && !paused) { paused = true; cancel->store(true); }
+    }));
+    assert(downloads == 2 && !std::filesystem::exists(path));
+    cancel->store(false);
+    assert(buildImdbIndex(path, cancel, fixtures));
+    assert(downloads == 3); // completed datasets reused after interruption
+    auto old = std::make_shared<ImdbIndex>(path);
+    auto all = old->query({}, 0, 60, false);
+    assert(all.indexed == 2504 && all.total == 2504 && all.records.size() == 60);
+    assert(all.genres == std::vector<std::string>({"Comedy", "Drama"}));
+    Filter filter;
+    filter.search = "ENGLISH ALIAS";
+    auto found = old->query(filter, 0, 60, false);
+    assert(found.total == 1 && found.records[0].meta["name"] == "Italiano");
+    filter.search = "Original 1";
+    assert(old->query(filter, 0, 60, false).total > 1);
+    filter.search = "Ignore This";
+    assert(old->query(filter, 0, 60, false).total == 0);
+    filter = {}; filter.type = "series"; filter.genre = "drama"; filter.minRating = 7; filter.minVotes = 1000;
+    filter.yearFrom = filter.yearTo = 2020; filter.sort = Sort::Votes;
+    auto series = old->query(filter, 0, 60, false);
+    assert(series.total == 1252);
+    auto page2 = old->query(filter, 60, 60, false);
+    std::set<std::string> ids;
+    for (auto& record : series.records) ids.insert(record.meta["id"]);
+    for (auto& record : page2.records) assert(!ids.count(record.meta["id"]));
+    bool beyondFirst = false;
+    for (int i = 0; i < 100; ++i) {
+        auto pick = old->query(filter, 0, 60, true);
+        assert(pick.records.size() == 1 && pick.total == series.total);
+        if (!ids.count(pick.records[0].meta["id"])) beyondFirst = true;
+    }
+    assert(beyondFirst);
+    filter.country = "Italy"; assert(old->query(filter, 0, 60, false).records.empty());
+    filter = {}; filter.minViews = 100; assert(old->query(filter, 0, 60, false).records.empty());
+    filter = {}; filter.minVotes = 1001; assert(old->query(filter, 0, 60, false).records.empty());
+    assert(old->query({}, 0, 0, false).indexed == 2504);
+    // A failed replacement must preserve the active index and the reader's generation.
+    bool failed = false;
+    try { buildImdbIndex(path, cancel, [](const auto&, const auto&, const auto&) { throw std::runtime_error("offline"); }); }
+    catch (...) { failed = true; }
+    assert(failed && ImdbIndex(path).query({}, 0, 0, false).indexed == 2504);
+    assert(buildImdbIndex(path, cancel, fixtures));
+    assert(old->query({}, 0, 60, false).total == 2504);
+    failed = false;
+    try {
+        buildImdbIndex(path, cancel, [](const auto&, const auto& output, const auto&) {
+            auto gzip = gzopen(output.c_str(), "wb");
+            gzputs(gzip, "Not an IMDb dataset\n"); gzclose(gzip);
+        });
+    } catch (...) { failed = true; }
+    assert(failed && !std::filesystem::exists(path + ".building"));
+    assert(ImdbIndex(path).query({}, 0, 0, false).indexed == 2504);
+    assert(buildImdbIndex(path, cancel, fixtures)); // a clean retry can recover
+    old.reset();
+    std::filesystem::remove_all(directory);
+    std::cout << "IMDb disk index tests passed\n";
+}

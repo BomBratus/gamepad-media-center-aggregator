@@ -2,8 +2,10 @@
 #include "api/stremio/archive_model.hpp"
 #include <cstdio>
 #include <fstream>
+#include <memory>
 
 namespace stremio::archive {
+class ImdbIndex;
 
 struct Snapshot {
     std::vector<Record> records;
@@ -12,6 +14,7 @@ struct Snapshot {
     Json crawl = Json::object(); // slice key -> next skip and last-page identities
     bool crawlFinished = false;
     int crawlVersion = 0;
+    std::shared_ptr<ImdbIndex> index; // disk-backed IMDb generation for new Archive queries
 };
 
 inline Snapshot readSnapshot(const std::string& path) {

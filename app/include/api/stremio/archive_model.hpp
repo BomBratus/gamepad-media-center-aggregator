@@ -96,10 +96,11 @@ inline int64_t releaseDate(const Record& r) {
     return year(r) * 10000; // catalog previews sometimes provide only a year
 }
 
-enum class Sort { Release, Updated, Added, Rating, Views, Name };
+enum class Sort { Release, Updated, Added, Rating, Views, Name, Votes };
 struct Filter {
     std::string search, type, genre, country, addon, service;
     int64_t yearFrom = 0, yearTo = 0, minViews = 0;
+    int64_t minVotes = 0;
     double minRating = 0;
     int other = 0; // 0=all, 1=with poster, 2=with description
     Sort sort = Sort::Release;
@@ -118,6 +119,7 @@ inline bool matches(const Record& r, const Filter& f) {
     if (f.minRating && rating(r) < f.minRating) return false;
     // `views` is public catalog metadata, never the user's watched/viewCount.
     if (f.minViews && media::jint(r.meta, "views") < f.minViews) return false;
+    if (f.minVotes && media::jint(r.meta, "votes") < f.minVotes) return false;
     if (f.other == 1 && media::jstr(r.meta, "poster").empty()) return false;
     if (f.other == 2 && media::jstr(r.meta, "description").empty()) return false;
     return true;
@@ -141,6 +143,7 @@ inline std::vector<size_t> select(const std::vector<Record>& records, const Filt
             case Sort::Updated: numbers[i] = record.updated; break;
             case Sort::Rating: numbers[i] = rating(record); break;
             case Sort::Views: numbers[i] = media::jint(record.meta, "views"); break;
+            case Sort::Votes: numbers[i] = media::jint(record.meta, "votes"); break;
             case Sort::Name: names[i] = lower(media::jstr(record.meta, "name")); break;
         }
     }

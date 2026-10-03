@@ -1,77 +1,63 @@
-# Local Stremio archive
+# Local IMDb archive
 
-Archive is available in the Stremio sidebar. Settings → Refresh archive starts a
-manual refresh and opens Archive to show progress. The archive also refreshes
-at startup when three days old, with an hourly age check while GMCA stays open.
-The console cannot run this job after GMCA closes. No TV-box service is needed.
+Archive uses the same bulk IMDb source and local SQLite approach as the TV box.
+GMCA downloads `title.ratings.tsv.gz`, `title.basics.tsv.gz`, and
+`title.akas.tsv.gz` directly from `https://datasets.imdbws.com/`, then imports
+rows on disk. It does not crawl Stremio catalog pages or depend on a TV-box
+service. IMDb's personal/non-commercial dataset terms apply; datasets are not
+bundled in the package or published to the update channel.
 
-The downloader enumerates the configured addons' browsable movie/series
-catalogs, including declared genre/year variants. Required genre/year extras
-are supplied rather than fetching an invalid unfiltered endpoint. It advances `skip` by the actual number of returned previews,
-recognizes `hasMore: false`, and stops repeated pages from addons ignoring
-pagination. A title is identified by `(Stremio type, id)` and deduplicated across
-catalogs; its catalog-addon provenance is retained. Fully overlapping pages
-remain valid; repeated page identities terminate misbehaving pagination. Unavailable catalogs do not
-prevent other catalogs from being indexed. This is the set of titles the addons
-expose for enumeration, not a promise to contain every title in existence.
+The index includes titles with at least 100 IMDb votes, excluding individual
+TV episodes and video games, matching the TV-box builder. Adult titles are
+excluded from browsing. Movie/TV-movie types, series/miniseries, shorts and other
+non-episode types use the usual Stremio movie/series detail flow. Italian display
+titles use the first Italian AKA where available; original and English AKA
+titles remain searchable. Title details, episode lists, synopsis and streams
+still come from the user's Stremio addons when opened. Posters use the same
+IMDb-ID Metahub URLs as the TV box, downloaded only for visible cards.
 
-Search, type, genre, country, year/range, minimum rating, views, streaming service,
-catalog addon and other filters apply to the entire cached set before paging.
-Random picks uniformly from that same matching set, independently of sorting or
-the visible page, then opens the normal title details/source flow. An empty set
-shows a message and never falls back to an unfiltered random pick. Year accepts
-`2020` or `1990-2020`; clearing it removes the year filter. Triangle (Y) is a
-Random shortcut while the Archive controls/grid have focus.
+Search, movie/series type, genre, year/range, rating and IMDb vote filters operate
+on the whole database before paging. Rating order uses the TV box's Bayesian
+score (M=25,000, C from titles with at least 1,000 votes); displayed ratings and
+minimum-rating filters use the raw IMDb rating. Random samples the entire
+matching set. Votes are IMDb rating votes, not public views or the user's
+watched count. Country, streaming-service, addon-provenance and synopsis filters
+are hidden because these bulk datasets do not supply those fields.
 
-Country, streaming service and public views filters use catalog-provided fields
-only. Missing values are not inferred from addon names, IMDb votes, the user's
-watched count, or localized titles. The UI marks fields unavailable when no
-catalog supplies them. Catalog addon is a separate provenance filter. Addition
-and update sorts refer to dates in the local archive; release sorting uses the
-release date when provided, falling back to the release year in previews.
+The first build still needs time and disk space for compressed datasets and the
+SQLite database. Downloads stream to disk, gzip rows are read in bounded buffers,
+and SQLite uses a 4 MiB page cache and disk-backed temporary sorting. There is
+no full metadata snapshot copied into RAM. Completed downloads and import
+checkpoints (every 2,000 input rows) are reused after cancellation/restart.
+An interrupted incomplete HTTP download restarts that one file; already completed
+files are retained. Progress displays the number of imported titles.
 
-Caches live under the GMCA config directory as `archive-<scope hash>.json`.
-The scope includes the account/server and configured addon transports. Raw
-credentials do not appear in filenames or new diagnostic messages. Cached
-metadata is intentionally compact and does not contain resolved stream URLs.
-Writes replace the previous file atomically. Progress is checkpointed every
-1,000 new titles or 60 seconds; a cancelled first download can retain useful
-partial data. The next offset and completed slices are saved with the records,
-so retries and app restarts continue the crawl. Existing caches automatically
-receive the expanded enumeration without deleting their titles. Existing entries remain available during refreshes and provider
-outages. A changed profile/addon configuration cancels the old job; shutdown
-also cancels its HTTP requests before the HTTP pool is joined.
+Playback cancels the background request/import. The player waits on a worker
+thread for checkpoint/cleanup before loading the stream; the UI remains
+responsive, and watching does not require waiting for the whole index. Indexing
+resumes when the player closes, including pending scheduled/manual refreshes.
+The application cannot index after it is closed. Completed indexes refresh
+weekly, with a ten-minute retry backoff on failure. Settings → Refresh archive
+forces a rebuild and opens Archive to show progress.
 
-The job uses one HTTP-pool slot instead of Borealis's serial async queue. Its
-requests are serial, with a short pause between pages. There is no fixed title
-count or metadata-file size cutoff. Cache writes serialize one record at a time
-to avoid duplicating the entire encoded archive in memory. Existing caches are
-recrawled after removing the old cap so previously discarded titles can be added.
-The 2,000-request and 30-minute budgets bound each pass, with saved progress
-continuing on the next pass; they do not limit the total archive size. Incomplete enumeration is labelled
-**Partial catalog coverage**. Failed network passes retry with a ten-minute
-backoff while Archive is open; passes stopped by time/request budgets also resume after that backoff. Completed
-passes use the normal three-day schedule. Metadata already archived is retained when a provider later omits it.
+`imdb-index-v1.sqlite` is shared across profiles under the GMCA configuration
+directory. Refreshes build in a separate `.building` database and atomically
+replace the published file only on success. Queries page through a read-only
+connection to one published generation, so an ongoing refresh cannot reorder
+existing pages. Old scoped `archive-<hash>.json` addon caches are preserved on
+disk but are no longer loaded or crawled.
 
-Progress-label updates leave a populated grid in place during the crawl; they
-do not keep recycling cards and cancelling poster requests. Paged browsing
-keeps one snapshot/order until refresh finishes, avoiding duplicates while new
-records arrive. PS4 browsing
-artwork is saved from successful image downloads in a separate cache under
-`cache/artwork`, limited to 128 MiB and 1,000 files with oldest-file eviction.
-Reopening the app reuses these bytes. Downloaded media's permanent offline art
-is separate. The first load still depends on the artwork provider/network.
+PS4 uses SQLite's `unix-none` VFS because these file lifecycles need no POSIX
+byte-range locks: one staging writer, no concurrent staging readers, and only
+read-only connections to published files. Do not add a second writer or mutate
+a published database in place. SQLite's rollback journal remains enabled for
+staging recovery, and SQLite temporary files use the writable config directory.
+SQLite/zlib C sources are pinned and hash-verified in
+`cmake/imdb_dependencies.cmake`; they are compiled by remote PS4 CI.
 
-Focused standalone checks:
-
-```sh
-c++ -std=gnu++17 -O2 -Wall -Iapp/include \
-  -Ilibrary/borealis/library/include/borealis/extern \
-  tests/test_stremio_archive.cpp -o /tmp/gmca-test-archive
-/tmp/gmca-test-archive
-```
-
-PS4 packaging uses the normal Stremio-only build. Desktop controller smoke tests
-are a shared-behavior test bench; they do not establish PS4 delivery or console
-performance. Do not publish an update or transfer/install a package without the
-user's authorization.
+Run `./tests/run.sh` for the importer/query, playback gate and existing standalone
+checks. `GMCA_JSON_INCLUDE` can point at an existing Borealis JSON include tree
+on a Linux test bench. Fixture checks cover import interruption/resume, Italian
+and English aliases, filters, paging, random picks, and failed refresh preserving
+the old database. Linux tests establish shared behavior; console timings and
+system-crash resolution still need the user's PS4 test after package delivery.

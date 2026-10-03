@@ -1,6 +1,7 @@
 #pragma once
 
 #include "api/stremio/archive_model.hpp"
+#include "api/stremio/archive_playback_gate.hpp"
 #include <functional>
 #include <memory>
 
@@ -11,6 +12,7 @@ struct Snapshot;
 struct Options {
     std::vector<std::string> genres, countries, addons, services;
     bool hasViews = false;
+    bool hasVotes = false;
 };
 struct Result {
     std::vector<media::Item> items;
@@ -28,6 +30,9 @@ class Cache {
 public:
     static Cache& instance();
     void refresh(bool force = false);
+    void pauseForPlayback(); // UI thread, cancels in-flight catalog requests
+    void waitForPlayback();  // worker thread, waits for checkpoint/memory cleanup
+    void resumeAfterPlayback(); // UI thread, after the video view is destroyed
     void query(const Filter& filter, size_t offset, size_t limit, bool random,
         std::function<void(Result)> callback, std::shared_ptr<const Snapshot> snapshot = {});
 private:
@@ -35,6 +40,8 @@ private:
     struct State;
     std::shared_ptr<State> current();
     std::shared_ptr<State> state;
+    PlaybackGate playbackGate;
+    bool exiting = false;
 };
 
 } // namespace stremio::archive

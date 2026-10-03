@@ -38,15 +38,16 @@ ArchiveTab::ArchiveTab() {
         [this](int i) { filter.minRating = i ? i + 4 : 0; request(); });
     other->init("main/archive/other"_i18n, {"main/archive/all"_i18n, "main/archive/with_poster"_i18n, "main/archive/with_summary"_i18n}, 0,
         [this](int i) { filter.other = i; request(); });
-    sort->init("main/archive/sort"_i18n, {"main/archive/release"_i18n, "main/archive/updated"_i18n,
-        "main/archive/added"_i18n, "main/archive/rating"_i18n, "main/archive/views"_i18n, "main/archive/name"_i18n}, 0,
+    sort->init("main/archive/sort"_i18n, {"main/archive/release"_i18n,
+        "main/archive/rating"_i18n, "main/archive/votes"_i18n, "main/archive/name"_i18n}, 0,
         [this](int i) {
-            if (i == 4 && !options.hasViews) {
-                Dialog::show("main/archive/views_unavailable"_i18n);
-                sort->setSelection(static_cast<int>(filter.sort), true);
+            if (i == 2 && !options.hasVotes) {
+                Dialog::show("main/archive/votes_unavailable"_i18n);
+                sort->setSelection(filter.sort == Sort::Rating ? 1 : filter.sort == Sort::Votes ? 2 : filter.sort == Sort::Name ? 3 : 0, true);
                 return;
             }
-            filter.sort = static_cast<Sort>(i); request();
+            filter.sort = i == 1 ? Sort::Rating : i == 2 ? Sort::Votes : i == 3 ? Sort::Name : Sort::Release;
+            request();
         });
     order->init("main/archive/order"_i18n, {"main/media/descending"_i18n, "main/media/ascending"_i18n}, 0,
         [this](int i) { filter.descending = i == 0; request(); });
@@ -63,6 +64,9 @@ ArchiveTab::ArchiveTab() {
         request(); return true;
     });
     applyOptions({});
+    // These fields are absent from the IMDb bulk datasets. The normal title
+    // details still provide localized addon metadata and synopsis on demand.
+    for (auto cell : {country, addon, service, other}) cell->setVisibility(brls::Visibility::GONE);
     Cache::instance().refresh();
     request();
     poll();
@@ -91,10 +95,10 @@ void ArchiveTab::applyOptions(const Options& value) {
     selector(service, options.services.empty() ? "main/archive/service_unavailable"_i18n : "main/archive/service"_i18n,
         options.services, &Filter::service);
     views->getEvent()->clear();
-    views->init(options.hasViews ? "main/archive/views"_i18n : "main/archive/views_unavailable"_i18n,
-        options.hasViews ? std::vector<std::string>{"main/archive/all"_i18n, "1,000+", "10,000+", "100,000+"} : std::vector<std::string>{"main/archive/all"_i18n},
-        filter.minViews == 1000 ? 1 : filter.minViews == 10000 ? 2 : filter.minViews == 100000 ? 3 : 0,
-        [this](int i) { filter.minViews = i == 1 ? 1000 : i == 2 ? 10000 : i == 3 ? 100000 : 0; request(); });
+    views->init(options.hasVotes ? "main/archive/votes"_i18n : "main/archive/votes_unavailable"_i18n,
+        options.hasVotes ? std::vector<std::string>{"main/archive/all"_i18n, "1,000+", "10,000+", "100,000+"} : std::vector<std::string>{"main/archive/all"_i18n},
+        filter.minVotes == 1000 ? 1 : filter.minVotes == 10000 ? 2 : filter.minVotes == 100000 ? 3 : 0,
+        [this](int i) { filter.minVotes = i == 1 ? 1000 : i == 2 ? 10000 : i == 3 ? 100000 : 0; request(); });
     help->setText("main/archive/help"_i18n);
 }
 
