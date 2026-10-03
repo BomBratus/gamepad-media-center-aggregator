@@ -2,6 +2,7 @@
 
 #include "api/stremio/archive_model.hpp"
 #include "api/stremio/archive_playback_gate.hpp"
+#include "api/stremio/archive_query_queue.hpp"
 #include <functional>
 #include <memory>
 
@@ -41,6 +42,7 @@ private:
     std::shared_ptr<State> current();
     std::shared_ptr<State> state;
     PlaybackGate playbackGate;
+    QueryQueue queries;
     bool exiting = false;
 };
 

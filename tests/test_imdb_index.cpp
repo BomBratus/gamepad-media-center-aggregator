@@ -114,6 +114,15 @@ int main() {
     assert(failed && !std::filesystem::exists(path + ".building"));
     assert(ImdbIndex(path).query({}, 0, 0, false).indexed == 2504);
     assert(buildImdbIndex(path, cancel, fixtures)); // a clean retry can recover
+    // Reopening an older published generation must work without rebuilding or
+    // changing the file. Pre-00.92 indexes lack the cached browsable count.
+    sqlite3* legacy = nullptr;
+    assert(sqlite3_open_v2(path.c_str(), &legacy, SQLITE_OPEN_READWRITE, "gmca-ps4-index") == SQLITE_OK);
+    assert(sqlite3_exec(legacy, "DELETE FROM settings WHERE key='browsable'", nullptr, nullptr, nullptr) == SQLITE_OK);
+    sqlite3_close(legacy);
+    auto reopened = ImdbIndex(path).query({}, 0, 60, false);
+    assert(reopened.indexed == 2504 && reopened.records.size() == 60);
+    assert(reopened.genres == std::vector<std::string>({"Comedy", "Drama"}));
     old.reset();
     std::filesystem::remove_all(directory);
     std::cout << "IMDb disk index tests passed\n";

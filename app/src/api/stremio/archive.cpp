@@ -47,12 +47,15 @@ struct Cache::State {
         std::call_once(loaded, [this] {
             if (!std::ifstream(path).good()) return;
             try {
+                ps4diag::write("archive index-load begin");
                 auto value = std::make_shared<Snapshot>();
                 value->index = std::make_shared<ImdbIndex>(path);
                 value->refreshed = value->index->query({}, 0, 0, false).refreshed;
                 std::lock_guard<std::mutex> guard(mutex);
                 snapshot = std::move(value);
-            } catch (...) {
+                ps4diag::write("archive index-load complete");
+            } catch (const std::exception& detail) {
+                ps4diag::write("archive index-load failed detail=" + std::string(detail.what()));
                 std::lock_guard<std::mutex> guard(mutex);
                 error = "main/archive/cache_error";
             }
@@ -65,6 +68,7 @@ Cache::Cache() {
     brls::Application::getExitEvent()->subscribe([this] {
         exiting = true;
         playbackGate.pause();
+        queries.stop();
     });
 }
 std::shared_ptr<Cache::State> Cache::current() {
@@ -138,8 +142,10 @@ void Cache::resumeAfterPlayback() {
 void Cache::query(const Filter& filter, size_t offset, size_t limit, bool random,
         std::function<void(Result)> callback, std::shared_ptr<const Snapshot> snapshot) {
     auto job = current();
-    brls::async([job, filter, offset, limit, random, callback, snapshot] {
+    if (limit || random) ps4diag::write("archive query queued");
+    queries.submit([job, filter, offset, limit, random, callback, snapshot] {
         Result result;
+        if (limit || random) ps4diag::write("archive query begin");
         try {
             job->load();
             std::shared_ptr<const Snapshot> data;
@@ -158,7 +164,11 @@ void Cache::query(const Filter& filter, size_t offset, size_t limit, bool random
                 result.options.hasVotes = true;
                 for (const auto& record : found.records) result.items.push_back(parseMetaPreview(record.meta));
             } else result.indexed = job->building;
+        } catch (const std::exception& detail) {
+            ps4diag::write("archive query failed detail=" + std::string(detail.what()));
+            result.error = "main/archive/cache_error";
         } catch (...) { result.error = "main/archive/cache_error"; }
+        if (limit || random) ps4diag::write("archive query complete items=" + std::to_string(result.items.size()));
         brls::sync([callback, result = std::move(result)]() mutable { callback(std::move(result)); });
     });
 }

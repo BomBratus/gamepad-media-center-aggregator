@@ -98,6 +98,18 @@ struct Statement {
     int64_t number(int i) { return sqlite3_column_int64(stmt, i); }
     double real(int i) { return sqlite3_column_double(stmt, i); }
 };
+// A slow filter must return an error to the UI instead of monopolizing the
+// reader forever. This also covers cold index scans when reopening after boot.
+struct QueryBudget {
+    sqlite3* db;
+    std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    explicit QueryBudget(sqlite3* db) : db(db) {
+        sqlite3_progress_handler(db, 1000, [](void* value) {
+            return std::chrono::steady_clock::now() >= static_cast<QueryBudget*>(value)->deadline ? 1 : 0;
+        }, this);
+    }
+    ~QueryBudget() { sqlite3_progress_handler(db, 0, nullptr, nullptr); }
+};
 int64_t setting(sqlite3* db, const char* key) {
     Statement stmt(db, "SELECT value FROM settings WHERE key=?");
     stmt.text(1, key);
@@ -159,13 +171,27 @@ int64_t timestamp() {
 
 ImdbIndex::ImdbIndex(const std::string& path) {
     Database connection(path, SQLITE_OPEN_READONLY);
+    QueryBudget budget(connection.db);
     if (setting(connection.db, "version") != 1 || !setting(connection.db, "complete"))
         throw std::runtime_error("Incomplete IMDb index");
-    Statement total(connection.db, "SELECT count(*) FROM titles WHERE adult=0");
-    if (!total.row() || !(count = total.number(0))) throw std::runtime_error("Empty IMDb index");
+    count = setting(connection.db, "browsable");
+    if (!count) {
+        // Compatibility with already downloaded indexes: count the smaller
+        // covering index instead of reading every title's metadata on reboot.
+        Statement total(connection.db, "SELECT count(*) FROM titles INDEXED BY title_kind_votes WHERE adult=0");
+        if (!total.row() || !(count = total.number(0))) throw std::runtime_error("Empty IMDb index");
+    }
     refreshed = setting(connection.db, "refreshed");
-    Statement genres(connection.db, "SELECT DISTINCT genre FROM genres ORDER BY genre");
-    while (genres.row()) genreOptions.push_back(genres.text(0));
+    // DISTINCT scans every title/genre pair. Seek the next distinct value in
+    // genre_lookup instead: only a few dozen reads even with a cold cache.
+    Statement first(connection.db, "SELECT min(genre) FROM genres");
+    std::string genre = first.row() ? first.text(0) : "";
+    while (!genre.empty()) {
+        genreOptions.push_back(genre);
+        Statement next(connection.db, "SELECT min(genre) FROM genres WHERE genre>?");
+        next.text(1, genre);
+        genre = next.row() ? next.text(0) : "";
+    }
     db = connection.db; connection.db = nullptr;
 }
 ImdbIndex::~ImdbIndex() { sqlite3_close(db); }
@@ -174,6 +200,7 @@ IndexResult ImdbIndex::query(const Filter& filter, size_t offset, size_t limit, 
     IndexResult result;
     result.indexed = count; result.refreshed = refreshed;
     if (!limit && !random) return result;
+    QueryBudget budget(db);
     result.genres = genreOptions;
     // IMDb does not supply country, streaming availability, views or synopses.
     // Preserve their meaning instead of presenting votes as public views.
@@ -210,14 +237,20 @@ IndexResult ImdbIndex::query(const Filter& filter, size_t offset, size_t limit, 
         limit = 1;
     }
     std::string order;
+    std::string sortIndex;
     switch (filter.sort) {
-        case Sort::Name: order = "lower(t.name)"; break;
-        case Sort::Rating: order = "t.score"; break;
-        case Sort::Votes: order = "t.votes"; break;
+        case Sort::Name: order = "lower(t.name)"; sortIndex = "name"; break;
+        case Sort::Rating: order = "t.score"; sortIndex = "rating"; break;
+        case Sort::Votes: order = "t.votes"; sortIndex = "votes"; break;
         case Sort::Added: case Sort::Updated: order = "t.id"; break;
-        default: order = "t.year"; break;
+        default: order = "t.year"; sortIndex = "year"; break;
     }
-    Statement rows(db, "SELECT t.id,t.kind,t.name,t.year,t.rating,t.votes FROM titles t" + where +
+    // Without a type constraint SQLite can choose a kind/name covering index
+    // for adult=0, then read and sort every title before returning 60 cards.
+    // Select the matching ordered index so LIMIT can stop after one page.
+    const std::string index = sortIndex.empty() ? "" :
+        " INDEXED BY title_" + (filter.type.empty() ? std::string{} : "kind_") + sortIndex;
+    Statement rows(db, "SELECT t.id,t.kind,t.name,t.year,t.rating,t.votes FROM titles t" + index + where +
         " ORDER BY " + order + (filter.descending ? " DESC" : " ASC") + ",t.id ASC LIMIT ?8 OFFSET ?9");
     bind(rows); rows.number(8, limit); rows.number(9, offset);
     while (rows.row()) {
@@ -362,6 +395,9 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
             "CREATE INDEX IF NOT EXISTS genre_lookup ON genres(genre,id);"
             "DROP TABLE IF EXISTS ratings; DELETE FROM settings WHERE key LIKE 'it:%';");
         if (!setting(db, "indexed")) throw std::runtime_error("Empty IMDb dataset");
+        Statement browsable(db, "SELECT count(*) FROM titles WHERE adult=0");
+        if (!browsable.row()) throw std::runtime_error("Empty IMDb dataset");
+        setting(db, "browsable", browsable.number(0));
         setting(db, "complete", 1); setting(db, "refreshed", timestamp());
         exec(db, "COMMIT");
         }
