@@ -36,6 +36,7 @@ private:
     size_t offset = 0, total = 0, generation = 0, pollTimer = 0, indexed = size_t(-1);
     int64_t refreshed = -1;
     bool loading = false, refreshing = false;
+    std::string lastStatus;
     stremio::archive::Options options;
     std::shared_ptr<const stremio::archive::Snapshot> browseSnapshot;
 };

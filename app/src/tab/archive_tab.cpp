@@ -107,7 +107,8 @@ void ArchiveTab::updateStatus(const Result& result) {
     if (result.refreshing) text += "  ·  " + "main/archive/refreshing"_i18n;
     if (!result.error.empty()) text += "  ·  " + brls::getStr(result.error);
     else if (result.partial) text += "  ·  " + "main/archive/partial"_i18n;
-    status->setText(text);
+    lastStatus = std::move(text);
+    status->setText(lastStatus);
 }
 
 void ArchiveTab::request(bool reset, bool random) {
@@ -116,12 +117,18 @@ void ArchiveTab::request(bool reset, bool random) {
     const auto version = generation;
     const auto start = offset;
     loading = true;
+    status->setText(random ? "main/archive/selecting_random"_i18n :
+        reset ? "main/archive/updating_results"_i18n : "main/archive/loading_more"_i18n);
+    // Replace stale results immediately while the new filter query runs.
+    // Pagination keeps the existing cards and their scroll position.
+    if (reset) grid->showSkeleton();
     ASYNC_RETAIN
     Cache::instance().query(filter, start, 60, random, [ASYNC_TOKEN, version, start, random](Result result) {
         ASYNC_RELEASE
         if (version != generation) return;
         loading = false;
         if (random) {
+            status->setText(lastStatus);
             if (result.items.empty()) Dialog::show("main/archive/no_matches"_i18n);
             else { VideoDataSource source(result.items); source.onItemSelected(this, 0); }
             return;
