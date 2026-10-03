@@ -22,7 +22,7 @@ int main() {
 
     // Interactive work is latest-wins. Once request 1 is running, request 3
     // must cancel it and replace request 2 before request 2 ever starts.
-    std::promise<void> firstStarted, firstCancelled, latestFinished;
+    std::promise<void> firstStarted, firstCancelled, pendingCancelled, latestFinished;
     std::mutex seenMutex;
     std::vector<int> seen;
     queries.submitLatest([&](const stremio::archive::QueryQueue::Cancel& cancel) {
@@ -35,7 +35,11 @@ int main() {
         firstCancelled.set_value();
     });
     firstStarted.get_future().wait();
-    queries.submitLatest([&](const stremio::archive::QueryQueue::Cancel&) {
+    queries.submitLatest([&](const stremio::archive::QueryQueue::Cancel& cancel) {
+        if (cancel->load()) {
+            pendingCancelled.set_value();
+            return;
+        }
         std::lock_guard<std::mutex> lock(seenMutex);
         seen.push_back(2);
     });
@@ -48,6 +52,7 @@ int main() {
     });
     assert(firstCancelled.get_future().wait_for(std::chrono::seconds(2)) == std::future_status::ready);
     assert(latestFinished.get_future().wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+    assert(pendingCancelled.get_future().wait_for(std::chrono::seconds(2)) == std::future_status::ready);
     {
         std::lock_guard<std::mutex> lock(seenMutex);
         assert(seen == std::vector<int>({1, 3}));
