@@ -15,7 +15,7 @@ ArchiveTab::ArchiveTab() {
     grid->itemImageRatio = 1.5f;
     grid->itemExtraHeight = 55;
     grid->onNextPage([this] { if (!loading && offset < total) request(false); });
-    search->init("main/archive/search"_i18n, "", [this](std::string value) { filter.search = value; request(); }, "", "", 80);
+    search->init("main/archive/search"_i18n, "", [this](std::string value) { filter.search = value; scheduleRequest(); }, "", "", 80);
     years->init("main/archive/year"_i18n, "", [this](std::string value) {
         int64_t from = 0, to = 0;
         if (!value.empty()) {
@@ -30,14 +30,14 @@ ArchiveTab::ArchiveTab() {
             }
             from = std::stoll(first); to = std::stoll(last);
         }
-        filter.yearFrom = from; filter.yearTo = to; request();
+        filter.yearFrom = from; filter.yearTo = to; scheduleRequest();
     }, "2020 / 1990-2020", "main/archive/year_help"_i18n, 9);
     type->init("main/archive/type"_i18n, {"main/archive/all"_i18n, "main/archive/movies"_i18n, "main/archive/series"_i18n}, 0,
-        [this](int i) { filter.type = i == 1 ? "movie" : i == 2 ? "series" : ""; request(); });
+        [this](int i) { filter.type = i == 1 ? "movie" : i == 2 ? "series" : ""; scheduleRequest(); });
     rating->init("main/archive/rating"_i18n, {"main/archive/all"_i18n, "5+", "6+", "7+", "8+", "9+"}, 0,
-        [this](int i) { filter.minRating = i ? i + 4 : 0; request(); });
+        [this](int i) { filter.minRating = i ? i + 4 : 0; scheduleRequest(); });
     other->init("main/archive/other"_i18n, {"main/archive/all"_i18n, "main/archive/with_poster"_i18n, "main/archive/with_summary"_i18n}, 0,
-        [this](int i) { filter.other = i; request(); });
+        [this](int i) { filter.other = i; scheduleRequest(); });
     sort->init("main/archive/sort"_i18n, {"main/archive/release"_i18n,
         "main/archive/rating"_i18n, "main/archive/votes"_i18n, "main/archive/name"_i18n}, 0,
         [this](int i) {
@@ -47,10 +47,10 @@ ArchiveTab::ArchiveTab() {
                 return;
             }
             filter.sort = i == 1 ? Sort::Rating : i == 2 ? Sort::Votes : i == 3 ? Sort::Name : Sort::Release;
-            request();
+            scheduleRequest();
         });
     order->init("main/archive/order"_i18n, {"main/media/descending"_i18n, "main/media/ascending"_i18n}, 0,
-        [this](int i) { filter.descending = i == 0; request(); });
+        [this](int i) { filter.descending = i == 0; scheduleRequest(); });
     randomButton->registerClickAction([this](...) { if (!loading) request(false, true); return true; });
     registerAction("main/archive/random_hint"_i18n, brls::BUTTON_Y, [this](...) {
         if (!loading) request(false, true);
@@ -72,7 +72,10 @@ ArchiveTab::ArchiveTab() {
     poll();
 }
 
-ArchiveTab::~ArchiveTab() { if (pollTimer) brls::cancelDelay(pollTimer); }
+ArchiveTab::~ArchiveTab() {
+    if (queryTimer) brls::cancelDelay(queryTimer);
+    if (pollTimer) brls::cancelDelay(pollTimer);
+}
 brls::View* ArchiveTab::getDefaultFocus() { return search; }
 
 void ArchiveTab::applyOptions(const Options& value) {
@@ -85,7 +88,7 @@ void ArchiveTab::applyOptions(const Options& value) {
         cell->getEvent()->clear();
         cell->init(label, values, selected, [this, choices, field](int i) {
             filter.*field = i > 0 && static_cast<size_t>(i) <= choices.size() ? choices[i - 1] : "";
-            request();
+            scheduleRequest();
         });
     };
     selector(genre, "main/archive/genre"_i18n, options.genres, &Filter::genre);
@@ -98,7 +101,10 @@ void ArchiveTab::applyOptions(const Options& value) {
     views->init(options.hasVotes ? "main/archive/votes"_i18n : "main/archive/votes_unavailable"_i18n,
         options.hasVotes ? std::vector<std::string>{"main/archive/all"_i18n, "1,000+", "10,000+", "100,000+"} : std::vector<std::string>{"main/archive/all"_i18n},
         filter.minVotes == 1000 ? 1 : filter.minVotes == 10000 ? 2 : filter.minVotes == 100000 ? 3 : 0,
-        [this](int i) { filter.minVotes = i == 1 ? 1000 : i == 2 ? 10000 : i == 3 ? 100000 : 0; request(); });
+        [this](int i) {
+            filter.minVotes = i == 1 ? 1000 : i == 2 ? 10000 : i == 3 ? 100000 : 0;
+            scheduleRequest();
+        });
     help->setText("main/archive/help"_i18n);
 }
 
@@ -111,8 +117,20 @@ void ArchiveTab::updateStatus(const Result& result) {
     status->setText(lastStatus);
 }
 
+void ArchiveTab::scheduleRequest() {
+    if (queryTimer) brls::cancelDelay(queryTimer);
+    queryTimer = brls::delay(150, [this] {
+        queryTimer = 0;
+        request();
+    });
+}
+
 void ArchiveTab::request(bool reset, bool random) {
     if (!reset && !random && loading) return;
+    if (reset && queryTimer) {
+        brls::cancelDelay(queryTimer);
+        queryTimer = 0;
+    }
     if (reset) { offset = 0; browseSnapshot.reset(); ++generation; }
     const auto version = generation;
     const auto start = offset;

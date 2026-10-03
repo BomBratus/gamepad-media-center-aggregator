@@ -98,6 +98,20 @@ struct Statement {
     int64_t number(int i) { return sqlite3_column_int64(stmt, i); }
     double real(int i) { return sqlite3_column_double(stmt, i); }
 };
+
+struct QueryCancellation {
+    sqlite3* db = nullptr;
+    IndexCancel cancel;
+    QueryCancellation(sqlite3* value, IndexCancel token) : db(value), cancel(std::move(token)) {
+        if (!cancel) return;
+        sqlite3_progress_handler(db, 1000, [](void* value) {
+            return static_cast<std::atomic_bool*>(value)->load() ? 1 : 0;
+        }, cancel.get());
+    }
+    ~QueryCancellation() {
+        if (cancel) sqlite3_progress_handler(db, 0, nullptr, nullptr);
+    }
+};
 int64_t setting(sqlite3* db, const char* key) {
     Statement stmt(db, "SELECT value FROM settings WHERE key=?");
     stmt.text(1, key);
@@ -183,10 +197,12 @@ ImdbIndex::ImdbIndex(const std::string& path) {
 }
 ImdbIndex::~ImdbIndex() { sqlite3_close(db); }
 
-IndexResult ImdbIndex::query(const Filter& filter, size_t offset, size_t limit, bool random) {
+IndexResult ImdbIndex::query(
+        const Filter& filter, size_t offset, size_t limit, bool random, const IndexCancel& cancel) {
     IndexResult result;
     result.indexed = count; result.refreshed = refreshed;
     if (!limit && !random) return result;
+    QueryCancellation cancellation(db, cancel);
     result.genres = genreOptions;
     // IMDb does not supply country, streaming availability, views or synopses.
     // Preserve their meaning instead of presenting votes as public views.

@@ -52,8 +52,12 @@ addon/network task queue. Reopening an index seeks its small genre list instead
 of scanning every title/genre pair; new indexes also store the browsable count.
 Existing published indexes remain readable without a new download. Substring
 search scans titles and their aliases in primary-key order instead of making
-random title reads through a sort index. Index opening and result-query stages are
-recorded in the PS4 diagnostic log without filter text or credentials.
+random title reads through a sort index. Interactive filter requests are
+latest-wins: changing a filter cancels the superseded SQLite scan through its
+progress handler and drops superseded requests that have not started yet.
+Filter controls are debounced briefly so rapid controller changes collapse into
+one query; pagination and Random remain immediate. PS4 diagnostics record queue,
+SQLite and total query time separately, without filter text or credentials.
 
 PS4 uses `gmca-ps4-index`, a wrapper around SQLite's `unix-none` VFS. It copies
 the already-absolute private index paths instead of resolving their parents

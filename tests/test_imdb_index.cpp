@@ -159,6 +159,21 @@ int main() {
     filter = {}; filter.minViews = 100; assert(old->query(filter, 0, 60, false).records.empty());
     filter = {}; filter.minVotes = 1001; assert(old->query(filter, 0, 60, false).records.empty());
     assert(old->query({}, 0, 0, false).indexed == 2504);
+
+    // Superseded interactive scans stop cooperatively through SQLite's progress
+    // handler, and the handler/cache state is clean for the next request.
+    auto queryCancel = std::make_shared<std::atomic_bool>(true);
+    bool interrupted = false;
+    try {
+        Filter cancelledFilter;
+        cancelledFilter.search = "definitely-not-present";
+        old->query(cancelledFilter, 0, 60, false, queryCancel);
+    } catch (...) { interrupted = true; }
+    assert(interrupted);
+    Filter afterCancel;
+    afterCancel.search = "ENGLISH ALIAS";
+    assert(old->query(afterCancel, 0, 60, false).total == 1);
+
     // A failed replacement must preserve the active index and the reader's generation.
     bool failed = false;
     try { buildImdbIndex(path, cancel, [](const auto&, const auto&, const auto&) { throw std::runtime_error("offline"); }); }
