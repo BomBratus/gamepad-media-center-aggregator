@@ -1,17 +1,33 @@
 #include "api/stremio/imdb_index.hpp"
 #include "api/stremio/types.hpp"
 #include <zlib.h>
+#include <sqlite3.h>
 #include <cassert>
+#include <cerrno>
 #include <filesystem>
 #include <iostream>
 #include <set>
 #include <unistd.h>
+#include <sys/stat.h>
 using namespace stremio::archive;
+
+static int unsupportedLstat(const char*, struct stat*) { errno = ENOSYS; return -1; }
 
 int main() {
     const auto directory = std::filesystem::temp_directory_path() / ("gmca-imdb-test-" + std::to_string(getpid()));
     std::filesystem::create_directories(directory);
     const auto path = (directory / "index.sqlite").string();
+    // Model OpenOrbis musl: lstat -> fstatat is unimplemented (ENOSYS).
+    // unix-none removes locking but still resolves every parent via lstat.
+    auto unixVfs = sqlite3_vfs_find("unix-none");
+    assert(unixVfs && unixVfs->xSetSystemCall(unixVfs, "lstat",
+        reinterpret_cast<sqlite3_syscall_ptr>(unsupportedLstat)) == SQLITE_OK);
+    sqlite3* probe = nullptr;
+    auto probePath = path + ".probe";
+    assert(sqlite3_open_v2(probePath.c_str(), &probe, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+        "unix-none") == SQLITE_CANTOPEN);
+    sqlite3_close(probe);
+    assert(!std::filesystem::exists(probePath));
     auto cancel = std::make_shared<std::atomic_bool>(false);
     int downloads = 0;
     auto fixtures = [&](const std::string& name, const std::string& output, const IndexCancel&) {

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <mutex>
 #include <string_view>
@@ -12,6 +13,34 @@
 namespace stremio::archive {
 namespace {
 struct InvalidDataset : std::runtime_error { using std::runtime_error::runtime_error; };
+
+#if defined(__PS4__) || defined(GMCA_INDEX_NOLOCK)
+const char* privateIndexVfs() {
+    static sqlite3_vfs vfs{};
+    static std::once_flag registered;
+    std::call_once(registered, [] {
+        auto base = sqlite3_vfs_find("unix-none");
+        if (!base) throw std::runtime_error("SQLite PS4 VFS unavailable");
+        vfs = *base;
+        vfs.pNext = nullptr;
+        vfs.zName = "gmca-ps4-index";
+        // All index/journal paths are absolute and generated under the writable
+        // app directory. OpenOrbis lstat/readlink are ENOSYS; unix-none still
+        // calls them during canonicalization even though locking is disabled.
+        vfs.xFullPathname = [](sqlite3_vfs*, const char* path, int size, char* out) {
+            if (!path || path[0] != '/' || size <= 0) return SQLITE_CANTOPEN;
+            auto length = std::strlen(path);
+            if (length >= static_cast<size_t>(size)) return SQLITE_CANTOPEN;
+            std::memcpy(out, path, length + 1);
+            return SQLITE_OK;
+        };
+        if (sqlite3_vfs_register(&vfs, 0) != SQLITE_OK)
+            throw std::runtime_error("Cannot register SQLite PS4 VFS");
+    });
+    return vfs.zName;
+}
+#endif
+
 struct Database {
     sqlite3* db = nullptr;
     Database(const std::string& path, int flags) {
@@ -25,19 +54,22 @@ struct Database {
         // modified. PS4 needs no POSIX byte-range locks for this file lifecycle.
         const char* vfs = nullptr;
 #if defined(__PS4__) || defined(GMCA_INDEX_NOLOCK)
-        vfs = "unix-none";
+        vfs = privateIndexVfs();
 #endif
-        if (sqlite3_open_v2(path.c_str(), &db, flags, vfs) != SQLITE_OK) {
+        int code = sqlite3_open_v2(path.c_str(), &db, flags, vfs);
+        if (code != SQLITE_OK) {
+            std::string detail = "Cannot open IMDb index: SQLite code " + std::to_string(code);
             if (db) sqlite3_close(db);
-            throw std::runtime_error("Cannot open IMDb index");
+            throw std::runtime_error(detail);
         }
         sqlite3_busy_timeout(db, 3000);
     }
     ~Database() { if (db) sqlite3_close(db); }
 };
 void exec(sqlite3* db, const char* sql) {
-    if (sqlite3_exec(db, sql, nullptr, nullptr, nullptr) != SQLITE_OK)
-        throw std::runtime_error("Cannot update IMDb index");
+    int code = sqlite3_exec(db, sql, nullptr, nullptr, nullptr);
+    if (code != SQLITE_OK)
+        throw std::runtime_error("Cannot update IMDb index: SQLite code " + std::to_string(sqlite3_extended_errcode(db)));
 }
 struct Statement {
     sqlite3_stmt* stmt = nullptr;

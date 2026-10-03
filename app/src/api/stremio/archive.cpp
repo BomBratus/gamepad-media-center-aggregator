@@ -4,6 +4,7 @@
 #include "api/stremio/types.hpp"
 #include "utils/config.hpp"
 #include "utils/thread.hpp"
+#include "utils/ps4_diagnostics.hpp"
 #include <borealis/core/thread.hpp>
 #include <borealis/core/application.hpp>
 #include <chrono>
@@ -17,6 +18,7 @@ constexpr int64_t refreshAge = 7 * 86400;
 void downloadDataset(const std::string& name, const std::string& path, const IndexCancel& cancel) {
     const auto temporary = path + ".part";
     try {
+        ps4diag::write("archive dataset-download begin name=" + name);
         std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
         if (!file) throw std::runtime_error("Cannot save IMDb dataset");
         HTTP request;
@@ -27,6 +29,7 @@ void downloadDataset(const std::string& name, const std::string& path, const Ind
         file.close();
         if (file.fail() || cancel->load()) throw std::runtime_error("IMDb download interrupted");
         if (std::rename(temporary.c_str(), path.c_str()) != 0) throw std::runtime_error("Cannot save IMDb dataset");
+        ps4diag::write("archive dataset-download complete name=" + name);
     } catch (...) { std::remove(temporary.c_str()); throw; }
 }
 } // namespace
@@ -99,6 +102,7 @@ void Cache::refresh(bool force) {
             job->error.clear();
         }
         try {
+            ps4diag::write("archive build begin");
             if (!buildImdbIndex(job->path, cancel, downloadDataset,
                     [job](size_t count) { job->building = count; })) return;
             auto next = std::make_shared<Snapshot>();
@@ -108,8 +112,18 @@ void Cache::refresh(bool force) {
             job->snapshot = std::move(next);
             job->nextCheck = now() + refreshAge;
             job->building = 0;
+            ps4diag::write("archive build complete");
+        } catch (const std::exception& error) {
+            if (!cancel->load()) {
+                // Our generated importer errors and curl status messages contain
+                // no account credentials or media URLs. Preserve the real cause.
+                ps4diag::write("archive build failed detail=" + std::string(error.what()));
+                std::lock_guard<std::mutex> guard(job->mutex);
+                job->error = "main/archive/refresh_error";
+            }
         } catch (...) {
             if (!cancel->load()) {
+                ps4diag::write("archive build failed detail=unknown");
                 std::lock_guard<std::mutex> guard(job->mutex);
                 job->error = "main/archive/refresh_error";
             }

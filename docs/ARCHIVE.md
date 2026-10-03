@@ -47,11 +47,16 @@ connection to one published generation, so an ongoing refresh cannot reorder
 existing pages. Old scoped `archive-<hash>.json` addon caches are preserved on
 disk but are no longer loaded or crawled.
 
-PS4 uses SQLite's `unix-none` VFS because these file lifecycles need no POSIX
-byte-range locks: one staging writer, no concurrent staging readers, and only
-read-only connections to published files. Do not add a second writer or mutate
-a published database in place. SQLite's rollback journal remains enabled for
-staging recovery, and SQLite temporary files use the writable config directory.
+PS4 uses `gmca-ps4-index`, a wrapper around SQLite's `unix-none` VFS. It copies
+the already-absolute private index paths instead of resolving their parents
+through `lstat`/`readlink`, which OpenOrbis musl does not implement. Every path
+passed to this VFS must be generated under the writable app directory; do not
+use it for relative paths or arbitrary user-supplied database names. The file
+lifecycles need no POSIX byte-range locks: one staging writer, no concurrent
+staging readers, and only read-only connections to published files. Do not add
+a second writer or mutate a published database in place. SQLite's rollback
+journal remains enabled for staging recovery, and SQLite temporary files use
+the writable config directory.
 SQLite/zlib C sources are pinned and hash-verified in
 `cmake/imdb_dependencies.cmake`; they are compiled by remote PS4 CI.
 
@@ -59,5 +64,9 @@ Run `./tests/run.sh` for the importer/query, playback gate and existing standalo
 checks. `GMCA_JSON_INCLUDE` can point at an existing Borealis JSON include tree
 on a Linux test bench. Fixture checks cover import interruption/resume, Italian
 and English aliases, filters, paging, random picks, and failed refresh preserving
-the old database. Linux tests establish shared behavior; console timings and
+the old database. The PS4 path regression injects `lstat=ENOSYS`, verifies the
+original Unix VFS cannot open the database, and then runs the complete importer
+through the PS4 wrapper under that same condition. Archive lifecycle, dataset
+download stages, and failure reasons are recorded in the PS4 diagnostic log.
+Linux tests establish shared behavior; console timings and
 system-crash resolution still need the user's PS4 test after package delivery.
