@@ -192,10 +192,31 @@ IndexResult ImdbIndex::query(const Filter& filter, size_t offset, size_t limit, 
     // Preserve their meaning instead of presenting votes as public views.
     if (!filter.country.empty() || !filter.service.empty() || !filter.addon.empty() || filter.minViews || filter.other == 2)
         return result;
+    const auto search = lower(filter.search);
+    if (!search.empty() && (!searchReady || search != cachedSearch)) {
+        // A correlated alias lookup for each title causes hundreds of thousands
+        // of seeks on PS4. Scan aliases sequentially once, deduplicate IDs on
+        // disk, then look up only matching titles. No published file is changed.
+        searchReady = false;
+        totalReady = false;
+        exec(db, "CREATE TEMP TABLE IF NOT EXISTS archive_search(id TEXT PRIMARY KEY) WITHOUT ROWID;"
+            "DELETE FROM temp.archive_search;");
+        Statement collect(db, "INSERT OR IGNORE INTO temp.archive_search "
+            "SELECT id FROM aliases WHERE instr(name,?1)>0");
+        collect.text(1, search); collect.run();
+        Statement names(db, "INSERT OR IGNORE INTO temp.archive_search "
+            "SELECT id FROM titles NOT INDEXED WHERE instr(lower(name),?1)>0");
+        names.text(1, search); names.run();
+        cachedSearch = search;
+        searchReady = true;
+    }
+    // CROSS JOIN fixes the match set as the outer loop: sort/filter only those
+    // titles rather than visiting the entire ordered title index for each page.
+    const std::string source = search.empty() ? "titles t" :
+        "temp.archive_search s CROSS JOIN titles t ON t.id=s.id";
     // Add only selected predicates so SQLite can use its sort/type indices.
     std::string where = " WHERE t.adult=0";
     if (!filter.type.empty()) where += " AND t.kind=?1";
-    if (!filter.search.empty()) where += " AND (instr(lower(t.name),?2)>0 OR EXISTS(SELECT 1 FROM aliases a WHERE a.id=t.id AND instr(a.name,?2)>0))";
     if (!filter.genre.empty()) where += " AND EXISTS(SELECT 1 FROM genres g WHERE g.id=t.id AND lower(g.genre)=?3)";
     if (filter.yearFrom) where += " AND t.year>=?4";
     if (filter.yearTo) where += " AND t.year>0 AND t.year<=?5";
@@ -203,20 +224,26 @@ IndexResult ImdbIndex::query(const Filter& filter, size_t offset, size_t limit, 
     if (filter.minVotes) where += " AND t.votes>=?7";
     auto bind = [&](Statement& stmt) {
         if (!filter.type.empty()) stmt.text(1, filter.type);
-        if (!filter.search.empty()) stmt.text(2, lower(filter.search));
         if (!filter.genre.empty()) stmt.text(3, lower(filter.genre));
         if (filter.yearFrom) stmt.number(4, filter.yearFrom);
         if (filter.yearTo) stmt.number(5, filter.yearTo);
         if (filter.minRating) stmt.real(6, filter.minRating);
         if (filter.minVotes) stmt.number(7, filter.minVotes);
     };
-    if (where == " WHERE t.adult=0") result.total = count;
+    const bool sameCount = totalReady && search == lower(countedFilter.search) &&
+        filter.type == countedFilter.type && filter.genre == countedFilter.genre &&
+        filter.yearFrom == countedFilter.yearFrom && filter.yearTo == countedFilter.yearTo &&
+        filter.minRating == countedFilter.minRating && filter.minVotes == countedFilter.minVotes;
+    if (sameCount) result.total = cachedTotal;
     else {
-        // Substring search cannot seek a sort index. Scan titles in primary-key
-        // order so the title and correlated alias reads remain sequential.
-        const std::string scan = filter.search.empty() ? "" : " NOT INDEXED";
-        Statement total(db, "SELECT count(*) FROM titles t" + scan + where); bind(total);
-        if (total.row()) result.total = total.number(0);
+        if (search.empty() && where == " WHERE t.adult=0") result.total = count;
+        else {
+            Statement total(db, "SELECT count(*) FROM " + source + where); bind(total);
+            if (total.row()) result.total = total.number(0);
+        }
+        countedFilter = filter;
+        cachedTotal = result.total;
+        totalReady = true;
     }
     if (!result.total) return result;
     // Count + one uniformly sampled offset avoids random-sort of the whole DB.
@@ -237,9 +264,9 @@ IndexResult ImdbIndex::query(const Filter& filter, size_t offset, size_t limit, 
     // Without a type constraint SQLite can choose a kind/name covering index
     // for adult=0, then read and sort every title before returning 60 cards.
     // Select the matching ordered index so LIMIT can stop after one page.
-    const std::string index = !filter.search.empty() ? " NOT INDEXED" : sortIndex.empty() ? "" :
+    const std::string index = !search.empty() ? "" : sortIndex.empty() ? "" :
         " INDEXED BY title_" + (filter.type.empty() ? std::string{} : "kind_") + sortIndex;
-    Statement rows(db, "SELECT t.id,t.kind,t.name,t.year,t.rating,t.votes FROM titles t" + index + where +
+    Statement rows(db, "SELECT t.id,t.kind,t.name,t.year,t.rating,t.votes FROM " + source + index + where +
         " ORDER BY " + order + (filter.descending ? " DESC" : " ASC") + ",t.id ASC LIMIT ?8 OFFSET ?9");
     bind(rows); rows.number(8, limit); rows.number(9, offset);
     while (rows.row()) {

@@ -143,7 +143,8 @@ void Cache::query(const Filter& filter, size_t offset, size_t limit, bool random
         std::function<void(Result)> callback, std::shared_ptr<const Snapshot> snapshot) {
     auto job = current();
     if (limit || random) ps4diag::write("archive query queued");
-    queries.submit([job, filter, offset, limit, random, callback, snapshot] {
+    const auto queued = std::chrono::steady_clock::now();
+    queries.submit([job, filter, offset, limit, random, callback, snapshot, queued] {
         Result result;
         if (limit || random) ps4diag::write("archive query begin");
         try {
@@ -168,7 +169,12 @@ void Cache::query(const Filter& filter, size_t offset, size_t limit, bool random
             ps4diag::write("archive query failed detail=" + std::string(detail.what()));
             result.error = "main/archive/cache_error";
         } catch (...) { result.error = "main/archive/cache_error"; }
-        if (limit || random) ps4diag::write("archive query complete items=" + std::to_string(result.items.size()));
+        if (limit || random) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - queued).count();
+            ps4diag::write("archive query complete items=" + std::to_string(result.items.size()) +
+                " elapsed-ms=" + std::to_string(elapsed));
+        }
         brls::sync([callback, result = std::move(result)]() mutable { callback(std::move(result)); });
     });
 }

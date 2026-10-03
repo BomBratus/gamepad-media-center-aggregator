@@ -76,6 +76,33 @@ int main() {
     assert(card.title == "Italiano" && card.thumb.find("/tt1/") != std::string::npos);
     filter.search = "Original 1";
     assert(old->query(filter, 0, 60, false).total > 1);
+    // Cached substring matches must remain complete and deduplicated across
+    // aliases, pagination, sort changes, Random and changes to other filters.
+    filter.search = "title";
+    auto titles = old->query(filter, 0, 60, false);
+    assert(titles.total == 2503); // adult title excluded; tt1 is now Italiano
+    auto titlesNext = old->query(filter, 60, 60, false);
+    assert(titlesNext.total == titles.total && titlesNext.records.size() == 60);
+    std::set<std::string> titleIds;
+    for (const auto& record : titles.records) titleIds.insert(record.meta["id"]);
+    for (const auto& record : titlesNext.records) assert(!titleIds.count(record.meta["id"]));
+    filter.sort = Sort::Name; filter.descending = false;
+    auto named = old->query(filter, 0, 60, false);
+    assert(named.total == titles.total && named.records.front().meta["name"] == "Title 10");
+    filter.type = "series";
+    assert(old->query(filter, 0, 60, false).total == 1252);
+    filter.yearTo = 2019;
+    assert(old->query(filter, 0, 60, false).total == 0);
+    filter.yearTo = 2020;
+    assert(old->query(filter, 0, 60, true).total == 1252);
+    assert(old->query({}, 0, 60, false).total == 2504);
+    assert(old->query(filter, 0, 60, false).total == 1252);
+    filter = {}; filter.search = "1";
+    assert(old->query(filter, 0, 60, false).total > 1); // short substring allowed
+    filter.search = "%_";
+    assert(old->query(filter, 0, 60, false).total == 0); // literal, not LIKE syntax
+    filter.search = "ENGLISH ALIAS";
+    assert(old->query(filter, 0, 60, false).total == 1);
     filter.search = "Ignore This";
     assert(old->query(filter, 0, 60, false).total == 0);
     filter = {}; filter.type = "series"; filter.genre = "drama"; filter.minRating = 7; filter.minVotes = 1000;

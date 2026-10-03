@@ -28,6 +28,12 @@ private:
     size_t count = 0;
     int64_t refreshed = 0;
     std::vector<std::string> genreOptions;
+    // One disk-backed match set per reader generation. Paging, sorting and
+    // Random reuse it without scanning all translated aliases again.
+    std::string cachedSearch;
+    bool searchReady = false, totalReady = false;
+    Filter countedFilter;
+    size_t cachedTotal = 0;
 };
 
 using IndexCancel = std::shared_ptr<std::atomic_bool>;
