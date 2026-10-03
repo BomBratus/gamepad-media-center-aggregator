@@ -11,6 +11,7 @@ public:
     brls::View* getDefaultFocus() override;
 private:
     void request(bool reset = true, bool random = false);
+    void scheduleRequest();
     void applyOptions(const stremio::archive::Options& options);
     void poll();
     void updateStatus(const stremio::archive::Result& result);
@@ -33,7 +34,7 @@ private:
     BRLS_BIND(brls::Button, refreshButton, "archive/refresh");
     BRLS_BIND(brls::Button, resetButton, "archive/reset");
     stremio::archive::Filter filter;
-    size_t offset = 0, total = 0, generation = 0, pollTimer = 0, indexed = size_t(-1);
+    size_t offset = 0, total = 0, generation = 0, pollTimer = 0, queryTimer = 0, indexed = size_t(-1);
     int64_t refreshed = -1;
     bool loading = false, refreshing = false;
     std::string lastStatus;
