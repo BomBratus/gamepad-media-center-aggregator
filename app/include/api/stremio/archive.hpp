@@ -24,13 +24,13 @@ struct Result {
     std::string error;
 };
 
-// Capture account/config on the UI thread, then do disk, network and queries
-// off-thread. A job owns its account snapshot even if the user switches profiles.
+// Capture the shared index path on the UI thread; disk, network and queries run
+// off-thread. Public IMDb metadata is independent of account/addon changes.
 class Cache {
 public:
     static Cache& instance();
     void refresh(bool force = false);
-    void pauseForPlayback(); // UI thread, cancels in-flight catalog requests
+    void pauseForPlayback(); // UI thread, cancels the background import/download
     void waitForPlayback();  // worker thread, waits for checkpoint/memory cleanup
     void resumeAfterPlayback(); // UI thread, after the video view is destroyed
     void query(const Filter& filter, size_t offset, size_t limit, bool random,

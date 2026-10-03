@@ -1,6 +1,7 @@
 #include "api/stremio/archive.hpp"
 #include "api/stremio/archive_storage.hpp"
 #include "api/stremio/imdb_index.hpp"
+#include "api/stremio/types.hpp"
 #include "utils/config.hpp"
 #include "utils/thread.hpp"
 #include <borealis/core/thread.hpp>
