@@ -297,6 +297,7 @@ void DownloadManager::captureOfflineSync(const std::string& itemId) {
 
 // Must be called with mutex held
 void DownloadManager::processQueue() {
+    if (stopping) return;
     if (this->downloading) return;
 
     for (auto& item : this->items) {
@@ -309,7 +310,7 @@ void DownloadManager::processQueue() {
 }
 
 // Must be called with mutex held. Copies what it needs, then hands the transfer
-// off to a ThreadPool worker.
+// off to the serial transfer worker.
 void DownloadManager::doDownload(DownloadItem& item) {
     item.status = DownloadStatus::Downloading;
 
@@ -326,11 +327,8 @@ void DownloadManager::doDownload(DownloadItem& item) {
 
     brls::sync([this, itemId]() { this->statusEvent.fire(itemId, DownloadStatus::Downloading); });
 
-    // Runs on a ThreadPool worker. We deliberately ignore the pool's shared
-    // per-worker HTTP session and open a fresh one below: this transfer installs
-    // a progress callback + cancel token that would otherwise linger on the
-    // shared session and leak into the next image/version task on that worker.
-    ThreadPool::instance().submit([this, itemId, thumb, partKey, url, itemDir, cancel](HTTP&) {
+    // A serial transfer worker owns long downloads and their HTTP sessions.
+    transfers.submit([this, itemId, thumb, partKey, url, itemDir, cancel] {
         auto resetQueue = [this, itemId](const std::string& error) {
             brls::sync([this, itemId, error]() {
                 {
@@ -551,4 +549,13 @@ void DownloadManager::doDownload(DownloadItem& item) {
             }
         });
     });
+}
+
+void DownloadManager::shutdown() {
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        stopping = true;
+        if (currentCancel) currentCancel->store(true);
+    }
+    transfers.stop();
 }
