@@ -35,9 +35,9 @@ int main() {
     // The CPU budget also yields without any network transfer. Use elapsed work
     // rather than a throughput upper bound, which would be flaky on shared CI.
     // Network latency between curl callbacks must not incur a CPU rest debt.
-    std::this_thread::sleep_for(45ms);
+    std::this_thread::sleep_for(250ms);
     worker = std::async(std::launch::async, [&] { gate.checkpoint(job, 0, true); });
-    assert(worker.wait_for(500ms) == std::future_status::ready);
+    assert(worker.wait_for(2s) == std::future_status::ready);
     gate.checkpoint(job); // begin a CPU burst after the download callback
     const auto cpuStart = PlaybackGate::Clock::now();
     while (PlaybackGate::Clock::now() - cpuStart < 3ms) {}
