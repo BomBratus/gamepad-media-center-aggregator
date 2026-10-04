@@ -80,7 +80,7 @@ int main() {
     // A process can die before even creating the settings table. Empty staging
     // must be discarded cleanly instead of poisoning every subsequent rebuild.
     { std::ofstream empty(path + ".building"); }
-    assert(buildImdbIndex(path, cancel, fixtures));
+    assert(buildImdbIndex(path, cancel, fixtures, {}, {}, {}, BuildOptions{8192, 10000, false}));
     auto old = std::make_shared<ImdbIndex>(path);
     auto all = testPage(*old, {}, 0, 60, false);
     assert(all.indexed == 2504 && all.total == 2504 && all.records.size() == 60);

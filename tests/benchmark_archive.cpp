@@ -50,9 +50,15 @@ int main(int argc, char** argv) {
 #ifdef GMCA_BENCH_LEGACY
     assert(buildImdbIndex(path, cancel, fixture));
 #else
+    BuildOptions options;
+    if (argc > 2) options.cacheKiB = std::stoi(argv[2]);
+    if (argc > 3) options.importBatch = std::stoul(argv[3]);
+    if (argc > 4) options.normalSync = std::stoi(argv[4]) != 0;
+    std::cout << "build-config cache-kib=" << options.cacheKiB << " import-batch=" << options.importBatch
+              << " synchronous=" << (options.normalSync ? "NORMAL" : "FULL") << std::endl;
     assert(buildImdbIndex(path, cancel, fixture, {}, {}, [](const std::string& phase, double ms) {
         std::cout << "build-phase name=" << phase << " ms=" << ms << std::endl;
-    }));
+    }, options));
 #endif
     std::cout << "build titles=" << count << " ms=" << std::chrono::duration<double,std::milli>(Clock::now()-began).count()
               << " disk-bytes=" << std::filesystem::file_size(path) << std::endl;
