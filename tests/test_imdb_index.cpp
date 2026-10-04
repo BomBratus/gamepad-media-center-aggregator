@@ -73,6 +73,10 @@ int main() {
     cancel->store(false);
     assert(buildImdbIndex(path, cancel, fixtures));
     assert(downloads == 3); // completed datasets reused after interruption
+    // A process can die before even creating the settings table. Empty staging
+    // must be discarded cleanly instead of poisoning every subsequent rebuild.
+    { std::ofstream empty(path + ".building"); }
+    assert(buildImdbIndex(path, cancel, fixtures));
     auto old = std::make_shared<ImdbIndex>(path);
     auto all = testPage(*old, {}, 0, 60, false);
     assert(all.indexed == 2504 && all.total == 2504 && all.records.size() == 60);

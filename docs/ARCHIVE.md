@@ -15,7 +15,8 @@ format. v1 readers are rejected cleanly and the cache automatically schedules a
 full rebuild. No compatibility query engine runs alongside v2.
 
 Import checkpoints every 2,000 input rows and completed downloads survive a
-playback interruption/restart. Derived indexes are rebuilt from the completed
+playback interruption/restart. The staging probe opens read/write to recover a hot journal after process exit.
+Derived indexes are rebuilt from the completed
 import if interrupted; a `derived_ready` checkpoint allows retrying compaction
 without losing the import. This is recovery of a full rebuild, not incremental
 catalog maintenance. An invalid/truncated dataset discards its staging database
@@ -129,7 +130,10 @@ measured 237k count. These are conservative payload estimates, not measured PS4
 heap peaks; allocator/SQLite statement overhead and UI cards are additional.
 An old pinned generation and a newly published reader can coexist, so budget two
 readers (~176 MiB at the artificial cap), plus the staging builder (~15.125N
-facet payload, SQLite cache, current-title terms and disk-backed sorts). Each
+facet payload, SQLite cache, current-title terms and disk-backed sorts). Names
+are limited to 4,096 bytes and distinct per-title search sequences to 65,536;
+exceeding either budget fails the replacement without publishing it. Allow an
+additional ~7 MiB for this exceptional single-title working set. Each
 extra externally retained cursor adds up to 4.125N bytes; the UI retains one.
 Sort arrays and all aliases are not loaded together. There is no mmap reliance.
 
@@ -137,7 +141,8 @@ Four sorts plus tie boundaries occupy at most 32N bytes on disk; facets at most
 15.125N. Search payload is **4P bytes**, where P is total distinct per-title
 1/2/3-byte sequences, plus term/chunk B-tree overhead. Records, unique IMDb IDs
 and searchable name strings are additional and depend on actual name lengths.
-Staging temporarily holds both import tables and an uncompressed `(term,key)`
+Posting compression commits at 262,144 pairs to bound cancellation rollback
+payload to roughly 1 MiB plus B-tree/journal overhead. Staging temporarily holds both import tables and an uncompressed `(term,key)`
 B-tree before compacting postings, and VACUUM needs temporary space. Plan disk
 for the old generation, staging, compaction and compressed datasets together.
 Published/build size and build duration must be measured on the actual dataset;

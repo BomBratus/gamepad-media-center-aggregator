@@ -567,9 +567,13 @@ void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<vo
             sqlite3_reset(genres.stmt); sqlite3_clear_bindings(genres.stmt);
             std::set<std::string> terms;
             auto addName = [&](const std::string& name) {
+                if (name.size() > 4096) throw std::runtime_error("Archive name budget exceeded");
                 search.number(1, key); search.text(2, lower(name)); search.run();
                 for (size_t width = 1; width <= 3; ++width)
-                    for (const auto& term : grams(lower(name), width)) terms.insert(term);
+                    for (const auto& term : grams(lower(name), width)) {
+                        terms.insert(term);
+                        if (terms.size() > 65536) throw std::runtime_error("Archive title search budget exceeded");
+                    }
             };
             addName(titles.text(2));
             aliases.text(1, titles.text(0));
@@ -626,7 +630,7 @@ void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<vo
     Statement saveTerm(db, "INSERT INTO search_terms VALUES(?,?)");
     std::string term;
     std::vector<uint32_t> keys;
-    size_t chunk = 0, n = 0, written = 0;
+    size_t chunk = 0, n = 0, written = 0, committed = 0;
     auto flush = [&] {
         if (keys.empty()) return;
         savePosting.text(1, term); savePosting.number(2, chunk++); blob(savePosting, 3, encode(keys)); savePosting.run(); keys.clear();
@@ -643,6 +647,10 @@ void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<vo
             if (next != term) { finish(); term = std::move(next); chunk = n = 0; }
             keys.push_back(pairs.number(1)); ++n;
             if (keys.size() == postingChunk) flush();
+            if (written - committed >= 262144) {
+                // Bound cancellation rollback I/O to ~1 MiB of postings.
+                flush(); exec(db, "COMMIT"); exec(db, "BEGIN"); committed = written;
+            }
         }
         finish(); exec(db, "COMMIT");
     } catch (...) { sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr); throw; }
@@ -665,9 +673,16 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
     const auto buildStarted = Clock::now();
     const auto staging = path + ".building";
     // Old staged schemas cannot resume into a new index format.
+    if (cancel && cancel->load()) return false;
     if (std::ifstream(staging).good()) {
-        Database old(staging, SQLITE_OPEN_READONLY);
-        if (setting(old.db, "version") != 2) {
+        // A read/write probe lets SQLite recover a hot journal after process
+        // termination before deciding whether this staging schema can resume.
+        Database old(staging, SQLITE_OPEN_READWRITE);
+        Statement schema(old.db, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='settings'");
+        const bool hasSettings = schema.row() && schema.number(0);
+        sqlite3_reset(schema.stmt);
+        if (!hasSettings || setting(old.db, "version") != 2) {
+            sqlite3_finalize(schema.stmt); schema.stmt = nullptr;
             sqlite3_close(old.db); old.db = nullptr;
             std::remove(staging.c_str()); std::remove((staging + "-journal").c_str());
         }
