@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
         }
         validate(output);
         ImdbIndex index(output);
-        const auto result = index.query({}, {}, 0, false, cancel);
+        const auto result = index.query({}, {}, 1, false, cancel);
         std::cout << nlohmann::json{{"schema", 2}, {"titles", result.indexed},
             {"browsable", result.total}, {"refreshed", result.refreshed}, {"path", output},
             {"bytes", std::filesystem::file_size(output)}, {"sha256", sha256(output)}}.dump() << '\n';
