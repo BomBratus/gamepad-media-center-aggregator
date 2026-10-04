@@ -73,7 +73,7 @@ public:
     // Call from CPU loops, SQLite's progress handler and curl's progress
     // callback. Background budget: 2 ms work / 38 ms rest, 256 KiB/s downloads.
     // These are cooperative limits, not a hard real-time I/O guarantee.
-    void checkpoint(const Cancel& cancel, size_t bytes = 0) {
+    void checkpoint(const Cancel& cancel, size_t bytes = 0, bool downloading = false) {
         std::unique_lock<std::mutex> lock(mutex);
         auto job = jobs.find(cancel);
         if (job == jobs.end()) return;
@@ -99,7 +99,11 @@ public:
                     std::chrono::microseconds(uint64_t(bytes) * 1000000 / (256 * 1024));
                 bytes = 0;
             }
-            if (burst != Clock::time_point{} && now - burst >= std::chrono::milliseconds(2)) {
+            if (downloading) {
+                // curl can wait on the network between callbacks. That idle
+                // time is not CPU work; transfers have their own byte budget.
+                burst = {}; cpuUntil = {};
+            } else if (burst != Clock::time_point{} && now - burst >= std::chrono::milliseconds(2)) {
                 // Include overruns (e.g. a slow filesystem call), then persist
                 // the rest deadline across wakeups. A past window must never
                 // leave the writer running without further throttling.
@@ -112,7 +116,7 @@ public:
                 changed.wait_until(lock, until);
                 continue;
             }
-            if (burst == Clock::time_point{}) burst = now;
+            if (!downloading && burst == Clock::time_point{}) burst = now;
             job->second = false;
             return;
         }
