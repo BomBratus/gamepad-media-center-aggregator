@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cerrno>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <set>
 #include <unistd.h>
