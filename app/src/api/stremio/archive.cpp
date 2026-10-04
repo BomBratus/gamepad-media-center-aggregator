@@ -50,7 +50,7 @@ struct Cache::State {
                 ps4diag::write("archive index-load begin");
                 auto value = std::make_shared<Snapshot>();
                 value->index = std::make_shared<ImdbIndex>(path);
-                value->refreshed = value->index->query({}, 0, 0, false).refreshed;
+                value->refreshed = value->index->query({}, {}, 0, false).refreshed;
                 std::lock_guard<std::mutex> guard(mutex);
                 snapshot = std::move(value);
                 ps4diag::write("archive index-load complete");
@@ -68,6 +68,8 @@ Cache::Cache() {
     brls::Application::getExitEvent()->subscribe([this] {
         exiting = true;
         playbackGate.pause();
+        // Cancel and join both local work lifetimes before app/static teardown.
+        playbackGate.wait();
         queries.stop();
     });
 }
@@ -111,7 +113,7 @@ void Cache::refresh(bool force) {
                     [job](size_t count) { job->building = count; })) return;
             auto next = std::make_shared<Snapshot>();
             next->index = std::make_shared<ImdbIndex>(job->path);
-            next->refreshed = next->index->query({}, 0, 0, false).refreshed;
+            next->refreshed = next->index->query({}, {}, 0, false).refreshed;
             std::lock_guard<std::mutex> guard(job->mutex);
             job->snapshot = std::move(next);
             job->nextCheck = now() + refreshAge;
@@ -139,14 +141,14 @@ void Cache::waitForPlayback() { playbackGate.wait(); }
 void Cache::resumeAfterPlayback() {
     if (playbackGate.resume() && !exiting) refresh(true);
 }
-void Cache::query(const Filter& filter, size_t offset, size_t limit, bool random,
+void Cache::query(const Filter& filter, const Cursor& cursor, size_t limit, bool random,
         std::function<void(Result)> callback, std::shared_ptr<const Snapshot> snapshot) {
     auto job = current();
     const bool interactive = limit || random;
     if (interactive) ps4diag::write("archive query queued");
     const auto queued = std::chrono::steady_clock::now();
 
-    auto execute = [job, filter, offset, limit, random, callback, snapshot, queued, interactive](
+    auto execute = [job, filter, cursor, limit, random, callback, snapshot, queued, interactive](
                        const IndexCancel& cancel) {
         Result result;
         const auto started = std::chrono::steady_clock::now();
@@ -182,10 +184,22 @@ void Cache::query(const Filter& filter, size_t offset, size_t limit, bool random
             if (data->index) {
                 measuringSql = true;
                 sqlStarted = std::chrono::steady_clock::now();
-                auto found = data->index->query(filter, offset, limit, random, cancel);
+                auto found = data->index->query(filter, cursor, limit, random, cancel);
                 sqlMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - sqlStarted).count();
                 measuringSql = false;
+                result.cursor = found.cursor;
+                if (interactive) {
+                    const auto& m = found.metrics;
+                    ps4diag::write("archive query generation=" + std::to_string(found.cursor.generation) +
+                        " filter-ms=" + std::to_string(m.filterMs) + " search-index-ms=" + std::to_string(m.searchMs) +
+                        " sort-scan-ms=" + std::to_string(m.sortMs) + " metadata-ms=" + std::to_string(m.metadataMs) +
+                        " total-ms=" + std::to_string(m.totalMs) + " matches=" + std::to_string(found.total) +
+                        " items=" + std::to_string(found.records.size()) + " cursor-in=" + std::to_string(cursor.position) +
+                        " cursor-out=" + std::to_string(found.cursor.position) + " reused=" + std::to_string(m.reusedMatches) +
+                        " facet-words=" + std::to_string(m.facetWords) + " search-postings=" + std::to_string(m.searchPostings) +
+                        " sort-entries=" + std::to_string(m.sortEntries));
+                }
                 result.indexed = found.indexed; result.total = found.total;
                 result.options.genres = std::move(found.genres);
                 result.options.hasVotes = true;

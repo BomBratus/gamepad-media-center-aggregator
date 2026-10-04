@@ -1,6 +1,7 @@
 #pragma once
 
 #include "api/stremio/archive_model.hpp"
+#include "api/stremio/archive_cursor.hpp"
 #include "api/stremio/archive_playback_gate.hpp"
 #include "api/stremio/archive_query_queue.hpp"
 #include <functional>
@@ -19,6 +20,7 @@ struct Result {
     std::vector<media::Item> items;
     std::shared_ptr<const Snapshot> snapshot;
     Options options;
+    Cursor cursor;
     size_t total = 0, indexed = 0;
     int64_t refreshed = 0;
     bool refreshing = false, partial = false;
@@ -34,7 +36,7 @@ public:
     void pauseForPlayback(); // UI thread, cancels the background import/download
     void waitForPlayback();  // worker thread, waits for checkpoint/memory cleanup
     void resumeAfterPlayback(); // UI thread, after the video view is destroyed
-    void query(const Filter& filter, size_t offset, size_t limit, bool random,
+    void query(const Filter& filter, const Cursor& cursor, size_t limit, bool random,
         std::function<void(Result)> callback, std::shared_ptr<const Snapshot> snapshot = {});
 private:
     Cache();

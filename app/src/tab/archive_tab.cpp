@@ -119,6 +119,11 @@ void ArchiveTab::updateStatus(const Result& result) {
 
 void ArchiveTab::scheduleRequest() {
     if (queryTimer) brls::cancelDelay(queryTimer);
+    // Invalidate old callbacks immediately, including during the debounce.
+    ++generation;
+    loading = true;
+    status->setText("main/archive/updating_results"_i18n);
+    grid->showSkeleton();
     queryTimer = brls::delay(150, [this] {
         queryTimer = 0;
         request();
@@ -131,7 +136,7 @@ void ArchiveTab::request(bool reset, bool random) {
         brls::cancelDelay(queryTimer);
         queryTimer = 0;
     }
-    if (reset) { offset = 0; browseSnapshot.reset(); ++generation; }
+    if (reset) { cursor = {}; offset = 0; browseSnapshot.reset(); ++generation; }
     const auto version = generation;
     const auto start = offset;
     loading = true;
@@ -141,7 +146,7 @@ void ArchiveTab::request(bool reset, bool random) {
     // Pagination keeps the existing cards and their scroll position.
     if (reset) grid->showSkeleton();
     ASYNC_RETAIN
-    Cache::instance().query(filter, start, 60, random, [ASYNC_TOKEN, version, start, random](Result result) {
+    Cache::instance().query(filter, random ? Cursor{} : cursor, 60, random, [ASYNC_TOKEN, version, start, random](Result result) {
         ASYNC_RELEASE
         if (version != generation) return;
         loading = false;
@@ -152,6 +157,7 @@ void ArchiveTab::request(bool reset, bool random) {
             return;
         }
         browseSnapshot = result.snapshot;
+        cursor = result.cursor;
         indexed = result.indexed; refreshed = result.refreshed; refreshing = result.refreshing;
         total = result.total;
         // Recycler callbacks can run during reload; advance first so the last
@@ -169,14 +175,14 @@ void ArchiveTab::request(bool reset, bool random) {
             auto* source = dynamic_cast<VideoDataSource*>(grid->getDataSource());
             if (source) { source->appendData(result.items); grid->notifyDataChanged(); }
         }
-    }, random ? nullptr : browseSnapshot);
+    }, browseSnapshot);
 }
 
 void ArchiveTab::poll() {
     pollTimer = brls::delay(2500, [this] {
         pollTimer = 0;
         ASYNC_RETAIN
-        Cache::instance().query(filter, 0, 0, false, [ASYNC_TOKEN](Result result) {
+        Cache::instance().query(filter, {}, 0, false, [ASYNC_TOKEN](Result result) {
             ASYNC_RELEASE
             if (!loading) {
                 if ((total == 0 && result.indexed != indexed) || (!result.refreshing && (refreshing || result.refreshed != refreshed || result.indexed != indexed))) request();
