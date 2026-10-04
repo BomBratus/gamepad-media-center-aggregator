@@ -97,7 +97,7 @@ inline std::string requestKey(const std::string& url, long timeout) {
     auto key = responseKey(url, timeout);
     // Cancellable view lifetimes must not abort another view's shared transfer.
     // Non-cancellable requests retain the original cross-caller coalescing.
-    if (gmca::currentRequest) key += "\n" + std::to_string(gmca::currentRequest->id);
+    if (gmca::currentRequest()) key += "\n" + std::to_string(gmca::currentRequest()->id);
     return key;
 }
 
@@ -231,7 +231,7 @@ inline void registerBatch(
             request.url = std::move(candidate.first);
             request.key = std::move(candidate.second);
             request.result = std::make_shared<detail::Result>();
-            request.token = gmca::currentRequest;
+            request.token = gmca::currentRequest();
             batch->requests.push_back(std::move(request));
         }
         for (const auto& request : batch->requests) r.exact[request.key] = {batch, expires};
@@ -346,7 +346,7 @@ inline std::string get(const std::string& url, long timeout = HTTP::TIMEOUT) {
             std::exception_ptr requestError;
             try {
                 gmca::checkRequest();
-                body = gmca::currentRequest ? HTTP::get(url, HTTP::Timeout{timeout}, gmca::currentRequest->cancel)
+                body = gmca::currentRequest() ? HTTP::get(url, HTTP::Timeout{timeout}, gmca::currentRequest()->cancel)
                                             : HTTP::get(url, HTTP::Timeout{timeout});
             } catch (...) {
                 requestError = std::current_exception();

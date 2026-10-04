@@ -60,7 +60,7 @@ void emptyContainer(media::Then<media::Container<T>> then) {
 // Network orchestration is bounded independently of its leaf HTTP fan-out.
 // Rejection still completes the caller's UI lifetime/error path.
 void stremioAsync(media::OnError error, Executor::Task task) {
-    const auto request = gmca::currentRequest;
+    const auto request = gmca::currentRequest();
     try { stremioOperations().submit([task = std::move(task), error, request] {
         if (gmca::cancelled(request)) {
             // Release the caller's ASYNC_TOKEN on the UI even for queued stale

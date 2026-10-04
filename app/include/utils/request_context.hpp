@@ -11,17 +11,23 @@ struct RequestState {
     std::shared_ptr<std::atomic_bool> cancel = std::make_shared<std::atomic_bool>(false);
 };
 using RequestToken = std::shared_ptr<RequestState>;
-inline thread_local RequestToken currentRequest;
+// A trivial TLS pointer needs no __cxa_thread_atexit_impl (OpenOrbis does
+// not export it). Owning shared_ptrs live in lexical RequestBinding scopes.
+inline thread_local RequestToken* boundRequest = nullptr;
+inline RequestToken currentRequest() { return boundRequest ? *boundRequest : RequestToken{}; }
 inline bool cancelled(const RequestToken& token) { return token && token->cancel->load(); }
 inline void checkRequest() {
-    if (cancelled(currentRequest)) throw std::runtime_error("Request cancelled");
+    if (cancelled(currentRequest())) throw std::runtime_error("Request cancelled");
 }
 class RequestBinding {
 public:
-    explicit RequestBinding(RequestToken token) : previous(std::move(currentRequest)) { currentRequest = std::move(token); }
-    ~RequestBinding() { currentRequest = std::move(previous); }
+    explicit RequestBinding(RequestToken value) : token(std::move(value)), previous(boundRequest) { boundRequest = &token; }
+    ~RequestBinding() { boundRequest = previous; }
+    RequestBinding(const RequestBinding&) = delete;
+    RequestBinding& operator=(const RequestBinding&) = delete;
 private:
-    RequestToken previous;
+    RequestToken token;
+    RequestToken* previous;
 };
 // UI-owned lifetime/generation. Replacing a request cancels its HTTP and queued
 // work; callbacks still release Borealis lifetime bookkeeping before checking.

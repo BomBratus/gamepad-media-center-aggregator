@@ -5,8 +5,8 @@
 int main() {
     gmca::LatestRequest requests;
     auto old = requests.next();
-    { gmca::RequestBinding bind(old); assert(gmca::currentRequest == old); }
-    assert(!gmca::currentRequest);
+    { gmca::RequestBinding bind(old); assert(gmca::currentRequest() == old); }
+    assert(!gmca::currentRequest());
     auto current = requests.next();
     assert(gmca::cancelled(old) && !gmca::cancelled(current));
     Executor executor;
