@@ -62,6 +62,7 @@ int main() {
                 "tt1\t1\tItaliano\tIT\tit\t\\N\t\\N\t0\n"
                 "tt1\t2\tSecond Italian\tIT\tit\t\\N\t\\N\t0\n"
                 "tt1\t3\tEnglish Alias\tUS\ten\t\\N\t\\N\t0\n"
+                "tt1\t5\tAAAA café ÉCOLE\tUS\ten\t\\N\t\\N\t0\n"
                 "tt1\t4\tIgnore This\tFR\tfr\t\\N\t\\N\t0\n";
         }
         auto gzip = gzopen(output.c_str(), "wb"); assert(gzip);
@@ -91,6 +92,14 @@ int main() {
     auto card = stremio::parseMetaPreview(found.records[0].meta);
     assert(card.ratingKey == "movie:tt1" && card.year == 2020 && card.rating == 8.0);
     assert(card.title == "Italiano" && card.thumb.find("/tt1/") != std::string::npos);
+    // Deduplicate repeated 1/2/3 grams across aliases and preserve the current
+    // byte-oriented UTF-8 behavior: ASCII case folds, non-ASCII case does not.
+    for (const auto& term : {"aa", "aaa", "aaaa", "café", "École"}) {
+        filter.search = term;
+        assert(testPage(*old, filter, 0, 60, false).total == 1);
+    }
+    filter.search = "école";
+    assert(testPage(*old, filter, 0, 60, false).total == 0);
     filter.search = "Original 1";
     assert(testPage(*old, filter, 0, 60, false).total > 1);
     // Cached substring matches must remain complete and deduplicated across

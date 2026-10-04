@@ -42,9 +42,23 @@ jobs:
             tests/benchmark_archive.cpp archive-evidence/legacy/imdb_index.cpp \
             archive-checks/libgmca_sqlite.a archive-checks/libgmca_index_zlib.a \
             -pthread -ldl -lm -o archive-evidence/benchmark-before
+          # Retain legacy context and compare against the actual pre-hardening v2.
+          v2_baseline=bbc31b0efda46a76cda6c09af02ea6b5aa2ba140
+          mkdir -p archive-evidence/v2/api/stremio
+          git show "$v2_baseline:app/src/api/stremio/imdb_index.cpp" > archive-evidence/v2/imdb_index.cpp
+          git show "$v2_baseline:app/include/api/stremio/imdb_index.hpp" > archive-evidence/v2/api/stremio/imdb_index.hpp
+          git show "$v2_baseline:tests/benchmark_archive.cpp" > archive-evidence/v2/benchmark_archive.cpp
+          c++ -O3 -std=c++17 -DGMCA_INDEX_NOLOCK \
+            -Iarchive-evidence/v2 -Itests/support -Iapp/include \
+            -Ilibrary/borealis/library/include/borealis/extern \
+            -Iarchive-checks/_deps/gmca_sqlite-src -Iarchive-checks/_deps/gmca_zlib-src \
+            archive-evidence/v2/benchmark_archive.cpp archive-evidence/v2/imdb_index.cpp \
+            archive-checks/libgmca_sqlite.a archive-checks/libgmca_index_zlib.a \
+            -pthread -ldl -lm -o archive-evidence/benchmark-v2-before
+          /usr/bin/time -v archive-evidence/benchmark-v2-before 500000 > archive-evidence/v2-before.log 2> archive-evidence/v2-before-resource.log
           /usr/bin/time -v archive-evidence/benchmark-before 500000 > archive-evidence/before.log 2> archive-evidence/before-resource.log
           /usr/bin/time -v archive-checks/benchmark_archive 500000 > archive-evidence/after.log 2> archive-evidence/after-resource.log
-          cat archive-evidence/before.log archive-evidence/after.log
+          cat archive-evidence/before.log archive-evidence/v2-before.log archive-evidence/after.log
       - uses: actions/upload-artifact@v6
         if: always()
         with:

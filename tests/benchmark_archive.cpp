@@ -47,7 +47,13 @@ int main(int argc, char** argv) {
         assert(gzclose(gz) == Z_OK);
     };
     auto began = Clock::now();
+#ifdef GMCA_BENCH_LEGACY
     assert(buildImdbIndex(path, cancel, fixture));
+#else
+    assert(buildImdbIndex(path, cancel, fixture, {}, {}, [](const std::string& phase, double ms) {
+        std::cout << "build-phase name=" << phase << " ms=" << ms << std::endl;
+    }));
+#endif
     std::cout << "build titles=" << count << " ms=" << std::chrono::duration<double,std::milli>(Clock::now()-began).count()
               << " disk-bytes=" << std::filesystem::file_size(path) << std::endl;
     ImdbIndex index(path);
