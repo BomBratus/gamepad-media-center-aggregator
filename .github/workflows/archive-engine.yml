@@ -2,7 +2,7 @@ name: Archive engine checks
 on:
   pull_request:
     branches: [dev]
-    paths: ['app/**', 'tests/**', 'cmake/imdb_dependencies.cmake', '.github/workflows/archive-engine.yml']
+    paths: ['app/**', 'tests/**', 'tools/archive-builder/**', 'cmake/imdb_dependencies.cmake', '.github/workflows/archive-engine.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,12 +20,13 @@ jobs:
       - name: Build portable Archive checks and benchmark
         run: |
           cmake -S tests/imdb -B archive-checks -DCMAKE_BUILD_TYPE=Release \
-            -DGMCA_ARCHIVE_BENCHMARK=ON \
+            -DGMCA_ARCHIVE_BENCHMARK=ON -DGMCA_ARCHIVE_BUILDER=ON \
             -DGMCA_JSON_INCLUDE="$PWD/library/borealis/library/include/borealis/extern"
           cmake --build archive-checks -j2
       - name: Correctness, cancellation and lifecycle
         run: |
           ctest --test-dir archive-checks --output-on-failure
+          python3 tests/test_archive_builder.py archive-checks/gmca-archive-builder
           GMCA_TEST_DEPENDENCY_ARGS="-DFETCHCONTENT_SOURCE_DIR_GMCA_SQLITE=$PWD/archive-checks/_deps/gmca_sqlite-src -DFETCHCONTENT_SOURCE_DIR_GMCA_ZLIB=$PWD/archive-checks/_deps/gmca_zlib-src" ./tests/run.sh
       - name: Compare identical 500k-title workloads
         shell: bash
