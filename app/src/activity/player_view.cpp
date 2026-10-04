@@ -98,9 +98,10 @@ PlayerView::PlayerView(const media::Item& item, const int64_t seekMs, int versio
         if (event == MpvEventEnum::UPDATE_PROGRESS || event == MpvEventEnum::MPV_PAUSE ||
             event == MpvEventEnum::MPV_RESUME || event == MpvEventEnum::LOADING_END ||
             event == MpvEventEnum::LOADING_START) {
+            // mpv flags are not coercible to INT64; use their yes/no string form.
             const bool healthy = mpvLoaded && playbackCheckpoint.ready() && !mpv.isStopped() &&
-                !mpv.getInt("paused-for-cache", 0) && !mpv.getInt("seeking", 0) &&
-                (!mpv.getInt("core-idle", 0) || mpv.isPaused());
+                mpv.getString("paused-for-cache") != "yes" && mpv.getString("seeking") != "yes" &&
+                (mpv.getString("core-idle") == "no" || mpv.isPaused());
             stremio::archive::Cache::instance().playbackState(archivePlaybackSession, healthy);
         }
         switch (event) {
