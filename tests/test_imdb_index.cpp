@@ -1,4 +1,6 @@
 #include "api/stremio/imdb_index.hpp"
+#include "api/stremio/archive_playback_gate.hpp"
+#include <future>
 #include "api/stremio/types.hpp"
 #include <zlib.h>
 #include <sqlite3.h>
@@ -330,6 +332,51 @@ int main() {
     }));
     assert(derivedPaused && mini.query({}, {}, 60, false).total == 3);
     cancel->store(false); assert(buildImdbIndex(miniPath, cancel, miniData));
+
+    // Park a real staging build mid-derivation, browse the published generation,
+    // then finish the same invocation in background mode (no restart/download).
+    PlaybackGate background(std::chrono::milliseconds(0));
+    auto backgroundCancel = background.start();
+    std::promise<void> parked;
+    std::atomic_bool requested{false};
+    uint64_t player = 0;
+    size_t derivedStages = 0, yields = 0;
+    int beforeDownloads = downloads;
+    auto building = std::async(std::launch::async, [&] {
+        const bool result = buildImdbIndex(path, backgroundCancel, fixtures, [&](size_t count) {
+            if (count == 2000 && ++derivedStages == 2) {
+                player = background.beginPlayback();
+                requested = true;
+                parked.set_value();
+            }
+        }, [&] { ++yields; background.checkpoint(backgroundCancel); });
+        background.finish(backgroundCancel);
+        return result;
+    });
+    assert(parked.get_future().wait_for(std::chrono::seconds(30)) == std::future_status::ready);
+    background.wait();
+    assert(requested && !backgroundCancel->load());
+    assert(building.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout);
+    assert(ImdbIndex(path).query({}, {}, 60, false).total == 2504);
+    background.playbackState(player, true);
+    assert(building.get() && yields > 100 && downloads == beforeDownloads + 3);
+    assert(ImdbIndex(path).query({}, {}, 60, false).total == 2504);
+
+    // Shutdown while a new build is parked must wake and return false; the old
+    // generation is still readable, and the staged datasets need not restart.
+    background.playbackState(player, false);
+    backgroundCancel = background.start();
+    building = std::async(std::launch::async, [&] {
+        bool result = buildImdbIndex(path, backgroundCancel, fixtures, {},
+            [&] { background.checkpoint(backgroundCancel); });
+        background.finish(backgroundCancel);
+        return result;
+    });
+    background.wait();
+    assert(building.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout);
+    background.stop();
+    assert(building.wait_for(std::chrono::seconds(10)) == std::future_status::ready && !building.get());
+    assert(ImdbIndex(path).query({}, {}, 60, false).total == 2504);
 
     old.reset();
     std::filesystem::remove_all(directory);

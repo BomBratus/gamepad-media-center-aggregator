@@ -33,18 +33,23 @@ class Cache {
 public:
     static Cache& instance();
     void refresh(bool force = false);
-    void pauseForPlayback(); // UI thread, cancels the background import/download
-    void waitForPlayback();  // worker thread, waits for checkpoint/memory cleanup
-    void resumeAfterPlayback(); // UI thread, after the video view is destroyed
+    uint64_t beginPlayback(); // UI thread, parks the staging writer
+    void waitForPlayback(); // stream worker, waits for cooperative suspension
+    void playbackState(uint64_t session, bool healthy);
+    void endPlayback(uint64_t session); // after the video view is destroyed
     void query(const Filter& filter, const Cursor& cursor, size_t limit, bool random,
         std::function<void(Result)> callback, std::shared_ptr<const Snapshot> snapshot = {});
 private:
     Cache();
+    ~Cache();
+    void shutdown();
     struct State;
     std::shared_ptr<State> current();
     std::shared_ptr<State> state;
     PlaybackGate playbackGate;
+    PlaybackGate::Mode playbackMode = PlaybackGate::Mode::Foreground;
     QueryQueue queries;
+    QueryQueue builds; // never parks an addon/network worker
     bool exiting = false;
 };
 

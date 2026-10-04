@@ -157,10 +157,11 @@ struct Gzip {
         gzbuffer(file, 64 * 1024);
     }
     ~Gzip() { gzclose(file); }
-    bool line(std::string& out) {
+    bool line(std::string& out, const IndexYield& yield = {}) {
         out.clear();
         std::array<char, 4096> buffer;
         while (gzgets(file, buffer.data(), buffer.size())) {
+            if (yield && out.size() >= 64 * 1024) yield();
             out += buffer.data();
             if (!out.empty() && out.back() == '\n') {
                 out.pop_back();
@@ -190,6 +191,18 @@ double elapsed(Clock::time_point start) {
 void checkCancel(const IndexCancel& cancel) {
     if (cancel && cancel->load()) throw std::runtime_error("Archive query interrupted");
 }
+struct BuildWork {
+    IndexCancel cancel;
+    const IndexYield& yield;
+    void checkpoint() const {
+        if (yield) yield();
+        checkCancel(cancel);
+    }
+    static int sqliteProgress(void* context) noexcept {
+        try { static_cast<BuildWork*>(context)->checkpoint(); return 0; }
+        catch (...) { return 1; }
+    }
+};
 Bits universe(size_t n) {
     Bits bits((n + 63) / 64, ~uint64_t(0));
     if (n % 64) bits.back() = (uint64_t(1) << (n % 64)) - 1;
@@ -197,10 +210,12 @@ Bits universe(size_t n) {
 }
 void setBit(Bits& bits, uint32_t key) { bits[key / 64] |= uint64_t(1) << (key % 64); }
 bool hasBit(const Bits& bits, uint32_t key) { return bits[key / 64] & (uint64_t(1) << (key % 64)); }
-template<class T> std::vector<unsigned char> encode(const std::vector<T>& values) {
+template<class T> std::vector<unsigned char> encode(const std::vector<T>& values, const IndexYield& yield = {}) {
     std::vector<unsigned char> data(values.size() * sizeof(T));
-    for (size_t i = 0; i < values.size(); ++i)
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (yield && !(i % 4096)) yield();
         for (size_t b = 0; b < sizeof(T); ++b) data[i * sizeof(T) + b] = values[i] >> (8 * b);
+    }
     return data;
 }
 template<class T> std::vector<T> decode(sqlite3_stmt* stmt, int column) {
@@ -536,7 +551,7 @@ void buildLog(const std::string& phase, size_t titles, const std::string& index,
     (void)phase; (void)titles; (void)index; (void)start;
 #endif
 }
-void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<void(size_t)>& progress) {
+void buildDerived(sqlite3* db, const BuildWork& work, const std::function<void(size_t)>& progress) {
     const auto started = Clock::now();
     exec(db, "DROP TABLE IF EXISTS records; DROP TABLE IF EXISTS facets; DROP TABLE IF EXISTS genre_options;"
         "DROP TABLE IF EXISTS sort_orders; DROP TABLE IF EXISTS title_search; DROP TABLE IF EXISTS search_pairs;"
@@ -574,7 +589,7 @@ void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<vo
     exec(db, "BEGIN");
     try {
         while (titles.row()) {
-            checkCancel(cancel);
+            work.checkpoint();
             const auto year = titles.number(3), votes = titles.number(5);
             const auto rating = titles.real(4);
             if (year < 0 || year > 65535 || votes < 0 || uint64_t(votes) > UINT32_MAX ||
@@ -620,7 +635,7 @@ void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<vo
     exec(db, "BEGIN");
     try {
         for (const auto& item : facets) {
-            checkCancel(cancel); facet.text(1, item.first); blob(facet, 2, encode(item.second)); facet.run();
+            work.checkpoint(); facet.text(1, item.first); blob(facet, 2, encode(item.second, work.yield)); facet.run();
         }
         exec(db, "COMMIT");
     } catch (...) { sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr); throw; }
@@ -637,7 +652,7 @@ void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<vo
         double lastNumber = 0;
         const bool textOrder = std::string(name) == "name";
         while (sorted.row()) {
-            if (!(keys.size() % 1024)) checkCancel(cancel);
+            if (!(keys.size() % 1024)) work.checkpoint();
             auto value = sorted.text(1); // SQLite's canonical value, equality only
             if (!keys.empty() && (textOrder ? value != last : sorted.real(1) != lastNumber)) ends.push_back(keys.size());
             keys.push_back(sorted.number(0)); last = std::move(value); lastNumber = sorted.real(1);
@@ -646,10 +661,11 @@ void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<vo
         if (keys.size() != count) throw std::runtime_error("Invalid Archive sort count");
         Bits seen((count + 63) / 64);
         for (auto key : keys) {
+            if (!(key % 1024)) work.checkpoint();
             if (key >= count || hasBit(seen, key)) throw std::runtime_error("Invalid Archive sort reference");
             setBit(seen, key);
         }
-        saveSort.text(1, name); blob(saveSort, 2, encode(keys)); blob(saveSort, 3, encode(ends)); saveSort.run();
+        saveSort.text(1, name); blob(saveSort, 2, encode(keys, work.yield)); blob(saveSort, 3, encode(ends, work.yield)); saveSort.run();
         buildLog("derive", count, name, started);
     }
     buildLog("derive", count, "search-compress", started);
@@ -669,7 +685,7 @@ void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<vo
             for (unsigned b = 0; b < 4; ++b) data.push_back(value >> (8 * b));
         };
         while (names.row()) {
-            checkCancel(cancel);
+            work.checkpoint();
             const auto key = static_cast<uint32_t>(names.number(0));
             const auto name = names.text(1);
             if (key != previousKey) { titleBytes = 0; previousKey = key; }
@@ -691,7 +707,7 @@ void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<vo
     size_t chunk = 0, n = 0, written = 0, committed = 0;
     auto flush = [&] {
         if (keys.empty()) return;
-        savePosting.text(1, term); savePosting.number(2, chunk++); blob(savePosting, 3, encode(keys)); savePosting.run(); keys.clear();
+        savePosting.text(1, term); savePosting.number(2, chunk++); blob(savePosting, 3, encode(keys, work.yield)); savePosting.run(); keys.clear();
     };
     auto finish = [&] {
         if (!n) return;
@@ -700,7 +716,7 @@ void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<vo
     exec(db, "BEGIN");
     try {
         while (pairs.row()) {
-            if (!(written++ % 4096)) checkCancel(cancel);
+            if (!(written++ % 4096)) work.checkpoint();
             auto next = pairs.text(0);
             if (next != term) { finish(); term = std::move(next); chunk = n = 0; }
             keys.push_back(pairs.number(1)); ++n;
@@ -727,7 +743,11 @@ void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<vo
 } // namespace
 
 bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const DatasetDownload& download,
-        const std::function<void(size_t)>& progress) {
+        const std::function<void(size_t)>& progress, const IndexYield& yield) {
+    BuildWork work{cancel, yield};
+    if (cancel && cancel->load()) return false;
+    if (yield) yield();
+    if (cancel && cancel->load()) return false;
     const auto buildStarted = Clock::now();
     const auto staging = path + ".building";
     // Old staged schemas cannot resume into a new index format.
@@ -749,9 +769,7 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
     {
         Database connection(staging, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
         auto db = connection.db;
-        sqlite3_progress_handler(db, 1000, [](void* value) {
-            return static_cast<std::atomic_bool*>(value)->load() ? 1 : 0;
-        }, cancel.get());
+        sqlite3_progress_handler(db, 1000, BuildWork::sqliteProgress, &work);
         exec(db, "PRAGMA cache_size=-4096; PRAGMA temp_store=FILE; PRAGMA journal_mode=DELETE;"
             "CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value INTEGER);");
         if (!setting(db, "version")) setting(db, "version", 2);
@@ -776,6 +794,7 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
             // cancellation point. Skip in small blocks so playback stays first.
             std::array<char, 64 * 1024> prefix;
             for (int64_t skipped = 0; skipped < offset;) {
+                work.checkpoint();
                 if (cancel->load()) return false;
                 int bytes = gzread(input.file, prefix.data(), std::min<int64_t>(prefix.size(), offset - skipped));
                 if (bytes <= 0) throw InvalidDataset("Cannot resume IMDb dataset");
@@ -803,12 +822,11 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
                     setting(db, "offset", gztell(input.file));
                     setting(db, "indexed", indexed);
                     exec(db, "COMMIT");
-                    sqlite3_progress_handler(db, 1000, [](void* value) {
-                        return static_cast<std::atomic_bool*>(value)->load() ? 1 : 0;
-                    }, cancel.get());
+                    sqlite3_progress_handler(db, 1000, BuildWork::sqliteProgress, &work);
                     if (progress) progress(indexed);
                 };
-                while (input.line(line)) {
+                while (input.line(line, [&] { work.checkpoint(); })) {
+                    if (!(batch % 64)) work.checkpoint();
                     auto fields = split(line);
                     if (phase == 0 && fields.size() >= 3) {
                         auto votes = integer(fields[2]);
@@ -863,8 +881,8 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
         if (!setting(db, "complete")) {
             if (!setting(db, "derived_ready")) {
                 exec(db, "UPDATE titles SET score=(votes*rating+25000*coalesce((SELECT avg(rating) FROM titles WHERE votes>=1000),6.5))/(votes+25000);");
-                buildDerived(db, cancel, progress);
-                checkCancel(cancel);
+                buildDerived(db, work, progress);
+                work.checkpoint();
                 setting(db, "derived_ready", 1);
             }
             exec(db, "DROP TABLE IF EXISTS search_pairs; DROP TABLE IF EXISTS ratings;"
@@ -874,7 +892,7 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
             // SQLite's handler. Temporary peak disk is documented.
             buildLog("compact", setting(db, "browsable"), "all", buildStarted);
             exec(db, "VACUUM");
-            checkCancel(cancel);
+            work.checkpoint();
             setting(db, "refreshed", timestamp()); setting(db, "complete", 1);
         }
     }

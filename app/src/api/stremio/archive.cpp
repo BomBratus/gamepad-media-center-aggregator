@@ -3,7 +3,6 @@
 #include "api/stremio/imdb_index.hpp"
 #include "api/stremio/types.hpp"
 #include "utils/config.hpp"
-#include "utils/thread.hpp"
 #include "utils/ps4_diagnostics.hpp"
 #include <borealis/core/thread.hpp>
 #include <borealis/core/application.hpp>
@@ -15,15 +14,20 @@ namespace stremio::archive {
 namespace {
 int64_t now() { return std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()); }
 constexpr int64_t refreshAge = 7 * 86400;
-void downloadDataset(const std::string& name, const std::string& path, const IndexCancel& cancel) {
+void downloadDataset(const std::string& name, const std::string& path, const IndexCancel& cancel, PlaybackGate& gate) {
     const auto temporary = path + ".part";
     try {
         ps4diag::write("archive dataset-download begin name=" + name);
         std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
         if (!file) throw std::runtime_error("Cannot save IMDb dataset");
         HTTP request;
-        HTTP::set_option(request, HTTP::Timeout{1800000, 10000}, cancel,
-            HTTP::Header{"Accept-Encoding: identity"});
+        HTTP::set_option(request, HTTP::Timeout{0, 10000}, cancel,
+            HTTP::Header{"Accept-Encoding: identity"},
+            HTTP::Progress::Callback{[&gate, cancel, previous = curl_off_t(0)](curl_off_t, curl_off_t current) mutable {
+                const auto bytes = current > previous ? size_t(current - previous) : 0;
+                previous = current;
+                gate.checkpoint(cancel, bytes);
+            }});
         request._get("https://datasets.imdbws.com/" + name, &file);
         if (!file.good()) throw std::runtime_error("Cannot write IMDb dataset");
         file.close();
@@ -65,13 +69,15 @@ struct Cache::State {
 
 Cache& Cache::instance() { static Cache cache; return cache; }
 Cache::Cache() {
-    brls::Application::getExitEvent()->subscribe([this] {
-        exiting = true;
-        playbackGate.pause();
-        // Cancel and join both local work lifetimes before app/static teardown.
-        playbackGate.wait();
-        queries.stop();
-    });
+    brls::Application::getExitEvent()->subscribe([this] { shutdown(); });
+}
+Cache::~Cache() { shutdown(); }
+void Cache::shutdown() {
+    if (exiting) return;
+    exiting = true;
+    playbackGate.stop(); // wakes a parked or throttled build before joining
+    builds.stop();
+    queries.stop();
 }
 std::shared_ptr<Cache::State> Cache::current() {
     if (!state) {
@@ -89,13 +95,14 @@ void Cache::refresh(bool force) {
     if (job->refreshing.exchange(true)) return;
     auto cancel = playbackGate.start();
     if (!cancel) { job->refreshing = false; return; }
-    ThreadPool::instance().submit([this, job, force, cancel](HTTP&) {
+    builds.submit([this, job, force, cancel] {
         struct Release {
             std::shared_ptr<State> job;
             PlaybackGate& gate;
             IndexCancel cancel;
             ~Release() { job->refreshing = false; gate.finish(cancel); }
         } release{job, playbackGate, cancel};
+        playbackGate.checkpoint(cancel);
         if (cancel->load()) return;
         job->load();
         {
@@ -109,8 +116,12 @@ void Cache::refresh(bool force) {
         }
         try {
             ps4diag::write("archive build begin");
-            if (!buildImdbIndex(job->path, cancel, downloadDataset,
-                    [job](size_t count) { job->building = count; })) return;
+            if (!buildImdbIndex(job->path, cancel,
+                    [this](const std::string& name, const std::string& path, const IndexCancel& cancel) {
+                        playbackGate.checkpoint(cancel);
+                        downloadDataset(name, path, cancel, playbackGate);
+                    }, [job](size_t count) { job->building = count; },
+                    [this, cancel] { playbackGate.checkpoint(cancel); })) return;
             auto next = std::make_shared<Snapshot>();
             next->index = std::make_shared<ImdbIndex>(job->path);
             next->refreshed = next->index->query({}, {}, 0, false).refreshed;
@@ -136,10 +147,26 @@ void Cache::refresh(bool force) {
         }
     });
 }
-void Cache::pauseForPlayback() { playbackGate.pause(); }
+uint64_t Cache::beginPlayback() {
+    playbackMode = PlaybackGate::Mode::Parked;
+    ps4diag::write("archive playback mode=parked reason=stream-opening");
+    return playbackGate.beginPlayback();
+}
 void Cache::waitForPlayback() { playbackGate.wait(); }
-void Cache::resumeAfterPlayback() {
-    if (playbackGate.resume() && !exiting) refresh(true);
+void Cache::playbackState(uint64_t session, bool healthy) {
+    playbackGate.playbackState(session, healthy);
+    const auto after = playbackGate.mode();
+    if (playbackMode != after)
+        ps4diag::write(after == PlaybackGate::Mode::Background
+            ? "archive playback mode=background cpu-duty=5-percent download-kib-s=256"
+            : "archive playback mode=parked reason=playback-busy");
+    playbackMode = after;
+}
+void Cache::endPlayback(uint64_t session) {
+    playbackGate.endPlayback(session);
+    playbackMode = playbackGate.mode();
+    if (playbackMode == PlaybackGate::Mode::Foreground)
+        ps4diag::write("archive playback mode=foreground");
 }
 void Cache::query(const Filter& filter, const Cursor& cursor, size_t limit, bool random,
         std::function<void(Result)> callback, std::shared_ptr<const Snapshot> snapshot) {
