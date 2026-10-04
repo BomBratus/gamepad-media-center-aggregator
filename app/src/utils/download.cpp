@@ -11,6 +11,7 @@
 #include <cctype>
 
 #include <optional>
+#include "utils/serial_writer.hpp"
 
 using namespace brls::literals;  // for _i18n
 
@@ -46,14 +47,19 @@ void DownloadManager::loadIndex() {
 }
 
 void DownloadManager::saveIndex() {
-    std::string path = this->downloadDir() + "/index.json";
-    try {
-        nlohmann::json j = this->items;
-        std::ofstream f(path);
-        f << j.dump(2);
-    } catch (const std::exception& e) {
-        brls::Logger::error("Failed to save download index: {}", e.what());
-    }
+    const auto path = this->downloadDir() + "/index.json";
+    const auto snapshot = this->items; // caller holds mutex
+    filePersistence().submit([path, snapshot] {
+        try {
+            nlohmann::json j = snapshot;
+            std::ofstream f(path + ".tmp");
+            f << j.dump(2); f.close();
+            if (!f || std::rename((path + ".tmp").c_str(), path.c_str()) != 0)
+                throw std::runtime_error("Cannot publish download index");
+        } catch (const std::exception& e) {
+            brls::Logger::error("Failed to save download index: {}", e.what());
+        }
+    }, path);
 }
 
 void DownloadManager::addDownload(const std::string& itemId) {
@@ -209,7 +215,7 @@ void DownloadManager::removeDownload(const std::string& itemId) {
 
     if (!wasActive) {
         std::string dir = this->downloadDir() + "/" + itemId;
-        brls::async([dir]() {
+        filePersistence().submit([dir]() {
             try {
                 if (fs::exists(dir)) fs::remove_all(dir);
             } catch (const std::exception& e) {
@@ -500,7 +506,7 @@ void DownloadManager::doDownload(DownloadItem& item) {
                     this->saveIndex();
                     if (removed) {
                         std::string dir = this->downloadDir() + "/" + itemId;
-                        brls::async([dir]() {
+                        filePersistence().submit([dir]() {
                             try {
                                 if (fs::exists(dir)) fs::remove_all(dir);
                             } catch (const std::exception& e) {
@@ -516,12 +522,17 @@ void DownloadManager::doDownload(DownloadItem& item) {
                             item.filePath = fileName;
 
                             std::string metaPath = this->downloadDir() + "/" + itemId + "/metadata.json";
-                            try {
-                                nlohmann::json j = item;
-                                std::ofstream f(metaPath);
-                                f << j.dump(2);
-                            } catch (...) {
-                            }
+                            filePersistence().submit([metaPath, snapshot = item] {
+                                try {
+                                    nlohmann::json j = snapshot;
+                                    std::ofstream f(metaPath + ".tmp");
+                                    f << j.dump(2); f.close();
+                                    if (!f || std::rename((metaPath + ".tmp").c_str(), metaPath.c_str()) != 0)
+                                        throw std::runtime_error("Cannot publish download metadata");
+                                } catch (const std::exception& e) {
+                                    brls::Logger::warning("Download metadata: {}", e.what());
+                                }
+                            }, metaPath);
                             break;
                         }
                     }

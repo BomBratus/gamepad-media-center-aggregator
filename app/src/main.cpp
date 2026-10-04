@@ -9,6 +9,7 @@
 #include "utils/image_cache.hpp"
 #include "utils/network_state.hpp"
 #include "utils/thread.hpp"
+#include "utils/serial_writer.hpp"
 
 #include "view/svg_image.hpp"
 #include "view/disclosure_cell.hpp"
@@ -172,6 +173,7 @@ int main(int argc, char* argv[]) {
     DownloadManager::instance().shutdown();
     stremioOperations().stop();
     ThreadPool::instance().stop();
+    filePersistence().flush();
 
     conf.checkRestart(argv);
     // Exit

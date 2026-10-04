@@ -50,9 +50,10 @@ jobs:
           content_id="$(sed -n 's/^set(PS4_CONTENT_ID "\([^"]*\)")$/\1/p' CMakeLists.txt | head -n1)"
           test -n "$content_id"
           [[ "$content_id" =~ ^[A-Z0-9]{6}-[A-Z0-9]{9}_00-[A-Z0-9]{16}$ ]]
-          digits="${version/.}"
-          suffix="${digits}00"
-          pkg="IV0001-GMCA00000_00-GMCA000000${suffix}.pkg"
+          # Match gmca_ps4_pkg.cmake, including the major-version rollover.
+          suffix="${version/./0}00000000"
+          suffix="${suffix:0:7}"
+          pkg="IV0001-GMCA00000_00-GMCA00000${suffix}.pkg"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "content_id=$content_id" >> "$GITHUB_OUTPUT"
           echo "pkg=$pkg" >> "$GITHUB_OUTPUT"

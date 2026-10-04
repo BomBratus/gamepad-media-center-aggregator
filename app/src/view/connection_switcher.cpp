@@ -90,7 +90,8 @@ static void connectWithUser(const AppUser& u) {
 
     brls::async([u, unreachable]() {
         try {
-            const auto* selected = selectedStremioServer(AppConfig::instance().getServers(), u.server_id);
+            const auto servers = AppConfig::instance().getServers();
+            const auto* selected = selectedStremioServer(servers, u.server_id);
             if (!selected) throw std::runtime_error(unreachable);
             AppServer target = *selected;
             std::string base = target.urls.empty() ? std::string() : target.urls.front();
