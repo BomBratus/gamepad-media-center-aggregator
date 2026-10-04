@@ -26,7 +26,7 @@ void downloadDataset(const std::string& name, const std::string& path, const Ind
             HTTP::Progress::Callback{[&gate, cancel, previous = curl_off_t(0)](curl_off_t, curl_off_t current) mutable {
                 const auto bytes = current > previous ? size_t(current - previous) : 0;
                 previous = current;
-                gate.checkpoint(cancel, bytes);
+                gate.checkpoint(cancel, bytes, true);
             }});
         request._get("https://datasets.imdbws.com/" + name, &file);
         if (!file.good()) throw std::runtime_error("Cannot write IMDb dataset");

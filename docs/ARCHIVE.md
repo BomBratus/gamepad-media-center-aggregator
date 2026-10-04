@@ -169,7 +169,10 @@ position, writer, derived-index statements and progress remain alive.
 
 After 10 seconds of healthy loaded playback, work continues in the background
 with a budget of 2 ms of work followed by 38 ms of rest (approximately 5% of one
-worker). Download progress is paced to approximately 256 KiB/s. CPU/import loops
+worker). If an operation overruns the 2 ms work budget, the following rest
+scales with its elapsed time; notifications do not discard that rest deadline.
+Network idle time between curl callbacks is excluded from the CPU budget.
+Download progress is paced to approximately 256 KiB/s. CPU/import loops
 and SQLite progress callbacks yield; curl progress callbacks park/throttle
 transfers. Download total timeout is disabled because playback can park a
 transfer indefinitely; connection establishment retains its 10-second timeout.
