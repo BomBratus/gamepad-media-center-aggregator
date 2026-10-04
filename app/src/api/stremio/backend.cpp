@@ -24,6 +24,7 @@
 #include <fstream>
 #include <map>
 #include <mutex>
+#include "utils/executor.hpp"
 #include <set>
 #include <stdexcept>
 
@@ -55,6 +56,16 @@ void emptyContainer(media::Then<media::Container<T>> then) {
 // ---- account datastore helpers (library = watchlist + playback state) ----------
 
 /// authKey of the connected account (empty when navigating without one).
+// Network orchestration is bounded independently of its leaf HTTP fan-out.
+// Rejection still completes the caller's UI lifetime/error path.
+void stremioAsync(media::OnError error, Executor::Task task) {
+    try { stremioOperations().submit(std::move(task), TaskPriority::Interactive); }
+    catch (const std::exception& ex) {
+        if (error) brls::sync(std::bind(error, std::string(ex.what())));
+        else brls::Logger::warning("stremio scheduling failed: {}", ex.what());
+    }
+}
+
 std::string accountKey() { return AppConfig::instance().getToken(); }
 
 /// Stremio's account library keeps playback state at the SERIES level. Its
@@ -1022,7 +1033,7 @@ void StremioBackend::listSections(media::Then<media::Container<media::Section>> 
     // ONE sidebar section per content type (Films, Séries), plus an Anime
     // category that aggregates catalogs explicitly identified as anime.
     L10n loc = loadL10n();
-    brls::async([engine = this->engine, loc, then, error]() {
+    stremioAsync(error, [engine = this->engine, loc, then, error]() {
         try {
             engine->ensureLoaded();
             media::Container<media::Section> c;
@@ -1072,7 +1083,7 @@ void StremioBackend::getHomeHubs(
     int count, bool, media::Then<media::Container<media::Hub>> then, media::OnError error) {
     int cnt = std::max(0, count);
     L10n loc = loadL10n();
-    brls::async([engine = this->engine, cnt, loc, then, error]() {
+    stremioAsync(error, [engine = this->engine, cnt, loc, then, error]() {
         try {
             engine->ensureLoaded();
             // Interleave movie, series and anime catalogs before the Home row cap.
@@ -1126,7 +1137,7 @@ void StremioBackend::getSectionHubs(
     std::string stype = sectionId;  // "movie" | "series" | synthetic "anime"
     int cnt = std::max(0, count);
     L10n loc = loadL10n();
-    brls::async([engine = this->engine, stype, cnt, loc, then, error]() {
+    stremioAsync(error, [engine = this->engine, stype, cnt, loc, then, error]() {
         try {
             engine->ensureLoaded();
             media::Container<media::Hub> out;
@@ -1191,7 +1202,7 @@ void StremioBackend::getTopRated(media::MediaKind kind, size_t start, size_t siz
     }
     const bool series = kind == media::MediaKind::Show;
     const size_t startCopy = start, sizeCopy = size;
-    brls::async([kind, series, startCopy, sizeCopy, then, error]() {
+    stremioAsync(error, [kind, series, startCopy, sizeCopy, then, error]() {
         try {
             const int64_t now = (int64_t)std::time(nullptr);
             std::vector<media::Item> cached;
@@ -1257,7 +1268,7 @@ void StremioBackend::getContinueWatching(
     }
     int cnt = std::max(0, count);
     std::string title = "main/home/resume"_i18n;  // resolved on the UI thread
-    brls::async([engine = this->engine, key, cnt, title, then, error]() {
+    stremioAsync(error, [engine = this->engine, key, cnt, title, then, error]() {
         try {
             nlohmann::json items = nlohmann::json::array();
             try {
@@ -1398,7 +1409,7 @@ void StremioBackend::getLibraryGrid(const std::string& sectionId, const media::G
     // "base\ttype\tcatId[\tgenre]" from a hub or genre-filtered catalog.
     std::string sid = sectionId, genreId = q.genreId;
     size_t startCopy = start;
-    brls::async([engine = this->engine, sid, genreId, startCopy, then, error]() {
+    stremioAsync(error, [engine = this->engine, sid, genreId, startCopy, then, error]() {
         try {
             engine->ensureLoaded();
             std::string base, ctype, catId, routeGenre;
@@ -1499,7 +1510,7 @@ void StremioBackend::getHubPage(
     // Page via skip while preserving an optional catalog genre filter.
     std::string key = hubKey;
     size_t startCopy = start;
-    brls::async([engine = this->engine, key, startCopy, then, error]() {
+    stremioAsync(error, [engine = this->engine, key, startCopy, then, error]() {
         try {
             engine->ensureLoaded();
             std::string base, ctype, catId, genre;
@@ -1542,7 +1553,7 @@ void StremioBackend::getItemDetail(
 
 void StremioBackend::completePlaybackSources(media::Item item,
     media::Then<media::Item> then, media::OnError error) {
-    brls::async([engine = this->engine, item = std::move(item), then, error]() mutable {
+    stremioAsync(error, [engine = this->engine, item = std::move(item), then, error]() mutable {
         try {
             engine->ensureLoaded();
             const auto id = parseId(item.ratingKey);
@@ -1573,7 +1584,7 @@ void StremioBackend::getDetail(
     std::string metaId = pid.baseId;  // movie/show id without any season:episode suffix
     std::string ratingKey = id;
 
-    brls::async([engine = this->engine, ratingKey, full, reuseSource, isEpisode, playable, metaType, metaId, then, error]() {
+    stremioAsync(error, [engine = this->engine, ratingKey, full, reuseSource, isEpisode, playable, metaType, metaId, then, error]() {
         try {
             engine->ensureLoaded();
             auto addons = engine->addonsFor("meta", metaType, metaId);
@@ -1661,7 +1672,7 @@ void StremioBackend::getChildren(
     }
 
     std::string ratingKeyCopy = id;
-    brls::async([engine = this->engine, ratingKeyCopy, stremioType, stremioId, then, error]() {
+    stremioAsync(error, [engine = this->engine, ratingKeyCopy, stremioType, stremioId, then, error]() {
         try {
             engine->ensureLoaded();
             // Both "series" (show -> seasons) and "season" (-> episodes) resolve
@@ -1748,7 +1759,7 @@ void StremioBackend::getAllEpisodes(const std::string& showId, bool,
     std::string baseId = (pid.episode >= 0 || pid.season >= 0) ? pid.baseId : pid.stremioId;
     std::string idCopy = showId;
     std::string metaType = pid.stremioType == "anime" ? "anime" : "series";
-    brls::async([engine = this->engine, idCopy, baseId, metaType, then, error]() {
+    stremioAsync(error, [engine = this->engine, idCopy, baseId, metaType, then, error]() {
         try {
             engine->ensureLoaded();
             auto addons = engine->addonsFor("meta", metaType, baseId);
@@ -1829,7 +1840,7 @@ void StremioBackend::search(const std::string& query, media::MediaKind kind, int
     std::string q = query;
     int lim = limit;
     std::set<std::string> wantTypes = kindToStremioTypes(kind);
-    brls::async([engine = this->engine, q, lim, wantTypes, then, error]() {
+    stremioAsync(error, [engine = this->engine, q, lim, wantTypes, then, error]() {
         try {
             engine->ensureLoaded();
             auto originalCatalogs = engine->allCatalogs();
@@ -1906,7 +1917,7 @@ void StremioBackend::getGenres(const std::string& sectionId, media::MediaKind,
         {"Sci-Fi", "main/stremio/genre/scifi"_i18n}, {"Sport", "main/stremio/genre/sport"_i18n},
         {"Thriller", "main/stremio/genre/thriller"_i18n}, {"War", "main/stremio/genre/war"_i18n},
         {"Western", "main/stremio/genre/western"_i18n}};
-    brls::async([engine = this->engine, stype, gmap, then, error]() {
+    stremioAsync(error, [engine = this->engine, stype, gmap, then, error]() {
         try {
             engine->ensureLoaded();
             media::Container<media::Section> c;
@@ -2048,7 +2059,7 @@ void StremioBackend::getSubtitles(const media::Item& item, const media::Media& v
 
     std::string type = pid.stremioType;
     std::string id = pid.stremioId;  // movie tt-id, or episode "tt…:S:E"
-    brls::async([engine = this->engine, type, id, hints, then, error]() {
+    stremioAsync(error, [engine = this->engine, type, id, hints, then, error]() {
         try {
             engine->ensureLoaded();
             std::vector<media::Stream> subs = resolveAllSubtitles(*engine, type, id, hints);
@@ -2155,7 +2166,7 @@ void StremioBackend::listWatchlist(const std::string&, media::MediaKind kind, si
     }
     std::set<std::string> wantTypes = kindToStremioTypes(kind);
     size_t s = start, n = size;
-    brls::async([key, wantTypes, s, n, then, error]() {
+    stremioAsync(error, [key, wantTypes, s, n, then, error]() {
         try {
             nlohmann::json items = stremio::datastoreGet(key);
             std::vector<media::Item> all;
@@ -2183,7 +2194,7 @@ void StremioBackend::getWatchlistState(const media::Item& item, media::Then<bool
         return;
     }
     std::string baseId = parseId(item.ratingKey).baseId;
-    brls::async([key, baseId, then, error]() {
+    stremioAsync(error, [key, baseId, then, error]() {
         try {
             nlohmann::json items = stremio::datastoreGet(key);
             bool in = false;

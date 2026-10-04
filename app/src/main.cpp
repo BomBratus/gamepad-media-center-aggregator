@@ -169,6 +169,8 @@ int main(int argc, char* argv[]) {
 #endif
     }
 
+    DownloadManager::instance().shutdown();
+    stremioOperations().stop();
     ThreadPool::instance().stop();
 
     conf.checkRestart(argv);

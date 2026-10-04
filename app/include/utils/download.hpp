@@ -4,6 +4,7 @@
 #include <borealis/core/event.hpp>
 #include <nlohmann/json.hpp>
 #include <atomic>
+#include "utils/executor.hpp"
 #include <mutex>
 #include <string>
 #include <vector>
@@ -58,6 +59,8 @@ public:
     /// Re-queues a failed download (keeps its metadata/partKey).
     void retryDownload(const std::string& itemId);
     void resumeQueue();
+    void shutdown();
+    ~DownloadManager() { shutdown(); }
 
     bool isDownloaded(const std::string& itemId) const;
     bool isDownloading(const std::string& itemId) const;
@@ -90,6 +93,8 @@ private:
     std::vector<DownloadItem> items;
     std::shared_ptr<std::atomic_bool> currentCancel;
     bool downloading = false;
+    bool stopping = false;
+    Executor transfers;
 
     ProgressEvent progressEvent;
     StatusEvent statusEvent;
