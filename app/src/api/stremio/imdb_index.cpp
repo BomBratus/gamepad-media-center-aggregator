@@ -194,6 +194,14 @@ void checkCancel(const IndexCancel& cancel) {
 struct BuildWork {
     IndexCancel cancel;
     const IndexYield& yield;
+    const BuildTiming& timing;
+    void measured(const std::string& phase, Clock::time_point started) const {
+        const auto ms = elapsed(started);
+#if defined(__PS4__)
+        ps4diag::write("archive build timing phase=" + phase + " ms=" + std::to_string(ms));
+#endif
+        if (timing) timing(phase, ms);
+    }
     void checkpoint() const {
         if (yield) yield();
         checkCancel(cancel);
@@ -561,7 +569,7 @@ void buildDerived(sqlite3* db, const BuildWork& work, const std::function<void(s
         "CREATE TABLE genre_options(name TEXT PRIMARY KEY) WITHOUT ROWID;"
         "CREATE TABLE sort_orders(name TEXT PRIMARY KEY,keys BLOB,ends BLOB) WITHOUT ROWID;"
         "CREATE TABLE title_search(title_key INTEGER,name TEXT,PRIMARY KEY(title_key,name)) WITHOUT ROWID;"
-        "CREATE TABLE search_pairs(term TEXT,title_key INTEGER,PRIMARY KEY(term,title_key)) WITHOUT ROWID;"
+        "CREATE TABLE search_pairs(term TEXT,title_key INTEGER);"
         "CREATE TABLE search_terms(term TEXT PRIMARY KEY,count INTEGER) WITHOUT ROWID;"
         "CREATE TABLE search_text(bucket INTEGER,chunk INTEGER,data BLOB,PRIMARY KEY(bucket,chunk)) WITHOUT ROWID;"
         "CREATE TABLE search_postings(term TEXT,chunk INTEGER,data BLOB,PRIMARY KEY(term,chunk)) WITHOUT ROWID;"
@@ -580,10 +588,16 @@ void buildDerived(sqlite3* db, const BuildWork& work, const std::function<void(s
     if (genreCount > maxGenres) throw std::runtime_error("Archive genre budget exceeded");
     Statement titles(db, "SELECT id,kind,name,year,rating,votes,score FROM titles WHERE adult=0 ORDER BY id");
     Statement insert(db, "INSERT INTO records VALUES(?,?,?,?,?,?,?,?)");
-    Statement genres(db, "SELECT genre FROM genres WHERE id=?");
-    Statement aliases(db, "SELECT name FROM aliases WHERE id=?");
+    Statement genres(db, "SELECT id,genre FROM genres ORDER BY id,genre");
+    bool hasGenre = genres.row();
+    Statement aliases(db, "SELECT id,name FROM aliases ORDER BY id,name");
+    bool hasAlias = aliases.row();
     Statement search(db, "INSERT OR IGNORE INTO title_search VALUES(?,?)");
-    Statement pair(db, "INSERT OR IGNORE INTO search_pairs VALUES(?,?)");
+    Statement pair(db, "INSERT INTO search_pairs VALUES(?,?)");
+    // Views point into reusable normalized names, keeping even alias-heavy
+    // titles bounded without allocating a tree node for every short gram.
+    std::vector<std::string> names;
+    std::vector<std::string_view> terms;
     uint32_t key = 0;
     buildLog("derive", count, "facets+search-pairs", started);
     exec(db, "BEGIN");
@@ -606,24 +620,38 @@ void buildDerived(sqlite3* db, const BuildWork& work, const std::function<void(s
                 for (unsigned bit = 0; value; ++bit, value >>= 1)
                     if (value & 1) setBit(facets.at(std::string(spec.first) + ":" + std::to_string(bit)), key);
             }
-            genres.text(1, titles.text(0));
-            while (genres.row()) setBit(facets.at("genre:" + lower(genres.text(0))), key);
-            sqlite3_reset(genres.stmt); sqlite3_clear_bindings(genres.stmt);
-            std::set<std::string> terms;
+            const auto id = titles.text(0);
+            while (hasGenre && genres.text(0) < id) { work.checkpoint(); hasGenre = genres.row(); }
+            while (hasGenre && genres.text(0) == id) {
+                setBit(facets.at("genre:" + lower(genres.text(1))), key);
+                hasGenre = genres.row();
+            }
+            names.clear(); terms.clear();
+            size_t titleBytes = 0;
             auto addName = [&](const std::string& name) {
                 if (name.size() > 4096) throw std::runtime_error("Archive name budget exceeded");
-                search.number(1, key); search.text(2, lower(name)); search.run();
-                for (size_t width = 1; width <= 3; ++width)
-                    for (const auto& term : grams(lower(name), width)) {
-                        terms.insert(term);
-                        if (terms.size() > 65536) throw std::runtime_error("Archive title search budget exceeded");
-                    }
+                titleBytes += name.size() + 8;
+                if (titleBytes > 256 * 1024) throw std::runtime_error("Archive title names budget exceeded");
+                names.push_back(lower(name));
+                search.number(1, key); search.text(2, names.back()); search.run();
             };
             addName(titles.text(2));
-            aliases.text(1, titles.text(0));
-            while (aliases.row()) addName(aliases.text(0));
-            sqlite3_reset(aliases.stmt); sqlite3_clear_bindings(aliases.stmt);
-            for (const auto& term : terms) { pair.text(1, term); pair.number(2, key); pair.run(); }
+            while (hasAlias && aliases.text(0) < id) { work.checkpoint(); hasAlias = aliases.row(); }
+            while (hasAlias && aliases.text(0) == id) {
+                addName(aliases.text(1)); hasAlias = aliases.row();
+            }
+            // Names are now stable: byte substrings preserve the existing
+            // ASCII lowercase / UTF-8 byte matching semantics exactly.
+            for (const auto& name : names) {
+                work.checkpoint();
+                for (size_t width = 1; width <= 3; ++width)
+                    for (size_t i = 0; i + width <= name.size(); ++i)
+                        terms.emplace_back(name.data() + i, width);
+                std::sort(terms.begin(), terms.end());
+                terms.erase(std::unique(terms.begin(), terms.end()), terms.end());
+                if (terms.size() > 65536) throw std::runtime_error("Archive title search budget exceeded");
+            }
+            for (const auto term : terms) { pair.text(1, term); pair.number(2, key); pair.run(); }
             if (++key % 2000 == 0) {
                 exec(db, "COMMIT"); if (progress) progress(key); exec(db, "BEGIN");
             }
@@ -631,6 +659,8 @@ void buildDerived(sqlite3* db, const BuildWork& work, const std::function<void(s
         exec(db, "COMMIT");
         if (progress) progress(key);
     } catch (...) { sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr); throw; }
+    work.measured("derived-records-facets-search-pairs", started);
+    auto phaseStarted = Clock::now();
     Statement facet(db, "INSERT INTO facets VALUES(?,?)");
     exec(db, "BEGIN");
     try {
@@ -640,10 +670,12 @@ void buildDerived(sqlite3* db, const BuildWork& work, const std::function<void(s
         exec(db, "COMMIT");
     } catch (...) { sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr); throw; }
     facets.clear();
+    work.measured("facets-write", phaseStarted);
     buildLog("derive", count, "facets-complete", started);
     // Build all order arrays once, disk-backed SQLite sort during staging only.
     Statement saveSort(db, "INSERT INTO sort_orders VALUES(?,?,?)");
     for (auto name : {"year", "rating", "votes", "name"}) {
+        phaseStarted = Clock::now();
         const auto column = std::string(name) == "rating" ? "score" : std::string(name) == "name" ? "lower(name)" : name;
         Statement sorted(db, "SELECT title_key," + std::string(column) + " FROM records ORDER BY " + column + ",id");
         std::vector<uint32_t> keys, ends;
@@ -667,10 +699,12 @@ void buildDerived(sqlite3* db, const BuildWork& work, const std::function<void(s
         }
         saveSort.text(1, name); blob(saveSort, 2, encode(keys, work.yield)); blob(saveSort, 3, encode(ends, work.yield)); saveSort.run();
         buildLog("derive", count, name, started);
+        work.measured(std::string("sort-") + name, phaseStarted);
     }
     buildLog("derive", count, "search-compress", started);
     // Pack searchable names into bounded blobs, indexed by key/256. This is
     // staging-only sequential work; strings remain on disk during browsing.
+    phaseStarted = Clock::now();
     {
         Statement names(db, "SELECT title_key,name FROM title_search ORDER BY title_key,name");
         Statement save(db, "INSERT INTO search_text VALUES(?,?,?)");
@@ -698,6 +732,8 @@ void buildDerived(sqlite3* db, const BuildWork& work, const std::function<void(s
         flush();
     }
     buildLog("derive", count, "search-text", started);
+    work.measured("search-text", phaseStarted);
+    phaseStarted = Clock::now();
     // Compress each sorted posting into fixed-size little-endian chunks.
     Statement pairs(db, "SELECT term,title_key FROM search_pairs ORDER BY term,title_key");
     Statement savePosting(db, "INSERT INTO search_postings VALUES(?,?,?)");
@@ -728,6 +764,8 @@ void buildDerived(sqlite3* db, const BuildWork& work, const std::function<void(s
         }
         finish(); exec(db, "COMMIT");
     } catch (...) { sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr); throw; }
+    work.measured("postings", phaseStarted);
+    phaseStarted = Clock::now();
     buildLog("validate", count, "all", started);
     // Validate every reference and array before marking complete or publishing.
     Statement integrity(db, "PRAGMA quick_check");
@@ -739,12 +777,13 @@ void buildDerived(sqlite3* db, const BuildWork& work, const std::function<void(s
     if (!postingCounts.row() || postingCounts.number(0) != int64_t(written)) throw std::runtime_error("Invalid Archive posting counts");
     setting(db, "browsable", count);
     setting(db, "derived_ms", static_cast<int64_t>(elapsed(started)));
+    work.measured("validation", phaseStarted);
 }
 } // namespace
 
 bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const DatasetDownload& download,
-        const std::function<void(size_t)>& progress, const IndexYield& yield) {
-    BuildWork work{cancel, yield};
+        const std::function<void(size_t)>& progress, const IndexYield& yield, const BuildTiming& timing) {
+    BuildWork work{cancel, yield, timing};
     if (cancel && cancel->load()) return false;
     if (yield) yield();
     if (cancel && cancel->load()) return false;
@@ -783,11 +822,14 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
         for (int phase = static_cast<int>(setting(db, "phase")); phase < 3; ++phase) {
             buildLog("import", setting(db, "indexed"), datasets[phase], buildStarted);
             if (cancel->load()) return false;
+            const auto downloadStarted = Clock::now();
             const auto gzipPath = path + "." + datasets[phase];
             if (!std::ifstream(gzipPath, std::ios::binary).good()) {
                 download(datasets[phase], gzipPath, cancel);
                 if (cancel->load()) return false;
             }
+            work.measured(std::string("download-") + datasets[phase], downloadStarted);
+            const auto importStarted = Clock::now();
             Gzip input(gzipPath);
             auto offset = setting(db, "offset");
             // gzseek can spend a long time inflating a large prefix without a
@@ -875,6 +917,7 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
                 exec(db, "COMMIT");
                 if (progress) progress(indexed);
             } catch (...) { sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr); throw; }
+            work.measured(std::string("import-") + datasets[phase], importStarted);
         }
         if (cancel->load()) return false;
         // Derived indexes are restartable, never exposed during their build.
@@ -891,7 +934,9 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
             // Compact freed staging pages before publication, cancellable by
             // SQLite's handler. Temporary peak disk is documented.
             buildLog("compact", setting(db, "browsable"), "all", buildStarted);
+            const auto compactStarted = Clock::now();
             exec(db, "VACUUM");
+            work.measured("vacuum", compactStarted);
             work.checkpoint();
             setting(db, "refreshed", timestamp()); setting(db, "complete", 1);
         }
@@ -903,6 +948,7 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
     if (std::rename(staging.c_str(), path.c_str()) != 0) throw std::runtime_error("Cannot publish IMDb index");
     for (auto name : {"title.ratings.tsv.gz", "title.basics.tsv.gz", "title.akas.tsv.gz"})
         std::remove((path + "." + name).c_str());
+    work.measured("total", buildStarted);
     return true;
     } catch (const InvalidDataset&) {
         // A malformed/truncated provider response must not poison every retry.
