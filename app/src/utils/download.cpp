@@ -73,8 +73,6 @@ void DownloadManager::addDownload(const std::string& itemId) {
         itemId, true,
         [this](const media::Item& item) {
 
-            std::lock_guard<std::mutex> lock(this->mutex);
-
             DownloadItem dl;
             dl.itemId = item.ratingKey;
             dl.name = item.title;
@@ -104,6 +102,9 @@ void DownloadManager::addDownload(const std::string& itemId) {
             OfflineLibrary::instance().putItem(item);
             dl.status = DownloadStatus::Queued;
 
+            std::lock_guard<std::mutex> lock(this->mutex);
+            for (const auto& existing : this->items)
+                if (existing.itemId == dl.itemId) return;
             this->items.push_back(dl);
             this->saveIndex();
             brls::Logger::info("Download queued: {}", item.title);
@@ -121,13 +122,6 @@ void DownloadManager::addDownload(const media::Item& item, const std::string& pa
         brls::Application::notify("main/download/failed"_i18n);
         return;
     }
-    std::lock_guard<std::mutex> lock(this->mutex);
-    for (auto& existing : this->items) {
-        if (existing.itemId == item.ratingKey) {
-            brls::Logger::info("Already exists: {}", item.ratingKey);
-            return;
-        }
-    }
     DownloadItem dl;
     dl.itemId = item.ratingKey;
     dl.name = item.title;
@@ -143,6 +137,9 @@ void DownloadManager::addDownload(const media::Item& item, const std::string& pa
     dl.partKey = partKey;
     OfflineLibrary::instance().putItem(item);
     dl.status = DownloadStatus::Queued;
+    std::lock_guard<std::mutex> lock(this->mutex);
+    for (const auto& existing : this->items)
+        if (existing.itemId == dl.itemId) return;
     this->items.push_back(dl);
     this->saveIndex();
     brls::Logger::info("Download queued (explicit source): {}", item.title);

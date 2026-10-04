@@ -61,6 +61,7 @@ private:
     std::string metaPath(const std::string& ratingKey) const;
 
     mutable std::mutex mutex;
+    uint64_t revision = 0;
     std::vector<media::Item> nodes;    // raw persisted snapshots
     std::vector<media::Item> derived;  // nodes + synthesized ancestors
 };

@@ -1,13 +1,12 @@
 #include <borealis/core/logger.hpp>
 #include <fmt/format.h>
 #include "utils/thread.hpp"
-#include "utils/config.hpp"
+#include <algorithm>
+#include <stdexcept>
 #include "api/http.hpp"
 
-constexpr std::chrono::milliseconds max_idle_time{60000};
-
 #ifdef BOREALIS_USE_STD_THREAD
-size_t ThreadPool::max_thread_num = std::thread::hardware_concurrency();
+size_t ThreadPool::max_thread_num = std::min<size_t>(4, std::max(1u, std::thread::hardware_concurrency()));
 #else
 size_t ThreadPool::max_thread_num = 4;
 #endif
@@ -16,17 +15,20 @@ ThreadPool::ThreadPool() {
     this->start(max_thread_num > 0 ? max_thread_num : 1);
 }
 
-ThreadPool::~ThreadPool() {}
+ThreadPool::~ThreadPool() { stop(); }
 
 void ThreadPool::start(size_t num) {
+    std::lock_guard<std::mutex> locker(this->threadMutex);
+    if (isStop) throw std::runtime_error("Cannot restart stopped ThreadPool");
+    num = std::clamp<size_t>(num, 1, 4);
     while (this->threads.size() < num) {
 #ifdef BOREALIS_USE_STD_THREAD
         Thread th = std::make_shared<std::thread>(task_loop, this);
 #else
         Thread th = 0;
-        pthread_create(&th, nullptr, task_loop, this);
+        if (pthread_create(&th, nullptr, task_loop, this) != 0)
+            throw std::runtime_error("Cannot create ThreadPool worker");
 #endif
-        std::lock_guard<std::mutex> locker(this->threadMutex);
         this->threads.push_back(th);
     }
     brls::Logger::info("ThreadPool start {}", this->threads.size());
@@ -35,22 +37,8 @@ void ThreadPool::start(size_t num) {
 void *ThreadPool::task_loop(void *ptr) {
     ThreadPool *p = reinterpret_cast<ThreadPool *>(ptr);
     HTTP s;
-    while (!p->isStop.load()) {
-        Task task;
-
-        {
-            std::unique_lock<std::mutex> locker(p->taskMutex);
-            p->taskCond.wait_for(locker, std::chrono::milliseconds(max_idle_time),
-                [p]() { return p->isStop.load() || !p->tasks.empty(); });
-
-            if (p->tasks.empty()) {
-                continue;
-            }
-
-            task = std::move(p->tasks.front());
-            p->tasks.pop_front();
-        }
-
+    Task task;
+    while (p->tasks.take(task)) {
         if (task) {
             try {
                 task(s);
@@ -65,15 +53,21 @@ void *ThreadPool::task_loop(void *ptr) {
 }
 
 void ThreadPool::stop() {
-    this->isStop.store(true);
-    this->taskCond.notify_all();
-
-    for (auto &th : this->threads) {
+    std::lock_guard<std::mutex> stopLock(stopMutex);
+    std::list<Thread> joining;
+    {
+        std::lock_guard<std::mutex> locker(threadMutex);
+        if (isStop) return;
+        isStop = true;
+        tasks.stop();
+        joining.swap(threads);
+    }
+    // Worker code can inspect size without waiting behind its own join.
+    for (auto& th : joining) {
 #ifdef BOREALIS_USE_STD_THREAD
         th->join();
 #else
         pthread_join(th, nullptr);
 #endif
     }
-    threads.clear();
 }
