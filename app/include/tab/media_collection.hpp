@@ -5,6 +5,7 @@
 #pragma once
 
 #include <view/auto_tab_frame.hpp>
+#include "utils/request_context.hpp"
 
 class RecyclingGrid;
 class MediaFilter;
@@ -22,6 +23,7 @@ public:
     static void clearPref() { customPrefs.clear(); }
 
 private:
+    gmca::LatestRequest catalogRequest;
     BRLS_BIND(RecyclingGrid, recycler, "media/series");
     BRLS_BIND(AutoTabFrame, tabFrame, "media/tabFrame");
 

@@ -356,10 +356,13 @@ void MediaCollection::doRequest() {
         q.kind = media::MediaKind::Artist;
     // photo / collection: no type= filter
 
+    const auto request = catalogRequest.next();
+    gmca::RequestBinding binding(request);
     ASYNC_RETAIN
     size_t reqStart = this->startIndex;
-    auto onItems = [ASYNC_TOKEN, reqStart](const media::Container<media::Item>& r) {
+    auto onItems = [ASYNC_TOKEN, reqStart, request](const media::Container<media::Item>& r) {
             ASYNC_RELEASE
+            if (gmca::cancelled(request)) return;
             const bool stremioPagination =
                 AppConfig::instance().backend().type() == media::BackendType::Stremio;
             this->startIndex = reqStart + (stremioPagination ? r.Items.size() : this->pageSize);
@@ -404,8 +407,9 @@ void MediaCollection::doRequest() {
                 }
             }
     };
-    auto onError = [ASYNC_TOKEN, reqStart](const std::string& ex) {
+    auto onError = [ASYNC_TOKEN, reqStart, request](const std::string& ex) {
         ASYNC_RELEASE
+        if (gmca::cancelled(request)) return;
         if (reqStart > 0) {
             brls::Application::notify(ex);
         } else {
@@ -514,6 +518,8 @@ public:
     }
 
     void doRequest() {
+        const auto request = catalogRequest.next();
+        gmca::RequestBinding binding(request);
         ASYNC_RETAIN
         size_t reqStart = this->start;
         media::GridQuery q;
@@ -522,8 +528,9 @@ public:
         else if (this->itemType == media::mediaTypeShow)
             q.kind = media::MediaKind::Show;
         AppConfig::instance().backend().getLibraryGrid(this->catalogKey, q, this->start, this->pageSize,
-            [ASYNC_TOKEN, reqStart](const media::Container<media::Item>& r) {
+            [ASYNC_TOKEN, reqStart, request](const media::Container<media::Item>& r) {
                 ASYNC_RELEASE
+                if (gmca::cancelled(request)) return;
                 this->start = reqStart + r.Items.size();
                 if (r.TotalRecordCount == 0 && reqStart == 0) {
                     this->setEmpty();
@@ -534,13 +541,15 @@ public:
                     if (dataSrc->appendUniqueData(r.Items) > 0) this->notifyDataChanged();
                 }
             },
-            [ASYNC_TOKEN, reqStart](const std::string& ex) {
+            [ASYNC_TOKEN, reqStart, request](const std::string& ex) {
                 ASYNC_RELEASE
+                if (gmca::cancelled(request)) return;
                 if (reqStart == 0) this->setError(ex);
             });
     }
 
 private:
+    gmca::LatestRequest catalogRequest;
     std::string catalogKey;
     std::string itemType;
     size_t start = 0;

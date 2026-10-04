@@ -5,6 +5,7 @@
 #pragma once
 
 #include <borealis.hpp>
+#include "utils/request_context.hpp"
 #include <api/media/types.hpp>
 #include <view/presenter.hpp>
 #include <view/svg_image.hpp>
@@ -28,6 +29,7 @@ public:
     void doRequest() override;
 
 private:
+    gmca::LatestRequest detailRequest;
     BRLS_BIND(brls::ScrollingFrame, scroll, "series/scroll");
     BRLS_BIND(brls::Box, bannerBox, "series/banner");
     BRLS_BIND(brls::Box, contentRow, "series/content/row");

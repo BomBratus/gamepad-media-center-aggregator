@@ -653,22 +653,27 @@ public:
             return;
         }
 
+        const auto request = episodesRequest.next();
+        gmca::RequestBinding binding(request);
         ASYNC_RETAIN
         // season episodes
         AppConfig::instance().backend().getChildren(
             this->season.ratingKey,
-            [ASYNC_TOKEN](const media::Container<media::Item>& r) {
+            [ASYNC_TOKEN, request](const media::Container<media::Item>& r) {
                 ASYNC_RELEASE
+                if (gmca::cancelled(request)) return;
                 this->recycler->setDataSource(
                     new SeasonEpisodesDataSource(this->season, this->fallbackSummary, r.Items));
             },
-            [ASYNC_TOKEN](const std::string& ex) {
+            [ASYNC_TOKEN, request](const std::string& ex) {
                 ASYNC_RELEASE
+                if (gmca::cancelled(request)) return;
                 this->recycler->setError(ex);
             });
     }
 
 private:
+    gmca::LatestRequest episodesRequest;
     /// fallback summary (the show's) when the season has none
     void doSummary() {
         ASYNC_RETAIN
@@ -954,15 +959,19 @@ void MediaSeries::doSeries() {
         }
     }
 
+    const auto request = detailRequest.next();
+    gmca::RequestBinding binding(request);
     ASYNC_RETAIN
     AppConfig::instance().backend().getItemDetail(
         this->seriesId, true,
-        [ASYNC_TOKEN](const media::Item& item) {
+        [ASYNC_TOKEN, request](const media::Item& item) {
             ASYNC_RELEASE
+            if (gmca::cancelled(request)) return;
             this->applySeries(item);
         },
-        [ASYNC_TOKEN](const std::string& ex) {
+        [ASYNC_TOKEN, request](const std::string& ex) {
             ASYNC_RELEASE
+            if (gmca::cancelled(request)) return;
             this->labelPeople->setVisibility(brls::Visibility::GONE);
             this->people->setVisibility(brls::Visibility::GONE);
         });

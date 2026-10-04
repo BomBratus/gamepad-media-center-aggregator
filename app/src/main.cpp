@@ -10,6 +10,7 @@
 #include "utils/network_state.hpp"
 #include "utils/thread.hpp"
 #include "utils/serial_writer.hpp"
+#include "utils/background_governor.hpp"
 
 #include "view/svg_image.hpp"
 #include "view/disclosure_cell.hpp"
@@ -170,6 +171,7 @@ int main(int argc, char* argv[]) {
 #endif
     }
 
+    gmca::backgroundGovernor().stop();
     DownloadManager::instance().shutdown();
     stremioOperations().stop();
     ThreadPool::instance().stop();

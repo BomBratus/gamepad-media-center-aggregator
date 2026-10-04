@@ -5,6 +5,7 @@
 #pragma once
 
 #include <borealis.hpp>
+#include "utils/request_context.hpp"
 #include <view/presenter.hpp>
 #include <api/media/types.hpp>
 #include <utils/download.hpp>
@@ -22,6 +23,7 @@ public:
     ~MediaMovie() override;
 
 private:
+    gmca::LatestRequest detailRequest;
     BRLS_BIND(brls::ScrollingFrame, scroll, "movie/scroll");
     BRLS_BIND(brls::Box, bannerBox, "movie/banner");
     BRLS_BIND(brls::Box, contentRow, "movie/content/row");

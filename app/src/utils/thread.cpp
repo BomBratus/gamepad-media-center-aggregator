@@ -2,6 +2,7 @@
 #include <fmt/format.h>
 #include "utils/thread.hpp"
 #include <algorithm>
+#include "utils/background_governor.hpp"
 #include <stdexcept>
 #include "api/http.hpp"
 
@@ -38,7 +39,9 @@ void *ThreadPool::task_loop(void *ptr) {
     ThreadPool *p = reinterpret_cast<ThreadPool *>(ptr);
     HTTP s;
     Task task;
-    while (p->tasks.take(task)) {
+    while (p->tasks.take(task, [](TaskPriority priority) {
+        return priority != TaskPriority::Background || gmca::backgroundGovernor().backgroundAllowed();
+    })) {
         if (task) {
             try {
                 task(s);
@@ -46,6 +49,7 @@ void *ThreadPool::task_loop(void *ptr) {
                 brls::Logger::error("error: pool task {}", ex.what());
             }
         }
+        task = {}; // release captured image/group state before the idle wait
     }
 
     brls::Logger::verbose("thread: exit {}", fmt::ptr(p));

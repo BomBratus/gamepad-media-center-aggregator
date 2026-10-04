@@ -12,6 +12,7 @@
 
 #include <optional>
 #include "utils/serial_writer.hpp"
+#include "utils/background_governor.hpp"
 
 using namespace brls::literals;  // for _i18n
 
@@ -419,8 +420,13 @@ void DownloadManager::doDownload(DownloadItem& item) {
         auto lastBytes = std::make_shared<curl_off_t>(0);
         auto started = std::make_shared<bool>(false);
         auto speedEma = std::make_shared<double>(0.0);
+        auto pacedBytes = std::make_shared<curl_off_t>(0);
         HTTP::Progress::Callback progressCb =
-            [this, itemId, lastProgress, lastBytes, started, speedEma](curl_off_t total, curl_off_t now) {
+            [this, itemId, lastProgress, lastBytes, started, speedEma, cancel, pacedBytes](curl_off_t total, curl_off_t now) {
+                const auto bytes = now > *pacedBytes ? size_t(now - *pacedBytes) : 0;
+                *pacedBytes = now;
+                gmca::backgroundGovernor().transfer(cancel, bytes);
+                if (cancel->load()) return;
                 auto tp = std::chrono::steady_clock::now();
                 if (tp - *lastProgress < std::chrono::milliseconds(500)) return;
 
