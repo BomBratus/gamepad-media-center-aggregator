@@ -97,10 +97,13 @@ previous SQLite `lower()` semantics; Unicode bytes remain unchanged. Literal
 Postings reside in SQLite blobs, in 16,384-key little-endian chunks. Small term
 metadata ranks query trigrams by posting count; their sorted postings are
 intersected and restricted by facets before verification. For queries longer
-than three bytes, only candidate title keys retrieve their indexed names to
-verify contiguous substring occurrence. This removes false positives from grams
+than three bytes, candidate title keys select text buckets of 256 keys to verify contiguous
+substring occurrence. Names are packed sequentially in blobs of at most 1 MiB;
+common searches need roughly N/256 seeks rather than N individual lookups.
+Sparse candidates may read neighboring names in their bucket. Each title is
+limited to 256 KiB of distinct searchable name bytes (including headers). This removes false positives from grams
 in different aliases/positions. No `instr()` scan of titles or aliases remains.
-A common long substring can still require many candidate name reads; those costs
+A common long substring can still require reading most search-text buckets; those costs
 are explicitly measured and are a PS4 hardware-validation risk.
 
 The explicit short-search path uses the precomputed unigram/bigram postings;
@@ -120,16 +123,16 @@ facet requires `8 × ceil(N/64)` bytes. There are 57 non-genre planes
 A match uses N/8 bytes plus 4 bytes per match. One selected sort array costs 4N,
 and its tie boundaries at most another 4N. Numeric comparisons temporarily use
 three N/8 bitsets; search intersections use at most two 4N candidate arrays plus
-one bounded posting chunk. SQLite's reader cache is 4 MiB, with mmap disabled.
+two N/8 membership bitsets, one bounded posting chunk and a ≤1 MiB text blob. SQLite's reader cache is 4 MiB, with mmap disabled.
 
 Worst-case retained payload per reader is approximately **27.25N bytes + 4 MiB**
 (facets + current sort/ties + one all-title match). Allow roughly **44N bytes +
-4 MiB** transiently for decoding SQLite blobs, comparisons/search, vector storage
-and one additional active cursor state: ~88 MiB at the 2M hard cap, ~14 MiB at the
+5 MiB** transiently for decoding SQLite blobs, comparisons/search, vector storage
+and one additional active cursor state: ~89 MiB at the 2M hard cap, ~15 MiB at the
 measured 237k count. These are conservative payload estimates, not measured PS4
 heap peaks; allocator/SQLite statement overhead and UI cards are additional.
 An old pinned generation and a newly published reader can coexist, so budget two
-readers (~176 MiB at the artificial cap), plus the staging builder (~15.125N
+readers (~178 MiB at the artificial cap), plus the staging builder (~15.125N
 facet payload, SQLite cache, current-title terms and disk-backed sorts). Names
 are limited to 4,096 bytes and distinct per-title search sequences to 65,536;
 exceeding either budget fails the replacement without publishing it. Allow an
@@ -140,7 +143,7 @@ Sort arrays and all aliases are not loaded together. There is no mmap reliance.
 Four sorts plus tie boundaries occupy at most 32N bytes on disk; facets at most
 15.125N. Search payload is **4P bytes**, where P is total distinct per-title
 1/2/3-byte sequences, plus term/chunk B-tree overhead. Records, unique IMDb IDs
-and searchable name strings are additional and depend on actual name lengths.
+and packed searchable name strings (8-byte per-name header) are additional and depend on actual name lengths.
 Posting compression commits at 262,144 pairs to bound cancellation rollback
 payload to roughly 1 MiB plus B-tree/journal overhead. Staging temporarily holds both import tables and an uncompressed `(term,key)`
 B-tree before compacting postings, and VACUUM needs temporary space. Plan disk

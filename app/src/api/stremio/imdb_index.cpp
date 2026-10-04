@@ -410,20 +410,47 @@ IndexResult ImdbIndex::query(const Filter& filter, const Cursor& cursor, size_t 
                 candidates.swap(selected); first = false;
             }
             Bits searched(next->bits.size());
-            // Trigrams may come from different aliases or different positions.
-            // Verify only candidates by title_key; never scan all aliases/titles.
-            Statement verify(e.db, "SELECT name FROM title_search WHERE title_key=?", &result.metrics);
-            for (size_t i = 0; i < candidates.size(); ++i) {
-                if (!(i % 256)) checkCancel(cancel);
-                const auto key = candidates[i];
-                ++result.metrics.searchCandidates;
-                bool found = search.size() <= 3;
-                if (!found) {
-                    verify.number(1, key);
-                    while (verify.row()) if (verify.text(0).find(search) != std::string::npos) { found = true; break; }
+            // Verify contiguous occurrence in bounded sequential text blocks,
+            // not one SQLite/name seek per candidate. Buckets cover 256 keys;
+            // even a very common query needs ~N/256 seeks rather than N.
+            Bits wanted(next->bits.size());
+            for (auto key : candidates) setBit(wanted, key);
+            result.metrics.searchCandidates = candidates.size();
+            if (search.size() <= 3) searched.swap(wanted);
+            else {
+                Statement verify(e.db, "SELECT data FROM search_text WHERE bucket=? ORDER BY chunk", &result.metrics);
+                size_t at = 0;
+                while (at < candidates.size()) {
+                    checkCancel(cancel);
+                    const auto bucket = candidates[at] / 256;
+                    verify.number(1, bucket);
+                    bool blockFound = false;
+                    while (verify.row()) {
+                        checkCancel(cancel); blockFound = true;
+                        const auto size = sqlite3_column_bytes(verify.stmt, 0);
+                        auto data = static_cast<const unsigned char*>(sqlite3_column_blob(verify.stmt, 0));
+                        if (!data || size < 0 || size > 1024 * 1024) throw std::runtime_error("Invalid Archive text block");
+                        size_t position = 0;
+                        auto word = [&] {
+                            if (position + 4 > size_t(size)) throw std::runtime_error("Truncated Archive text block");
+                            uint32_t value = 0;
+                            for (unsigned b = 0; b < 4; ++b) value |= uint32_t(data[position++]) << (8 * b);
+                            return value;
+                        };
+                        while (position < size_t(size)) {
+                            const auto key = word(), length = word();
+                            if (key >= e.count || key / 256 != bucket || length > 4096 || length > size_t(size) - position)
+                                throw std::runtime_error("Invalid Archive text reference");
+                            if (hasBit(wanted, key) && !hasBit(searched, key) &&
+                                std::string_view(reinterpret_cast<const char*>(data + position), length).find(search) != std::string_view::npos)
+                                setBit(searched, key);
+                            position += length;
+                        }
+                    }
+                    if (!blockFound) throw std::runtime_error("Missing Archive text block");
                     sqlite3_reset(verify.stmt); sqlite3_clear_bindings(verify.stmt);
+                    while (at < candidates.size() && candidates[at] / 256 == bucket) ++at;
                 }
-                if (found) setBit(searched, key);
             }
             next->bits.swap(searched);
             result.metrics.searchMs = elapsed(searchStarted);
@@ -452,7 +479,8 @@ IndexResult ImdbIndex::query(const Filter& filter, const Cursor& cursor, size_t 
     std::vector<uint32_t> visible;
     const auto sortStarted = Clock::now();
     if (random && result.total) {
-        static std::mt19937 rng(std::random_device{}());
+        // Predictable platform support: OpenOrbis need not expose /dev/urandom.
+        static std::mt19937 rng(static_cast<uint32_t>(timestamp()));
         visible.push_back(match->keys[std::uniform_int_distribution<size_t>(0, result.total - 1)(rng)]);
     } else if (result.total) {
         e.loadSort(sortName(filter.sort), cancel, result.metrics);
@@ -512,7 +540,7 @@ void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<vo
     const auto started = Clock::now();
     exec(db, "DROP TABLE IF EXISTS records; DROP TABLE IF EXISTS facets; DROP TABLE IF EXISTS genre_options;"
         "DROP TABLE IF EXISTS sort_orders; DROP TABLE IF EXISTS title_search; DROP TABLE IF EXISTS search_pairs;"
-        "DROP TABLE IF EXISTS search_terms; DROP TABLE IF EXISTS search_postings;"
+        "DROP TABLE IF EXISTS search_terms; DROP TABLE IF EXISTS search_postings; DROP TABLE IF EXISTS search_text;"
         "CREATE TABLE records(title_key INTEGER PRIMARY KEY,id TEXT UNIQUE,kind TEXT,name TEXT,year INTEGER,rating REAL,votes INTEGER,score REAL);"
         "CREATE TABLE facets(name TEXT PRIMARY KEY,data BLOB) WITHOUT ROWID;"
         "CREATE TABLE genre_options(name TEXT PRIMARY KEY) WITHOUT ROWID;"
@@ -520,6 +548,7 @@ void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<vo
         "CREATE TABLE title_search(title_key INTEGER,name TEXT,PRIMARY KEY(title_key,name)) WITHOUT ROWID;"
         "CREATE TABLE search_pairs(term TEXT,title_key INTEGER,PRIMARY KEY(term,title_key)) WITHOUT ROWID;"
         "CREATE TABLE search_terms(term TEXT PRIMARY KEY,count INTEGER) WITHOUT ROWID;"
+        "CREATE TABLE search_text(bucket INTEGER,chunk INTEGER,data BLOB,PRIMARY KEY(bucket,chunk)) WITHOUT ROWID;"
         "CREATE TABLE search_postings(term TEXT,chunk INTEGER,data BLOB,PRIMARY KEY(term,chunk)) WITHOUT ROWID;"
         "INSERT INTO genre_options SELECT DISTINCT genre FROM genres g JOIN titles t ON t.id=g.id WHERE t.adult=0;");
     Statement total(db, "SELECT count(*) FROM titles WHERE adult=0"); total.row();
@@ -624,6 +653,35 @@ void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<vo
         buildLog("derive", count, name, started);
     }
     buildLog("derive", count, "search-compress", started);
+    // Pack searchable names into bounded blobs, indexed by key/256. This is
+    // staging-only sequential work; strings remain on disk during browsing.
+    {
+        Statement names(db, "SELECT title_key,name FROM title_search ORDER BY title_key,name");
+        Statement save(db, "INSERT INTO search_text VALUES(?,?,?)");
+        std::vector<unsigned char> data;
+        size_t bucket = 0, chunk = 0, titleBytes = 0;
+        uint32_t previousKey = UINT32_MAX;
+        auto flush = [&] {
+            if (data.empty()) return;
+            save.number(1, bucket); save.number(2, chunk++); blob(save, 3, data); save.run(); data.clear();
+        };
+        auto number = [&](uint32_t value) {
+            for (unsigned b = 0; b < 4; ++b) data.push_back(value >> (8 * b));
+        };
+        while (names.row()) {
+            checkCancel(cancel);
+            const auto key = static_cast<uint32_t>(names.number(0));
+            const auto name = names.text(1);
+            if (key != previousKey) { titleBytes = 0; previousKey = key; }
+            titleBytes += name.size() + 8;
+            if (titleBytes > 256 * 1024) throw std::runtime_error("Archive title names budget exceeded");
+            if (key / 256 != bucket) { flush(); bucket = key / 256; chunk = 0; }
+            if (data.size() + name.size() + 8 > 1024 * 1024) flush();
+            number(key); number(name.size()); data.insert(data.end(), name.begin(), name.end());
+        }
+        flush();
+    }
+    buildLog("derive", count, "search-text", started);
     // Compress each sorted posting into fixed-size little-endian chunks.
     Statement pairs(db, "SELECT term,title_key FROM search_pairs ORDER BY term,title_key");
     Statement savePosting(db, "INSERT INTO search_postings VALUES(?,?,?)");
@@ -695,13 +753,14 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
             return static_cast<std::atomic_bool*>(value)->load() ? 1 : 0;
         }, cancel.get());
         exec(db, "PRAGMA cache_size=-4096; PRAGMA temp_store=FILE; PRAGMA journal_mode=DELETE;"
-            "CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value INTEGER);"
+            "CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value INTEGER);");
+        if (!setting(db, "version")) setting(db, "version", 2);
+        if (!setting(db, "derived_ready") && !setting(db, "complete")) exec(db,
             "CREATE TABLE IF NOT EXISTS ratings(id TEXT PRIMARY KEY,rating REAL,votes INTEGER) WITHOUT ROWID;"
             "CREATE TABLE IF NOT EXISTS titles(id TEXT PRIMARY KEY,kind TEXT,name TEXT,year INTEGER,"
             "rating REAL,votes INTEGER,adult INTEGER,score REAL) WITHOUT ROWID;"
             "CREATE TABLE IF NOT EXISTS aliases(id TEXT,name TEXT,PRIMARY KEY(id,name)) WITHOUT ROWID;"
             "CREATE TABLE IF NOT EXISTS genres(id TEXT,genre TEXT,PRIMARY KEY(id,genre)) WITHOUT ROWID;");
-        if (!setting(db, "version")) setting(db, "version", 2);
         const std::array<const char*, 3> datasets{"title.ratings.tsv.gz", "title.basics.tsv.gz", "title.akas.tsv.gz"};
         for (int phase = static_cast<int>(setting(db, "phase")); phase < 3; ++phase) {
             buildLog("import", setting(db, "indexed"), datasets[phase], buildStarted);
@@ -809,7 +868,7 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
                 setting(db, "derived_ready", 1);
             }
             exec(db, "DROP TABLE IF EXISTS search_pairs; DROP TABLE IF EXISTS ratings;"
-                "DROP TABLE IF EXISTS aliases; DROP TABLE IF EXISTS genres; DROP TABLE IF EXISTS titles;"
+                "DROP TABLE IF EXISTS aliases; DROP TABLE IF EXISTS genres; DROP TABLE IF EXISTS titles; DROP TABLE IF EXISTS title_search;"
                 "DELETE FROM settings WHERE key LIKE 'it:%';");
             // Compact freed staging pages before publication, cancellable by
             // SQLite's handler. Temporary peak disk is documented.

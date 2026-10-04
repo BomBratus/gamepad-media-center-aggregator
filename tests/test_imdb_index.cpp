@@ -297,7 +297,8 @@ int main() {
                 "tt03\ttvSeries\tGamma\tGamma\t0\t\\N\t\\N\t90\tComedy\n";
         else body = "titleId\tordering\ttitle\tregion\tlanguage\ttypes\tattributes\tisOriginalTitle\n"
                 "tt01\t1\tX bcd\tUS\ten\t\\N\t\\N\t0\n"
-                "tt02\t1\tABCD percent%_\tIT\tit\t\\N\t\\N\t0\n";
+                "tt02\t1\tABCD percent%_\tIT\tit\t\\N\t\\N\t0\n"
+                "tt03\t1\tCaffè\tIT\tit\t\\N\t\\N\t0\n";
         auto gz = gzopen(output.c_str(), "wb"); assert(gz);
         assert(gzwrite(gz, body.data(), body.size()) == int(body.size())); assert(gzclose(gz) == Z_OK);
     };
@@ -312,6 +313,8 @@ int main() {
     auto substring = mini.query(raw, {}, 60, false);
     assert(substring.total == 1 && substring.records[0].meta["id"] == "tt02");
     raw.search = "%_"; assert(mini.query(raw, {}, 60, false).total == 1);
+    raw.search = "è"; assert(mini.query(raw, {}, 60, false).total == 1);
+    raw.search = "CAFFè"; assert(mini.query(raw, {}, 60, false).total == 1);
     raw = {}; raw.yearTo = 2020; assert(mini.query(raw, {}, 60, false).total == 2);
     raw.yearFrom = 2020;
     for (bool descending : {false, true}) {
