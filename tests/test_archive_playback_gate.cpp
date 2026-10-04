@@ -2,32 +2,82 @@
 #include <cassert>
 #include <future>
 #include <iostream>
+#include <thread>
 using namespace stremio::archive;
+using namespace std::chrono_literals;
 int main() {
-    PlaybackGate gate;
-    auto first = gate.start();
-    auto second = gate.start();
-    assert(first && second);
-    gate.pause();
-    assert(first->load() && second->load());
-    assert(!gate.start());
+    PlaybackGate gate(0ms);
+    auto job = gate.start();
+    gate.checkpoint(job); // actively building
+    auto player = gate.beginPlayback();
+    assert(!job->load() && gate.mode() == PlaybackGate::Mode::Parked);
     auto waiter = std::async(std::launch::async, [&] { gate.wait(); });
-    assert(waiter.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout);
-    gate.finish(first);
-    assert(waiter.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout);
-    gate.finish(second);
-    assert(waiter.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
-    gate.pause(); // overlapping player lifetimes during navigation
-    assert(!gate.resume());
+    assert(waiter.wait_for(20ms) == std::future_status::timeout);
+    auto worker = std::async(std::launch::async, [&] { gate.checkpoint(job); });
+    assert(waiter.wait_for(2s) == std::future_status::ready);
+    assert(worker.wait_for(20ms) == std::future_status::timeout);
+    gate.playbackState(player, true);
+    assert(worker.wait_for(2s) == std::future_status::ready);
+    assert(gate.mode() == PlaybackGate::Mode::Background && !job->load());
+
+    // A stale closing view cannot release a newly opening player's lease.
+    auto next = gate.beginPlayback();
+    gate.endPlayback(player);
+    gate.playbackState(player, true);
+    worker = std::async(std::launch::async, [&] { gate.checkpoint(job); });
+    gate.wait();
+    assert(worker.wait_for(20ms) == std::future_status::timeout);
+    gate.playbackState(next, true);
+    assert(worker.wait_for(2s) == std::future_status::ready);
+    const auto downloadStart = PlaybackGate::Clock::now();
+    gate.checkpoint(job, 4096);
+    assert(PlaybackGate::Clock::now() - downloadStart >= 10ms); // 256 KiB/s budget
+    // The CPU budget also yields without any network transfer. Use elapsed work
+    // rather than a throughput upper bound, which would be flaky on shared CI.
+    const auto cpuStart = PlaybackGate::Clock::now();
+    while (PlaybackGate::Clock::now() - cpuStart < 3ms) {}
+    gate.checkpoint(job);
+    assert(PlaybackGate::Clock::now() - cpuStart >= 25ms);
+    gate.playbackState(next, false); // buffering parks without cancelling
+    worker = std::async(std::launch::async, [&] { gate.checkpoint(job); });
+    gate.wait();
+    assert(worker.wait_for(20ms) == std::future_status::timeout);
+    gate.endPlayback(next);
+    assert(worker.wait_for(2s) == std::future_status::ready);
+    assert(gate.mode() == PlaybackGate::Mode::Foreground);
+    gate.finish(job);
+
+    // A build queued during opening stays queued/parked without blocking stream
+    // resolution; shutdown wakes it and cancels once, without needing a player.
+    next = gate.beginPlayback();
+    job = gate.start();
+    gate.wait();
+    worker = std::async(std::launch::async, [&] { gate.checkpoint(job); });
+    assert(worker.wait_for(20ms) == std::future_status::timeout);
+    gate.stop();
+    assert(worker.wait_for(2s) == std::future_status::ready && job->load());
+    gate.finish(job);
     assert(!gate.start());
-    assert(gate.resume());
-    auto resumed = gate.start();
-    assert(resumed && !resumed->load());
-    gate.finish(resumed);
-    gate.pause();
-    assert(!gate.resume()); // no background pass to restart
-    gate.pause();
-    assert(!gate.start()); // a scheduled refresh during playback is deferred
-    assert(gate.resume());
+
+    PlaybackGate downloading(0ms);
+    auto downloadPlayer = downloading.beginPlayback();
+    auto downloadJob = downloading.start();
+    downloading.playbackState(downloadPlayer, true);
+    worker = std::async(std::launch::async, [&] { downloading.checkpoint(downloadJob, 1024 * 1024); });
+    assert(worker.wait_for(20ms) == std::future_status::timeout);
+    downloading.wait();
+    downloading.stop(); // interrupts a four-second rate-limit wait immediately
+    assert(worker.wait_for(2s) == std::future_status::ready && downloadJob->load());
+    downloading.finish(downloadJob);
+
+    PlaybackGate delayed(50ms);
+    auto delayedPlayer = delayed.beginPlayback();
+    auto delayedJob = delayed.start();
+    delayed.playbackState(delayedPlayer, true);
+    assert(delayed.mode() == PlaybackGate::Mode::Parked);
+    worker = std::async(std::launch::async, [&] { delayed.checkpoint(delayedJob); });
+    assert(worker.wait_for(2s) == std::future_status::ready);
+    assert(delayed.mode() == PlaybackGate::Mode::Background);
+    delayed.finish(delayedJob);
     std::cout << "archive playback gate tests passed\n";
 }

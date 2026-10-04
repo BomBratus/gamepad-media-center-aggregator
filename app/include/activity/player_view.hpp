@@ -71,6 +71,7 @@ private:
     std::vector<media::Stream> externalSubs;
     std::string externalSubsItem;
     bool mpvLoaded = false;
+    uint64_t archivePlaybackSession = 0;
 
     MPVEvent::Subscription eventSubscribeID;
     brls::VoidEvent::Subscription exitSubscribeID;

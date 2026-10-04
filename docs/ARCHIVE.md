@@ -15,7 +15,7 @@ format. v1 readers are rejected cleanly and the cache automatically schedules a
 full rebuild. No compatibility query engine runs alongside v2.
 
 Import checkpoints every 2,000 input rows and completed downloads survive a
-playback interruption/restart. The staging probe opens read/write to recover a hot journal after process exit.
+process interruption/restart. The staging probe opens read/write to recover a hot journal after process exit.
 Derived indexes are rebuilt from the completed
 import if interrupted; a `derived_ready` checkpoint allows retrying compaction
 without losing the import. This is recovery of a full rebuild, not incremental
@@ -160,10 +160,33 @@ Controls keep the 150ms debounce; loading feedback and callback invalidation are
 immediate. Controller focus, filters, skeleton, Reset, refresh/progress, pagination
 and Random remain in the existing UI. Random uses the same pinned snapshot.
 
-`PlaybackGate` cancels download/import/index derivation before opening a stream;
-cleanup/checkpoint completion runs off the playback UI path. Work resumes after
-playback. Exit cancels and waits for staging cleanup and stops the reader queue
-before application/static teardown. Published readers never contend with a
+The staging build has its own serial worker, separate from both addon/network
+work and Archive queries. `PlaybackGate` cooperatively parks that worker during
+stream resolution/opening, seeking, buffering and playback errors. Playback
+opening waits off the UI thread for a yield point, not for build completion.
+Starting a player does **not** cancel or restart the current build: the gzip
+position, writer, derived-index statements and progress remain alive.
+
+After 10 seconds of healthy loaded playback, work continues in the background
+with a budget of 2 ms of work followed by 38 ms of rest (approximately 5% of one
+worker). Download progress is paced to approximately 256 KiB/s. CPU/import loops
+and SQLite progress callbacks yield; curl progress callbacks park/throttle
+transfers. Download total timeout is disabled because playback can park a
+transfer indefinitely; connection establishment retains its 10-second timeout.
+These are cooperative budgets: a single disk operation, allocation, gzip chunk
+or curl callback is not hard real-time preemptible. Console stutter and stream
+throughput still require hardware verification; Linux tests validate suspension,
+continuation and shutdown, not PS4 playback performance.
+
+Each player owns a lease, so a delayed close of an old view cannot unblock a new
+stream opening. Buffering/seek events reset the stable-playback grace period.
+Closing the last player restores foreground build speed. Exit cancels, wakes and
+joins the staging worker and reader queue before application/static teardown.
+Format v2 is unchanged: existing published indexes and resumable imports remain
+compatible. The extra builder thread has its own platform thread stack; metadata
+and alias strings are still not loaded wholesale into RAM.
+
+Published readers never contend with a
 writer to their database. `gmca-ps4-index` wraps SQLite's `unix-none` VFS to copy
 absolute app-private paths; OpenOrbis lacks the parent `lstat`/`readlink` behavior.
 Do not introduce relative/user paths, concurrent staging readers or a live writer.

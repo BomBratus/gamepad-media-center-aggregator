@@ -31,9 +31,10 @@ private:
     struct Engine;
     std::unique_ptr<Engine> engine;
 };
+using IndexYield = std::function<void()>;
 using DatasetDownload = std::function<void(const std::string& name, const std::string& path, const IndexCancel&)>;
 // Full staging rebuild; resumable import, cancellable derived indexes. No live
 // mutations of published generations. Publish only after structural validation.
 bool buildImdbIndex(const std::string& path, const IndexCancel&, const DatasetDownload&,
-    const std::function<void(size_t)>& progress = {});
+    const std::function<void(size_t)>& progress = {}, const IndexYield& yield = {});
 } // namespace stremio::archive

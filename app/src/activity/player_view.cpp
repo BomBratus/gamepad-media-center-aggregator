@@ -44,7 +44,7 @@ static Ps4SubtitleSidecarSafety ps4SubtitleSidecarSafety(const std::string& rawU
 
 PlayerView::PlayerView(const media::Item& item, const int64_t seekMs, int versionIndex)
     : itemId(item.ratingKey), item(item), preferredVersion(versionIndex) {
-    stremio::archive::Cache::instance().pauseForPlayback();
+    archivePlaybackSession = stremio::archive::Cache::instance().beginPlayback();
     // take sole ownership of MPVCore: if music was playing, the audio controller
     // must stop owning the shared event bus (else it reports this video's
     // progress against the audio track and auto-advances over it). SPEC.md §11.
@@ -88,6 +88,22 @@ PlayerView::PlayerView(const media::Item& item, const int64_t seekMs, int versio
 
     eventSubscribeID = mpv.getEvent()->subscribe([this](MpvEventEnum event) {
         auto& mpv = MPVCore::instance();
+        // Loading/seek events park the writer immediately. Only a loaded,
+        // non-buffering file may start the stable-playback grace period.
+        if (event == MpvEventEnum::LOADING_START || event == MpvEventEnum::SEEK_START ||
+            event == MpvEventEnum::START_FILE || event == MpvEventEnum::RESET ||
+            event == MpvEventEnum::MPV_STOP || event == MpvEventEnum::END_OF_FILE ||
+            event == MpvEventEnum::MPV_FILE_ERROR)
+            stremio::archive::Cache::instance().playbackState(archivePlaybackSession, false);
+        if (event == MpvEventEnum::UPDATE_PROGRESS || event == MpvEventEnum::MPV_PAUSE ||
+            event == MpvEventEnum::MPV_RESUME || event == MpvEventEnum::LOADING_END ||
+            event == MpvEventEnum::LOADING_START) {
+            // mpv flags are not coercible to INT64; use their yes/no string form.
+            const bool healthy = mpvLoaded && playbackCheckpoint.ready() && !mpv.isStopped() &&
+                mpv.getString("paused-for-cache") != "yes" && mpv.getString("seeking") != "yes" &&
+                (mpv.getString("core-idle") == "no" || mpv.isPaused());
+            stremio::archive::Cache::instance().playbackState(archivePlaybackSession, healthy);
+        }
         switch (event) {
         case MpvEventEnum::MPV_RESUME:
             this->reportTimeline("playing", int64_t(mpv.video_progress) * 1000);
@@ -214,7 +230,8 @@ PlayerView::~PlayerView() {
     brls::Application::getExitEvent()->unsubscribe(this->exitSubscribeID);
     brls::Logger::debug("trying delete PlayerView...");
     // Box destroys its VideoView (and stops mpv) after this destructor returns.
-    brls::sync([] { stremio::archive::Cache::instance().resumeAfterPlayback(); });
+    const auto archiveSession = archivePlaybackSession;
+    brls::sync([archiveSession] { stremio::archive::Cache::instance().endPlayback(archiveSession); });
 }
 
 void PlayerView::setSeries(const std::string& showRatingKey) {
@@ -449,6 +466,7 @@ void PlayerView::playMedia(const int64_t seekMs) {
 }
 
 void PlayerView::startPlayback(const int64_t seekMs, bool forceDirect) {
+    stremio::archive::Cache::instance().playbackState(archivePlaybackSession, false);
     // We are about to (re)load: mpv will drop any sub-add'ed tracks. Clear the
     // loaded flag so a subtitle fetch landing mid-load waits for MPV_LOADED to
     // re-add. (External subtitles are resolved AFTER the playback task is queued
