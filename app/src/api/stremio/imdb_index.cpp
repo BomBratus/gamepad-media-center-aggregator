@@ -709,11 +709,17 @@ void buildDerived(sqlite3* db, const BuildWork& work, const std::function<void(s
         Statement names(db, "SELECT title_key,name FROM title_search ORDER BY title_key,name");
         Statement save(db, "INSERT INTO search_text VALUES(?,?,?)");
         std::vector<unsigned char> data;
-        size_t bucket = 0, chunk = 0, titleBytes = 0;
+        size_t bucket = 0, chunk = 0, titleBytes = 0, transactionBytes = 0;
+        exec(db, "BEGIN");
+        try {
         uint32_t previousKey = UINT32_MAX;
         auto flush = [&] {
             if (data.empty()) return;
-            save.number(1, bucket); save.number(2, chunk++); blob(save, 3, data); save.run(); data.clear();
+            save.number(1, bucket); save.number(2, chunk++); blob(save, 3, data); save.run();
+            transactionBytes += data.size(); data.clear();
+            if (transactionBytes >= 4 * 1024 * 1024) {
+                exec(db, "COMMIT"); exec(db, "BEGIN"); transactionBytes = 0;
+            }
         };
         auto number = [&](uint32_t value) {
             for (unsigned b = 0; b < 4; ++b) data.push_back(value >> (8 * b));
@@ -729,7 +735,8 @@ void buildDerived(sqlite3* db, const BuildWork& work, const std::function<void(s
             if (data.size() + name.size() + 8 > 1024 * 1024) flush();
             number(key); number(name.size()); data.insert(data.end(), name.begin(), name.end());
         }
-        flush();
+        flush(); exec(db, "COMMIT");
+        } catch (...) { sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr); throw; }
     }
     buildLog("derive", count, "search-text", started);
     work.measured("search-text", phaseStarted);
@@ -782,7 +789,10 @@ void buildDerived(sqlite3* db, const BuildWork& work, const std::function<void(s
 } // namespace
 
 bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const DatasetDownload& download,
-        const std::function<void(size_t)>& progress, const IndexYield& yield, const BuildTiming& timing) {
+        const std::function<void(size_t)>& progress, const IndexYield& yield, const BuildTiming& timing, const BuildOptions& options) {
+    if (options.cacheKiB < 4096 || options.cacheKiB > 16384 ||
+        options.importBatch < 2000 || options.importBatch > 20000)
+        throw std::invalid_argument("Invalid Archive staging budget");
     BuildWork work{cancel, yield, timing};
     if (cancel && cancel->load()) return false;
     if (yield) yield();
@@ -809,8 +819,11 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
         Database connection(staging, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
         auto db = connection.db;
         sqlite3_progress_handler(db, 1000, BuildWork::sqliteProgress, &work);
-        exec(db, "PRAGMA cache_size=-4096; PRAGMA temp_store=FILE; PRAGMA journal_mode=DELETE;"
-            "CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value INTEGER);");
+        const auto tuning = "PRAGMA cache_size=-" + std::to_string(options.cacheKiB) +
+            "; PRAGMA synchronous=" + (options.normalSync ? std::string("NORMAL") : std::string("FULL")) +
+            "; PRAGMA temp_store=FILE; PRAGMA journal_mode=DELETE;"
+            "CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value INTEGER);";
+        exec(db, tuning.c_str());
         if (!setting(db, "version")) setting(db, "version", 2);
         if (!setting(db, "derived_ready") && !setting(db, "complete")) exec(db,
             "CREATE TABLE IF NOT EXISTS ratings(id TEXT PRIMARY KEY,rating REAL,votes INTEGER) WITHOUT ROWID;"
@@ -907,7 +920,7 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
                         }
                         sqlite3_reset(exists.stmt); sqlite3_clear_bindings(exists.stmt);
                     }
-                    if (++batch >= 2000 || cancel->load()) {
+                    if (++batch >= options.importBatch || cancel->load()) {
                         checkpoint();
                         if (cancel->load()) return false;
                         exec(db, "BEGIN"); batch = 0;
@@ -940,6 +953,11 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
             work.checkpoint();
             setting(db, "refreshed", timestamp()); setting(db, "complete", 1);
         }
+        const auto finalValidationStarted = Clock::now();
+        Statement finalCheck(db, "PRAGMA quick_check");
+        if (!finalCheck.row() || finalCheck.text(0) != "ok")
+            throw std::runtime_error("Archive final validation failed");
+        work.measured("validation-final", finalValidationStarted);
     }
     // Close every statement/connection before swapping; failed downloads/builds
     // leave the previously published database available for browsing.

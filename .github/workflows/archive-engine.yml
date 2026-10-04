@@ -58,6 +58,9 @@ jobs:
           /usr/bin/time -v archive-evidence/benchmark-v2-before 500000 > archive-evidence/v2-before.log 2> archive-evidence/v2-before-resource.log
           /usr/bin/time -v archive-evidence/benchmark-before 500000 > archive-evidence/before.log 2> archive-evidence/before-resource.log
           /usr/bin/time -v archive-checks/benchmark_archive 500000 > archive-evidence/after.log 2> archive-evidence/after-resource.log
+          /usr/bin/time -v archive-checks/benchmark_archive 500000 8192 10000 0 > archive-evidence/candidate-8m-10k-full.log 2> archive-evidence/candidate-8m-10k-full-resource.log
+          /usr/bin/time -v archive-checks/benchmark_archive 500000 16384 20000 0 > archive-evidence/candidate-16m-20k-full.log 2> archive-evidence/candidate-16m-20k-full-resource.log
+          /usr/bin/time -v archive-checks/benchmark_archive 500000 8192 10000 1 > archive-evidence/candidate-8m-10k-normal.log 2> archive-evidence/candidate-8m-10k-normal-resource.log
           cat archive-evidence/before.log archive-evidence/v2-before.log archive-evidence/after.log
       - uses: actions/upload-artifact@v6
         if: always()

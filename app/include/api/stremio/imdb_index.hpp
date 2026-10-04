@@ -31,11 +31,17 @@ private:
     struct Engine;
     std::unique_ptr<Engine> engine;
 };
+// Staging-only benchmark knobs; published schema and reader budgets are fixed.
+struct BuildOptions {
+    int cacheKiB = 4096;
+    size_t importBatch = 2000;
+    bool normalSync = false;
+};
 using BuildTiming = std::function<void(const std::string& phase, double ms)>;
 using IndexYield = std::function<void()>;
 using DatasetDownload = std::function<void(const std::string& name, const std::string& path, const IndexCancel&)>;
 // Full staging rebuild; resumable import, cancellable derived indexes. No live
 // mutations of published generations. Publish only after structural validation.
 bool buildImdbIndex(const std::string& path, const IndexCancel&, const DatasetDownload&,
-    const std::function<void(size_t)>& progress = {}, const IndexYield& yield = {}, const BuildTiming& timing = {});
+    const std::function<void(size_t)>& progress = {}, const IndexYield& yield = {}, const BuildTiming& timing = {}, const BuildOptions& options = {});
 } // namespace stremio::archive
