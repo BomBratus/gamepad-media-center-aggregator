@@ -11,10 +11,12 @@
 #include <borealis/core/logger.hpp>
 #include <algorithm>
 #include <map>
+#include "utils/request_context.hpp"
 
 namespace stremio {
 
 void AddonEngine::ensureLoaded() {
+    gmca::RequestBinding sharedLoad({});
     for (;;) {
     uint64_t version;
     {

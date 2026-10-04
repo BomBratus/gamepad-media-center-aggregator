@@ -291,16 +291,20 @@ void MediaMovie::doMovie() {
         }
     }
 
+    const auto request = detailRequest.next();
+    gmca::RequestBinding binding(request);
     ASYNC_RETAIN
     // detail (full: streams/chapters/markers)
     AppConfig::instance().backend().getItemDetail(
         this->itemId, true,
-        [ASYNC_TOKEN](const media::Item& item) {
+        [ASYNC_TOKEN, request](const media::Item& item) {
             ASYNC_RELEASE
+            if (gmca::cancelled(request)) return;
             this->applyMovie(item);
         },
-        [ASYNC_TOKEN](const std::string& ex) {
+        [ASYNC_TOKEN, request](const std::string& ex) {
             ASYNC_RELEASE
+            if (gmca::cancelled(request)) return;
             this->peopleHeader->setVisibility(brls::Visibility::GONE);
             this->people->setVisibility(brls::Visibility::GONE);
         });

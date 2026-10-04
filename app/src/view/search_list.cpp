@@ -26,11 +26,14 @@ void SearchList::doRequest(const std::string& searchTerm) {
     bool series = this->itemType == "Series";
     std::string wanted = series ? media::mediaTypeShow : media::mediaTypeMovie;
 
+    const auto request = searchRequest.next();
+    gmca::RequestBinding binding(request);
     ASYNC_RETAIN
     AppConfig::instance().backend().search(
         searchTerm, series ? media::MediaKind::Show : media::MediaKind::Movie, (int)this->pageSize,
-        [ASYNC_TOKEN, wanted](const media::Container<media::Item>& r) {
+        [ASYNC_TOKEN, wanted, request](const media::Container<media::Item>& r) {
             ASYNC_RELEASE
+            if (gmca::cancelled(request)) return;
             // /library/search returns mixed types -> client-side filter
             std::vector<media::Item> items;
             for (auto& it : r.Items) {
@@ -43,8 +46,9 @@ void SearchList::doRequest(const std::string& searchTerm) {
                 this->recycler->setDataSource(new VideoDataSource(items));
             }
         },
-        [ASYNC_TOKEN](const std::string& ex) {
+        [ASYNC_TOKEN, request](const std::string& ex) {
             ASYNC_RELEASE
+            if (gmca::cancelled(request)) return;
             this->title->setSubtitle(ex);
             brls::Application::notify(ex);
         });

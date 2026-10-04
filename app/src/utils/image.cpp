@@ -1,5 +1,6 @@
 #include "utils/image.hpp"
 #include "utils/thread.hpp"
+#include "utils/background_governor.hpp"
 #if defined(__PS4__)
 #include "utils/artwork_cache.hpp"
 static ArtworkCache& artworkCache() {
@@ -277,7 +278,10 @@ void Image::doRequest(HTTP& s) {
         }
 
 #if defined(__PS4__)
-        if (imageData && fromNetwork && !requestCancel->load()) artworkCache().store(this->url, data);
+        // Optional cache eviction/write is skipped while playback is opening or
+        // unhealthy. Visible artwork still gets its UI upload; no prefetch starts.
+        if (imageData && fromNetwork && !requestCancel->load() && gmca::backgroundGovernor().backgroundAllowed())
+            artworkCache().store(this->url, data);
         if (imageData && imageW > 0 && imageH > 0) {
             int tW = this->targetW;
             int tH = this->targetH;

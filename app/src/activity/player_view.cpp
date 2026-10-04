@@ -541,19 +541,23 @@ void PlayerView::resolveExternalSubtitles() {
     this->externalSubsItem = key;
     this->externalSubs.clear();  // drop the previous source's subs before the switch lands
 
+    const auto request = subtitleRequest.next();
+    gmca::RequestBinding binding(request);
     ASYNC_RETAIN
     AppConfig::instance().backend().getSubtitles(
         this->item, this->stream,
-        [ASYNC_TOKEN, key](std::vector<media::Stream> subs) {
+        [ASYNC_TOKEN, key, request](std::vector<media::Stream> subs) {
             ASYNC_RELEASE
+            if (gmca::cancelled(request)) return;
             // a newer switch superseded this fetch -> its result is stale
             if (key != this->externalSubsItem) return;
             this->externalSubs = std::move(subs);
             // if the file is already playing, add now; otherwise MPV_LOADED will
             if (this->mpvLoaded) this->addExternalSubtitles();
         },
-        [ASYNC_TOKEN, key](const std::string&) {
+        [ASYNC_TOKEN, key, request](const std::string&) {
             ASYNC_RELEASE
+            if (gmca::cancelled(request)) return;
             // resolution failed (offline / addon error): leave the set empty, the
             // player still plays; no dialog (subtitles are best-effort).
         });

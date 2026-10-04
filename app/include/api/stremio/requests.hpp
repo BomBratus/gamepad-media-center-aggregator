@@ -19,6 +19,7 @@
 
 #include "api/http.hpp"
 #include "utils/thread.hpp"
+#include "utils/request_context.hpp"
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -47,6 +48,7 @@ struct BatchRequest {
     std::string url;
     std::string key;
     std::shared_ptr<Result> result;
+    gmca::RequestToken token;
 };
 
 struct Batch {
@@ -85,10 +87,18 @@ inline Registry& registry() {
     return value;
 }
 
-inline std::string requestKey(const std::string& url, long timeout) {
+inline std::string responseKey(const std::string& url, long timeout) {
     // URLs cannot contain a literal newline in an HTTP request, so this is an
     // unambiguous and allocation-light compound key.
     return url + "\n" + std::to_string(timeout);
+}
+
+inline std::string requestKey(const std::string& url, long timeout) {
+    auto key = responseKey(url, timeout);
+    // Cancellable view lifetimes must not abort another view's shared transfer.
+    // Non-cancellable requests retain the original cross-caller coalescing.
+    if (gmca::currentRequest) key += "\n" + std::to_string(gmca::currentRequest->id);
+    return key;
 }
 
 inline size_t batchWidth() {
@@ -141,11 +151,14 @@ inline void startBatch(const std::shared_ptr<Batch>& batch) {
         std::string url = request.url;
         std::shared_ptr<Result> result = request.result;
         long timeout = batch->timeout;
-        bool accepted = ThreadPool::instance().trySubmit(TaskPriority::Interactive, [url, result, timeout](HTTP&) {
+        bool accepted = ThreadPool::instance().trySubmit(TaskPriority::Interactive, [url, result, timeout, token = request.token](HTTP&) {
             std::string body;
             std::exception_ptr error;
             try {
-                body = HTTP::get(url, HTTP::Timeout{timeout});
+                gmca::RequestBinding binding(token);
+                gmca::checkRequest();
+                body = token ? HTTP::get(url, HTTP::Timeout{timeout}, token->cancel)
+                             : HTTP::get(url, HTTP::Timeout{timeout});
             } catch (...) {
                 error = std::current_exception();
             }
@@ -218,6 +231,7 @@ inline void registerBatch(
             request.url = std::move(candidate.first);
             request.key = std::move(candidate.second);
             request.result = std::make_shared<detail::Result>();
+            request.token = gmca::currentRequest;
             batch->requests.push_back(std::move(request));
         }
         for (const auto& request : batch->requests) r.exact[request.key] = {batch, expires};
@@ -259,6 +273,7 @@ inline void registerSearchBatch(const std::vector<std::string>& roots, long time
 /// responses and errors in the original addon order, so this changes latency,
 /// not result precedence or fallback semantics.
 inline std::string get(const std::string& url, long timeout = HTTP::TIMEOUT) {
+    gmca::checkRequest();
     std::string key = detail::requestKey(url, timeout);
     auto now = std::chrono::steady_clock::now();
     auto exact = detail::findExact(key, now);
@@ -330,7 +345,9 @@ inline std::string get(const std::string& url, long timeout = HTTP::TIMEOUT) {
             std::string body;
             std::exception_ptr requestError;
             try {
-                body = HTTP::get(url, HTTP::Timeout{timeout});
+                gmca::checkRequest();
+                body = gmca::currentRequest ? HTTP::get(url, HTTP::Timeout{timeout}, gmca::currentRequest->cancel)
+                                            : HTTP::get(url, HTTP::Timeout{timeout});
             } catch (...) {
                 requestError = std::current_exception();
             }
@@ -390,7 +407,8 @@ inline std::string get(const std::string& url, long timeout = HTTP::TIMEOUT) {
 /// time-bounded so addon reconfiguration is observed quickly.
 inline std::string getCached(
     const std::string& url, long timeout = HTTP::TIMEOUT, long ttlMs = 60000) {
-    std::string key = detail::requestKey(url, timeout);
+    gmca::checkRequest();
+    std::string key = detail::responseKey(url, timeout);
     auto now = std::chrono::steady_clock::now();
     {
         detail::Registry& r = detail::registry();

@@ -3,6 +3,7 @@
 #pragma once
 
 #include <borealis.hpp>
+#include "utils/request_context.hpp"
 #include <utils/event.hpp>
 #include <utils/playback_checkpoint.hpp>
 #include <api/media/types.hpp>
@@ -22,6 +23,7 @@ public:
     void setTitie(const std::string& title);
 
 private:
+    gmca::LatestRequest subtitleRequest;
     void setChapters(const std::vector<media::Chapter>& chaps, int64_t durationMs);
     /// Fetches fresh metadata then resolves the playback URL via the backend
     void playMedia(const int64_t seekMs);

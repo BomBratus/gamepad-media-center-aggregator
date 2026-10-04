@@ -25,6 +25,7 @@
 #include <map>
 #include <mutex>
 #include "utils/executor.hpp"
+#include "utils/request_context.hpp"
 #include <set>
 #include <stdexcept>
 
@@ -59,7 +60,17 @@ void emptyContainer(media::Then<media::Container<T>> then) {
 // Network orchestration is bounded independently of its leaf HTTP fan-out.
 // Rejection still completes the caller's UI lifetime/error path.
 void stremioAsync(media::OnError error, Executor::Task task) {
-    try { stremioOperations().submit(std::move(task), TaskPriority::Interactive); }
+    const auto request = gmca::currentRequest;
+    try { stremioOperations().submit([task = std::move(task), error, request] {
+        if (gmca::cancelled(request)) {
+            // Release the caller's ASYNC_TOKEN on the UI even for queued stale
+            // jobs; the callback checks its generation after ASYNC_RELEASE.
+            if (error) brls::sync(std::bind(error, std::string("Request cancelled")));
+            return;
+        }
+        gmca::RequestBinding binding(request);
+        task();
+    }, TaskPriority::Interactive); }
     catch (const std::exception& ex) {
         if (error) brls::sync(std::bind(error, std::string(ex.what())));
         else brls::Logger::warning("stremio scheduling failed: {}", ex.what());

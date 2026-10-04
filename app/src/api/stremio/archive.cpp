@@ -3,6 +3,7 @@
 #include "api/stremio/imdb_index.hpp"
 #include "api/stremio/types.hpp"
 #include "utils/config.hpp"
+#include "utils/background_governor.hpp"
 #include "utils/ps4_diagnostics.hpp"
 #include <borealis/core/thread.hpp>
 #include <borealis/core/application.hpp>
@@ -150,11 +151,14 @@ void Cache::refresh(bool force) {
 uint64_t Cache::beginPlayback() {
     playbackMode = PlaybackGate::Mode::Parked;
     ps4diag::write("archive playback mode=parked reason=stream-opening");
-    return playbackGate.beginPlayback();
+    const auto session = playbackGate.beginPlayback();
+    gmca::backgroundGovernor().begin(session);
+    return session;
 }
 void Cache::waitForPlayback() { playbackGate.wait(); }
 void Cache::playbackState(uint64_t session, bool healthy) {
     playbackGate.playbackState(session, healthy);
+    gmca::backgroundGovernor().update(session, healthy);
     const auto after = playbackGate.mode();
     if (playbackMode != after)
         ps4diag::write(after == PlaybackGate::Mode::Background
@@ -164,6 +168,7 @@ void Cache::playbackState(uint64_t session, bool healthy) {
 }
 void Cache::endPlayback(uint64_t session) {
     playbackGate.endPlayback(session);
+    gmca::backgroundGovernor().end(session);
     playbackMode = playbackGate.mode();
     if (playbackMode == PlaybackGate::Mode::Foreground)
         ps4diag::write("archive playback mode=foreground");

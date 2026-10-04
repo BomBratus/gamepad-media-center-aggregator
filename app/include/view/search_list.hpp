@@ -5,6 +5,7 @@
 #pragma once
 
 #include <borealis.hpp>
+#include "utils/request_context.hpp"
 
 class HRecyclerFrame;
 
@@ -18,6 +19,7 @@ public:
     static brls::View* create();
 
 private:
+    gmca::LatestRequest searchRequest;
     BRLS_BIND(brls::Header, title, "recycler/title");
     BRLS_BIND(HRecyclerFrame, recycler, "recycler/videos");
     

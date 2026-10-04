@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <functional>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -16,30 +18,36 @@ public:
     bool submit(TaskPriority priority, Task task) {
         {
             std::lock_guard<std::mutex> lock(mutex);
-            if (stopped || pending == capacity) return false;
+            if (stopped || pending == capacity ||
+                (priority != TaskPriority::Interactive && pending >= capacity - capacity / 4)) return false;
             tasks[static_cast<size_t>(priority)].push_back(std::move(task));
             ++pending;
         }
         ready.notify_one();
         return true;
     }
-    bool take(Task& task) {
+    bool take(Task& task, const std::function<bool(TaskPriority)>& allowed = {}) {
         std::unique_lock<std::mutex> lock(mutex);
+        for (;;) {
         ready.wait(lock, [this] { return stopped || pending; });
         if (!pending) return false;
         // Even with continuously arriving interactive work, each nonempty
         // lower class receives service within eleven dispatches.
         constexpr std::array<size_t, 11> order{{0,0,0,0,0,0,0,0,1,1,2}};
         for (size_t i = 0; i < order.size(); ++i) {
-            auto& queue = tasks[order[cursor]];
+            const auto priority = order[cursor];
+            auto& queue = tasks[priority];
             cursor = (cursor + 1) % order.size();
-            if (queue.empty()) continue;
+            if (queue.empty() || (!stopped && allowed && !allowed(static_cast<TaskPriority>(priority)))) continue;
             task = std::move(queue.front());
             queue.pop_front();
             --pending;
             return true;
         }
-        return false;
+        // Parked background work does not occupy a worker; a new interactive
+        // enqueue wakes this wait immediately. Poll only for governor changes.
+        ready.wait_for(lock, std::chrono::milliseconds(100));
+        }
     }
     void stop() {
         {
