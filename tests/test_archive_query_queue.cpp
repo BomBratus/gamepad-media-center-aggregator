@@ -58,7 +58,17 @@ int main() {
         assert(seen == std::vector<int>({1, 3}));
     }
 
+    // Application shutdown cancels a running local query and joins it before
+    // freeing the connection/snapshot owned by the callback.
+    std::promise<void> shutdownStarted, shutdownCancelled;
+    queries.submitLatest([&](const stremio::archive::QueryQueue::Cancel& cancel) {
+        shutdownStarted.set_value();
+        while (!cancel->load()) std::this_thread::yield();
+        shutdownCancelled.set_value();
+    });
+    shutdownStarted.get_future().wait();
     queries.stop();
+    assert(shutdownCancelled.get_future().wait_for(std::chrono::seconds(1)) == std::future_status::ready);
     queries.stop(); // explicit shutdown plus destructor is safe
     releaseAddon.set_value();
     addon.join();

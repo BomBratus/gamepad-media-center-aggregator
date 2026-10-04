@@ -1,6 +1,7 @@
 #pragma once
 
 #include "api/stremio/archive_model.hpp"
+#include "api/stremio/archive_cursor.hpp"
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -13,35 +14,26 @@ struct IndexResult {
     std::vector<std::string> genres;
     size_t total = 0, indexed = 0;
     int64_t refreshed = 0;
+    Cursor cursor;
+    QueryMetrics metrics;
 };
-
 using IndexCancel = std::shared_ptr<std::atomic_bool>;
-
-// Read-only connections hold the old file across an atomic refresh replacement.
+// Serial worker only. Read-only connection and immutable indexes pin the old
+// inode across publication. Strings/aliases/search postings stay on disk.
 class ImdbIndex {
 public:
     explicit ImdbIndex(const std::string& path);
     ~ImdbIndex();
     ImdbIndex(const ImdbIndex&) = delete;
     ImdbIndex& operator=(const ImdbIndex&) = delete;
-    IndexResult query(const Filter&, size_t offset, size_t limit, bool random, const IndexCancel& cancel = {});
+    IndexResult query(const Filter&, const Cursor&, size_t limit, bool random, const IndexCancel& cancel = {});
 private:
-    sqlite3* db = nullptr;
-    size_t count = 0;
-    int64_t refreshed = 0;
-    std::vector<std::string> genreOptions;
-    // Disk-backed search IDs and filtered rows belong to this generation.
-    // Paging, sorting and Random reuse them without scanning titles/aliases.
-    std::string cachedSearch;
-    bool searchReady = false, resultReady = false;
-    Filter cachedFilter;
-    size_t cachedTotal = 0;
+    struct Engine;
+    std::unique_ptr<Engine> engine;
 };
-
 using DatasetDownload = std::function<void(const std::string& name, const std::string& path, const IndexCancel&)>;
-// Builds on disk in bounded batches. Returns false on playback cancellation;
-// committed rows/offsets and completed gzip downloads survive for the next pass.
+// Full staging rebuild; resumable import, cancellable derived indexes. No live
+// mutations of published generations. Publish only after structural validation.
 bool buildImdbIndex(const std::string& path, const IndexCancel&, const DatasetDownload&,
     const std::function<void(size_t)>& progress = {});
-
 } // namespace stremio::archive

@@ -1,84 +1,206 @@
-# Local IMDb archive
+# IMDb Archive Query Engine v2
 
-Archive uses the same bulk IMDb source and local SQLite approach as the TV box.
-GMCA downloads `title.ratings.tsv.gz`, `title.basics.tsv.gz`, and
-`title.akas.tsv.gz` directly from `https://datasets.imdbws.com/`, then imports
-rows on disk. It does not crawl Stremio catalog pages or depend on a TV-box
-service. IMDb's personal/non-commercial dataset terms apply; datasets are not
-bundled in the package or published to the update channel.
+Archive downloads `title.ratings.tsv.gz`, `title.basics.tsv.gz` and
+`title.akas.tsv.gz` directly from `https://datasets.imdbws.com/`. IMDb's
+personal/non-commercial dataset terms apply. Datasets are not shipped in GMCA
+packages or the update channel. Stremio addons still supply detail, synopsis,
+episodes and streams; visible posters use IMDb-ID Metahub URLs.
 
-The index includes titles with at least 100 IMDb votes, excluding individual
-TV episodes and video games, matching the TV-box builder. Adult titles are
-excluded from browsing. Movie/TV-movie types, series/miniseries, shorts and other
-non-episode types use the usual Stremio movie/series detail flow. Italian display
-titles use the first Italian AKA where available; original and English AKA
-titles remain searchable. Title details, episode lists, synopsis and streams
-still come from the user's Stremio addons when opened. Posters use the same
-IMDb-ID Metahub URLs as the TV box, downloaded only for visible cards.
+## Full rebuild and immutable generations
 
-Search, movie/series type, genre, year/range, rating and IMDb vote filters operate
-on the whole database before paging. Rating order uses the TV box's Bayesian
-score (M=25,000, C from titles with at least 1,000 votes); displayed ratings and
-minimum-rating filters use the raw IMDb rating. Random samples the entire
-matching set. Votes are IMDb rating votes, not public views or the user's
-watched count. Country, streaming-service, addon-provenance and synopsis filters
-are hidden because these bulk datasets do not supply those fields.
+A weekly refresh (or Settings → Refresh Archive) downloads and imports a complete
+replacement into `imdb-index-v1.sqlite.building`. The historical filename is kept
+so format v1 is detected; `settings.version=2` identifies the incompatible new
+format. v1 readers are rejected cleanly and the cache automatically schedules a
+full rebuild. No compatibility query engine runs alongside v2.
 
-The first build still needs time and disk space for compressed datasets and the
-SQLite database. Downloads stream to disk, gzip rows are read in bounded buffers,
-and SQLite uses a 4 MiB page cache and disk-backed temporary sorting. There is
-no full metadata snapshot copied into RAM. Completed downloads and import
-checkpoints (every 2,000 input rows) are reused after cancellation/restart.
-An interrupted incomplete HTTP download restarts that one file; already completed
-files are retained. Progress displays the number of imported titles.
+Import checkpoints every 2,000 input rows and completed downloads survive a
+playback interruption/restart. The staging probe opens read/write to recover a hot journal after process exit.
+Derived indexes are rebuilt from the completed
+import if interrupted; a `derived_ready` checkpoint allows retrying compaction
+without losing the import. This is recovery of a full rebuild, not incremental
+catalog maintenance. An invalid/truncated dataset discards its staging database
+and downloads. Other failures retain resumable work and retry with backoff.
 
-Playback cancels the background request/import. The player waits on a worker
-thread for checkpoint/cleanup before loading the stream; the UI remains
-responsive, and watching does not require waiting for the whole index. Indexing
-resumes when the player closes, including pending scheduled/manual refreshes.
-The application cannot index after it is closed. Completed indexes refresh
-weekly, with a ten-minute retry backoff on failure. Settings → Refresh archive
-forces a rebuild and opens Archive to show progress.
+The writer builds records, facets, search postings and sort arrays, validates
+SQLite integrity, counts, numeric bounds, sort permutations and search references,
+then closes all statements/connections before an atomic rename. A failed build
+never replaces the published file. New titles become visible together. Published
+databases are read-only; old connections retain the old inode across replacement.
+`Snapshot` ownership keeps a browse session on its generation. New resets can
+capture the latest generation. Cursors additionally carry a process-unique reader
+identity, immutable match state, predicates, sort/direction and sort position;
+using an A cursor on reader B, or changing predicates/order, is rejected.
 
-`imdb-index-v1.sqlite` is shared across profiles under the GMCA configuration
-directory. Refreshes build in a separate `.building` database and atomically
-replace the published file only on success. Queries page through a read-only
-connection to one published generation, so an ongoing refresh cannot reorder
-existing pages. Old scoped `archive-<hash>.json` addon caches are preserved on
-disk but are no longer loaded or crawled.
+## Integer keys and facets
 
-Local Archive queries use their own serial reader worker, independently of the
-addon/network task queue. Reopening an index seeks its small genre list instead
-of scanning every title/genre pair; new indexes also store the browsable count.
-Existing published indexes remain readable without a new download. Substring
-search scans titles and their aliases in primary-key order instead of making
-random title reads through a sort index. Interactive filter requests are
-latest-wins: changing a filter cancels the superseded SQLite scan through its
-progress handler and drops superseded requests that have not started yet.
-Filter controls are debounced briefly so rapid controller changes collapse into
-one query; pagination and Random remain immediate. PS4 diagnostics record queue,
-SQLite and total query time separately, without filter text or credentials.
+Each browsable title receives a dense, zero-based `title_key` in **IMDb ID order**
+during the derived build, independently of input dataset order. Keys are local to
+one generation; the `records` table preserves the unique `title_key ↔ IMDb ID`
+relationship. External detail/playback identifiers remain IMDb IDs. There is no
+metadata JSON snapshot or alias/string collection loaded into RAM.
 
-PS4 uses `gmca-ps4-index`, a wrapper around SQLite's `unix-none` VFS. It copies
-the already-absolute private index paths instead of resolving their parents
-through `lstat`/`readlink`, which OpenOrbis musl does not implement. Every path
-passed to this VFS must be generated under the writable app directory; do not
-use it for relative paths or arbitrary user-supplied database names. The file
-lifecycles need no POSIX byte-range locks: one staging writer, no concurrent
-staging readers, and only read-only connections to published files. Do not add
-a second writer or mutate a published database in place. SQLite's rollback
-journal remains enabled for staging recovery, and SQLite temporary files use
-the writable config directory.
-SQLite/zlib C sources are pinned and hash-verified in
-`cmake/imdb_dependencies.cmake`; they are compiled by remote PS4 CI.
+Eligibility remains ≥100 rating votes, excluding episodes/video games, with adult
+titles hidden. On 2026-10-04 the live ratings/basics datasets contained **237,138
+browsable titles** under these rules (432,441 rated ≥100; 194,214 episodes/games;
+1,089 adult titles). This count is a dated measurement, not a permanent limit.
 
-Run `./tests/run.sh` for the importer/query, playback gate and existing standalone
-checks. `GMCA_JSON_INCLUDE` can point at an existing Borealis JSON include tree
-on a Linux test bench. Fixture checks cover import interruption/resume, Italian
-and English aliases, filters, paging, random picks, and failed refresh preserving
-the old database. The PS4 path regression injects `lstat=ENOSYS`, verifies the
-original Unix VFS cannot open the database, and then runs the complete importer
-through the PS4 wrapper under that same condition. Archive lifecycle, dataset
-download stages, and failure reasons are recorded in the PS4 diagnostic log.
-Linux tests establish shared behavior; console timings and
-system-crash resolution still need the user's PS4 test after package delivery.
+Type and each genre have a packed bitset. Year (16 bits), raw rating in tenths
+(7 bits) and votes (32 bits) use **bit-sliced indexes**: one bitset per numeric
+bit. A most-significant-bit comparator produces exact ≥ threshold sets, and year
+ranges AND the two bounds. Arbitrary vote thresholds remain exact; there are no
+coarse buckets requiring metadata scans. IMDb ratings must be finite tenths in
+[0,10], years [0,65535] and votes [0,UINT32_MAX]; unexpected data fails validation
+instead of truncating. Missing year is zero and excluded by an upper year bound.
+
+The matcher composes bitset AND operations and caches the resulting membership
+bitset plus sorted matching integer keys. Work is O(selected planes × N/64),
+plus enumeration of matching keys, not N SQLite title-row reads/materialization.
+Changing only sort, requesting another cursor page or Random reuses that exact
+match state. Unknown/unsupported facets yield no matches. Genre options and
+browsable count are small build-time metadata tables.
+
+This representation avoids thousands of distinct vote postings, repeated seeks,
+combinatorial indexes, heavy dependencies and heap objects per title. Arrays are
+contiguous, facets are loaded on demand and retained for one reader generation.
+
+## Sort, cursors and Random
+
+Four ascending integer arrays are built offline: year/release, Bayesian IMDb
+score, votes and case-folded display name. Only the selected array is loaded.
+Tie-group boundaries permit descending traversal while preserving IMDb-ID
+ascending ties, without a second descending array. Added/Updated use key order,
+as in the previous SQLite engine. Displayed ratings and minimum-rating predicates
+use **raw** IMDb rating; Rating sort uses the existing Bayesian formula with
+M=25,000 and C=average rating for titles with ≥1,000 votes.
+
+Each page continues from its cursor position in the selected sort array, checks
+membership, and fetches only visible `records` by integer primary key. There is
+no SQL `OFFSET`, result-set sort, repeated count, temp `archive_results` or live
+mutation. A selective first page may traverse much/all of the integer order
+array, especially when its matches lie at the far end; this reads no metadata
+and subsequent pages continue rather than restarting. A sort change may perform
+one sequential blob read to load the new array. Deep pagination visits the order
+array once across the entire session, without duplicate cards.
+
+Random samples one index uniformly from the complete cached matching-key vector.
+It never samples only the displayed page and never uses `ORDER BY RANDOM()`.
+
+## Substring search
+
+The custom index stores sorted integer postings for distinct 1-, 2- and 3-byte
+sequences across each title's supported names: primary, original, Italian AKA,
+US/GB/CA/AU/XWW AKA and English-language AKA. ASCII case-folding matches the
+previous SQLite `lower()` semantics; Unicode bytes remain unchanged. Literal
+`%`/`_` retain substring meaning. Names deduplicate by title and by string.
+
+Postings reside in SQLite blobs, in 16,384-key little-endian chunks. Small term
+metadata ranks query trigrams by posting count; their sorted postings are
+intersected and restricted by facets before verification. For queries longer
+than three bytes, candidate title keys select text buckets of 256 keys to verify contiguous
+substring occurrence. Names are packed sequentially in blobs of at most 1 MiB;
+common searches need roughly N/256 seeks rather than N individual lookups.
+Sparse candidates may read neighboring names in their bucket. Each title is
+limited to 256 KiB of distinct searchable name bytes (including headers). This removes false positives from grams
+in different aliases/positions. No `instr()` scan of titles or aliases remains.
+A common long substring can still require reading most search-text buckets; those costs
+are explicitly measured and are a PS4 hardware-validation risk.
+
+The explicit short-search path uses the precomputed unigram/bigram postings;
+it preserves complete substring results, including one/two-character queries,
+without scanning all names. UTF-8 queries are indexed consistently as bytes,
+including multibyte characters. No FTS5 is enabled: the pinned OpenOrbis SQLite
+build does not define `SQLITE_ENABLE_FTS5`, and the custom format has predictable
+ownership/build requirements without adding tokenizer dependencies or changing
+substring semantics.
+
+## Memory and disk policy
+
+A reader enforces ≤2,000,000 titles and ≤64 genre options. For N titles, each
+facet requires `8 × ceil(N/64)` bytes. There are 57 non-genre planes
+(2 type + 16 year + 7 rating + 32 votes), so the hard cap is 121 planes:
+**15.125 × N bytes** maximum facet payload (~28.85 MiB at 2M), loaded lazily.
+A match uses N/8 bytes plus 4 bytes per match. One selected sort array costs 4N,
+and its tie boundaries at most another 4N. Numeric comparisons temporarily use
+three N/8 bitsets; search intersections use at most two 4N candidate arrays plus
+two N/8 membership bitsets, one bounded posting chunk and a ≤1 MiB text blob. SQLite's reader cache is 4 MiB, with mmap disabled.
+
+Worst-case retained payload per reader is approximately **27.25N bytes + 4 MiB**
+(facets + current sort/ties + one all-title match). Allow roughly **44N bytes +
+5 MiB** transiently for decoding SQLite blobs, comparisons/search, vector storage
+and one additional active cursor state: ~89 MiB at the 2M hard cap, ~15 MiB at the
+measured 237k count. These are conservative payload estimates, not measured PS4
+heap peaks; allocator/SQLite statement overhead and UI cards are additional.
+An old pinned generation and a newly published reader can coexist, so budget two
+readers (~178 MiB at the artificial cap), plus the staging builder (~15.125N
+facet payload, SQLite cache, current-title terms and disk-backed sorts). Names
+are limited to 4,096 bytes and distinct per-title search sequences to 65,536;
+exceeding either budget fails the replacement without publishing it. Allow an
+additional ~7 MiB for this exceptional single-title working set. Each
+extra externally retained cursor adds up to 4.125N bytes; the UI retains one.
+Sort arrays and all aliases are not loaded together. There is no mmap reliance.
+
+Four sorts plus tie boundaries occupy at most 32N bytes on disk; facets at most
+15.125N. Search payload is **4P bytes**, where P is total distinct per-title
+1/2/3-byte sequences, plus term/chunk B-tree overhead. Records, unique IMDb IDs
+and packed searchable name strings (8-byte per-name header) are additional and depend on actual name lengths.
+Posting compression commits at 262,144 pairs to bound cancellation rollback
+payload to roughly 1 MiB plus B-tree/journal overhead. Staging temporarily holds both import tables and an uncompressed `(term,key)`
+B-tree before compacting postings, and VACUUM needs temporary space. Plan disk
+for the old generation, staging, compaction and compressed datasets together.
+Published/build size and build duration must be measured on the actual dataset;
+the synthetic benchmark reports its database bytes and process peak RSS.
+
+## PS4, playback and diagnostics
+
+The dedicated serial Archive query worker remains separate from addon/network
+work, with latest-wins cancellation, SQLite progress cancellation and explicit
+cancellation checks between bit planes, posting chunks and order-scan batches.
+Controls keep the 150ms debounce; loading feedback and callback invalidation are
+immediate. Controller focus, filters, skeleton, Reset, refresh/progress, pagination
+and Random remain in the existing UI. Random uses the same pinned snapshot.
+
+`PlaybackGate` cancels download/import/index derivation before opening a stream;
+cleanup/checkpoint completion runs off the playback UI path. Work resumes after
+playback. Exit cancels and waits for staging cleanup and stops the reader queue
+before application/static teardown. Published readers never contend with a
+writer to their database. `gmca-ps4-index` wraps SQLite's `unix-none` VFS to copy
+absolute app-private paths; OpenOrbis lacks the parent `lstat`/`readlink` behavior.
+Do not introduce relative/user paths, concurrent staging readers or a live writer.
+
+SQLite 3.53.4 and zlib 1.3.1 sources are pinned/hash-verified by
+`cmake/imdb_dependencies.cmake`, compiled by the real OpenOrbis workflow with
+mmap/WAL disabled. Current `dev` applies `scripts/patches/borealis-fixes.patch`.
+Historical `custom/ps4-safe-sources.patch` / `custom/ps4-ui-followups.patch` are
+absent from current `dev` and are not part of that workflow; the maintained
+PS4 source paths use `GMCA_PS4_SAFE_SOURCES` directly.
+
+PS4 query logs contain generation, filter/search-index/sort-scan/metadata/total
+milliseconds, matches/items, cursor in/out, reuse and work counters; queue timing
+is separate. No user search text, credentials or media URLs are logged. Build
+logs record phase, titles, index and elapsed milliseconds. Metrics also expose
+SQLite full-scan steps and sort count for tests.
+
+## Verification
+
+Run `./tests/run.sh` or configure `tests/imdb` and run CTest. Set
+`GMCA_JSON_INCLUDE` to an existing Borealis JSON tree on a Linux test bench.
+Checks cover importer recovery, aliases/substrings/short search, predicates,
+Bayesian score, ties, cursor traversal/reuse/rejection, Random over the full set,
+failed rebuild/old-reader survival, cancellation, query queue and PlaybackGate.
+The PS4 VFS test injects `lstat=ENOSYS` before import/query.
+
+The opt-in `GMCA_ARCHIVE_BENCHMARK=ON` target `benchmark_archive [titles]` defaults
+to 500,000 records. It reports no-filter cold/warm, type, genre, year, raw rating,
+votes, combined facets, common/absent/short search, sort change, first/deep page
+and Random. It asserts zero SQL full-scan/sort steps, metadata reads only for
+visible cards, match reuse and no repeated order traversal in deep pagination.
+There are no tight wall-clock CI thresholds. `Archive engine checks` compares
+identical synthetic fixtures against baseline `ef7d347e` on one Linux runner;
+that temporary baseline binary is a benchmark control, never an app fallback.
+
+Linux/CI checks establish shared correctness and measured Linux costs. OpenOrbis
+compile, PKG validation and artifact upload establish build compatibility only.
+Report **build-validated, hardware performance pending** until tested on a real
+PS4. Never infer console latency, startup heap or playback stutter from Linux
+benchmarks or successful packaging. Console firmware is never part of delivery.

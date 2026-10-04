@@ -34,6 +34,7 @@ private:
     BRLS_BIND(brls::Button, refreshButton, "archive/refresh");
     BRLS_BIND(brls::Button, resetButton, "archive/reset");
     stremio::archive::Filter filter;
+    stremio::archive::Cursor cursor;
     size_t offset = 0, total = 0, generation = 0, pollTimer = 0, queryTimer = 0, indexed = size_t(-1);
     int64_t refreshed = -1;
     bool loading = false, refreshing = false;

@@ -1,0 +1,53 @@
+name: Archive engine checks
+on:
+  pull_request:
+    branches: [dev]
+    paths: ['app/**', 'tests/**', 'cmake/imdb_dependencies.cmake', '.github/workflows/archive-engine.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Obtain JSON headers
+        run: git submodule update --init --depth 1 library/borealis
+      - name: Build portable Archive checks and benchmark
+        run: |
+          cmake -S tests/imdb -B archive-checks -DCMAKE_BUILD_TYPE=Release \
+            -DGMCA_ARCHIVE_BENCHMARK=ON \
+            -DGMCA_JSON_INCLUDE="$PWD/library/borealis/library/include/borealis/extern"
+          cmake --build archive-checks -j2
+      - name: Correctness, cancellation and lifecycle
+        run: |
+          ctest --test-dir archive-checks --output-on-failure
+          GMCA_TEST_DEPENDENCY_ARGS="-DFETCHCONTENT_SOURCE_DIR_GMCA_SQLITE=$PWD/archive-checks/_deps/gmca_sqlite-src -DFETCHCONTENT_SOURCE_DIR_GMCA_ZLIB=$PWD/archive-checks/_deps/gmca_zlib-src" ./tests/run.sh
+      - name: Compare identical 500k-title workloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p archive-evidence/legacy/api/stremio
+          baseline=ef7d347e27e0a8190f05637b73463c3c5e84f1c1
+          git show "$baseline:app/src/api/stremio/imdb_index.cpp" > archive-evidence/legacy/imdb_index.cpp
+          git show "$baseline:app/include/api/stremio/imdb_index.hpp" > archive-evidence/legacy/api/stremio/imdb_index.hpp
+          c++ -O3 -std=c++17 -DGMCA_INDEX_NOLOCK -DGMCA_BENCH_LEGACY \
+            -Iarchive-evidence/legacy -Itests/support -Iapp/include \
+            -Ilibrary/borealis/library/include/borealis/extern \
+            -Iarchive-checks/_deps/gmca_sqlite-src -Iarchive-checks/_deps/gmca_zlib-src \
+            tests/benchmark_archive.cpp archive-evidence/legacy/imdb_index.cpp \
+            archive-checks/libgmca_sqlite.a archive-checks/libgmca_index_zlib.a \
+            -pthread -ldl -lm -o archive-evidence/benchmark-before
+          /usr/bin/time -v archive-evidence/benchmark-before 500000 > archive-evidence/before.log 2> archive-evidence/before-resource.log
+          /usr/bin/time -v archive-checks/benchmark_archive 500000 > archive-evidence/after.log 2> archive-evidence/after-resource.log
+          cat archive-evidence/before.log archive-evidence/after.log
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: Archive-engine-evidence-${{ github.run_number }}
+          path: archive-evidence/*.log
+          if-no-files-found: warn

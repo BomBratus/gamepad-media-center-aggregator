@@ -8,7 +8,11 @@
 #include <cstring>
 #include <fstream>
 #include <mutex>
+#include <map>
 #include <string_view>
+#if defined(__PS4__)
+#include "utils/ps4_diagnostics.hpp"
+#endif
 
 namespace stremio::archive {
 namespace {
@@ -73,7 +77,8 @@ void exec(sqlite3* db, const char* sql) {
 }
 struct Statement {
     sqlite3_stmt* stmt = nullptr;
-    Statement(sqlite3* db, const std::string& sql) {
+    QueryMetrics* metrics = nullptr;
+    Statement(sqlite3* db, const std::string& sql, QueryMetrics* audit = nullptr) : metrics(audit) {
         if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK)
             throw std::runtime_error("Invalid IMDb query");
     }
@@ -86,6 +91,10 @@ struct Statement {
     void real(int i, double value) { sqlite3_bind_double(stmt, i, value); }
     bool row() {
         int result = sqlite3_step(stmt);
+        if (metrics) {
+            metrics->sqlFullScanSteps += sqlite3_stmt_status(stmt, SQLITE_STMTSTATUS_FULLSCAN_STEP, 1);
+            metrics->sqlSorts += sqlite3_stmt_status(stmt, SQLITE_STMTSTATUS_SORT, 1);
+        }
         if (result == SQLITE_ROW) return true;
         if (result != SQLITE_DONE) throw std::runtime_error("Cannot run IMDb query");
         return false;
@@ -171,162 +180,571 @@ int64_t timestamp() {
 }
 } // namespace
 
-ImdbIndex::ImdbIndex(const std::string& path) {
-    Database connection(path, SQLITE_OPEN_READONLY);
-    if (setting(connection.db, "version") != 1 || !setting(connection.db, "complete"))
-        throw std::runtime_error("Incomplete IMDb index");
-    count = setting(connection.db, "browsable");
-    if (!count) {
-        // Compatibility with already downloaded indexes: count the smaller
-        // covering index instead of reading every title's metadata on reboot.
-        Statement total(connection.db, "SELECT count(*) FROM titles INDEXED BY title_kind_votes WHERE adult=0");
-        if (!total.row() || !(count = total.number(0))) throw std::runtime_error("Empty IMDb index");
-    }
-    refreshed = setting(connection.db, "refreshed");
-    // DISTINCT scans every title/genre pair. Seek the next distinct value in
-    // genre_lookup instead: only a few dozen reads even with a cold cache.
-    Statement first(connection.db, "SELECT min(genre) FROM genres");
-    std::string genre = first.row() ? first.text(0) : "";
-    while (!genre.empty()) {
-        genreOptions.push_back(genre);
-        Statement next(connection.db, "SELECT min(genre) FROM genres WHERE genre>?");
-        next.text(1, genre);
-        genre = next.row() ? next.text(0) : "";
-    }
-    db = connection.db; connection.db = nullptr;
+namespace {
+using Bits = std::vector<uint64_t>;
+constexpr size_t maxTitles = 2000000, maxGenres = 64, postingChunk = 16384;
+using Clock = std::chrono::steady_clock;
+double elapsed(Clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
-ImdbIndex::~ImdbIndex() { sqlite3_close(db); }
+void checkCancel(const IndexCancel& cancel) {
+    if (cancel && cancel->load()) throw std::runtime_error("Archive query interrupted");
+}
+Bits universe(size_t n) {
+    Bits bits((n + 63) / 64, ~uint64_t(0));
+    if (n % 64) bits.back() = (uint64_t(1) << (n % 64)) - 1;
+    return bits;
+}
+void setBit(Bits& bits, uint32_t key) { bits[key / 64] |= uint64_t(1) << (key % 64); }
+bool hasBit(const Bits& bits, uint32_t key) { return bits[key / 64] & (uint64_t(1) << (key % 64)); }
+template<class T> std::vector<unsigned char> encode(const std::vector<T>& values) {
+    std::vector<unsigned char> data(values.size() * sizeof(T));
+    for (size_t i = 0; i < values.size(); ++i)
+        for (size_t b = 0; b < sizeof(T); ++b) data[i * sizeof(T) + b] = values[i] >> (8 * b);
+    return data;
+}
+template<class T> std::vector<T> decode(sqlite3_stmt* stmt, int column) {
+    auto size = sqlite3_column_bytes(stmt, column);
+    auto data = static_cast<const unsigned char*>(sqlite3_column_blob(stmt, column));
+    if (size < 0 || size % sizeof(T) || (size && !data)) throw std::runtime_error("Invalid Archive blob");
+    std::vector<T> values(size / sizeof(T));
+    for (size_t i = 0; i < values.size(); ++i)
+        for (size_t b = 0; b < sizeof(T); ++b) values[i] |= T(data[i * sizeof(T) + b]) << (8 * b);
+    return values;
+}
+void blob(Statement& stmt, int column, const std::vector<unsigned char>& data) {
+    if (sqlite3_bind_blob(stmt.stmt, column, data.data(), static_cast<int>(data.size()), SQLITE_TRANSIENT) != SQLITE_OK)
+        throw std::runtime_error("Cannot bind Archive blob");
+}
+bool samePredicates(const Filter& a, const Filter& b) {
+    return lower(a.search) == lower(b.search) && a.type == b.type && lower(a.genre) == lower(b.genre) &&
+        a.yearFrom == b.yearFrom && a.yearTo == b.yearTo && a.minRating == b.minRating &&
+        a.minVotes == b.minVotes && a.country == b.country && a.service == b.service &&
+        a.addon == b.addon && a.minViews == b.minViews && a.other == b.other;
+}
+std::vector<std::string> grams(const std::string& text, size_t width) {
+    std::vector<std::string> result;
+    if (text.size() >= width)
+        for (size_t i = 0; i + width <= text.size(); ++i) result.push_back(text.substr(i, width));
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+std::string sortName(Sort sort) {
+    switch (sort) {
+        case Sort::Name: return "name";
+        case Sort::Rating: return "rating";
+        case Sort::Votes: return "votes";
+        case Sort::Added: case Sort::Updated: return "id";
+        default: return "year";
+    }
+}
+} // namespace
 
-IndexResult ImdbIndex::query(
-        const Filter& filter, size_t offset, size_t limit, bool random, const IndexCancel& cancel) {
-    IndexResult result;
-    result.indexed = count; result.refreshed = refreshed;
-    if (!limit && !random) return result;
-    QueryCancellation cancellation(db, cancel);
-    result.genres = genreOptions;
-    // IMDb does not supply country, streaming availability, views or synopses.
-    // Preserve their meaning instead of presenting votes as public views.
-    if (!filter.country.empty() || !filter.service.empty() || !filter.addon.empty() || filter.minViews || filter.other == 2)
-        return result;
-    const auto search = lower(filter.search);
-    if (!search.empty() && (!searchReady || search != cachedSearch)) {
-        // A correlated alias lookup for each title causes hundreds of thousands
-        // of seeks on PS4. Scan aliases sequentially once, deduplicate IDs on
-        // disk, then look up only matching titles. No published file is changed.
-        searchReady = false;
-        resultReady = false;
-        exec(db, "CREATE TEMP TABLE IF NOT EXISTS archive_search(id TEXT PRIMARY KEY) WITHOUT ROWID;"
-            "DELETE FROM temp.archive_search;");
-        Statement collect(db, "INSERT OR IGNORE INTO temp.archive_search "
-            "SELECT id FROM aliases WHERE instr(name,?1)>0");
-        collect.text(1, search); collect.run();
-        Statement names(db, "INSERT OR IGNORE INTO temp.archive_search "
-            "SELECT id FROM titles NOT INDEXED WHERE instr(lower(name),?1)>0");
-        names.text(1, search); names.run();
-        cachedSearch = search;
-        searchReady = true;
+struct MatchState {
+    uint64_t generation = 0;
+    Filter filter;
+    Bits bits;
+    std::vector<uint32_t> keys; // sorted by title_key; Random directly samples this
+};
+struct ImdbIndex::Engine {
+    sqlite3* db = nullptr;
+    size_t count = 0;
+    int64_t refreshed = 0;
+    uint64_t generation = 0;
+    std::vector<std::string> genres;
+    std::map<std::string, Bits> facets;
+    std::shared_ptr<const MatchState> lastMatch;
+    std::string loadedSort;
+    std::vector<uint32_t> order, ends;
+    ~Engine() { if (db) sqlite3_close(db); }
+    const Bits& facet(const std::string& name, QueryMetrics& metrics) {
+        auto found = facets.find(name);
+        if (found != facets.end()) return found->second;
+        Statement row(db, "SELECT data FROM facets WHERE name=?", &metrics); row.text(1, name);
+        Bits bits((count + 63) / 64);
+        if (row.row()) bits = decode<uint64_t>(row.stmt, 0);
+        if (bits.size() != (count + 63) / 64) throw std::runtime_error("Invalid Archive facet");
+        return facets.emplace(name, std::move(bits)).first->second;
     }
-    // CROSS JOIN fixes the match set as the outer loop: sort/filter only those
-    // titles rather than visiting the entire ordered title index for each page.
-    const bool materialize = !search.empty() || !filter.genre.empty() || filter.yearFrom ||
-        filter.yearTo || filter.minRating || filter.minVotes;
-    // Genre rows are ordered by title ID. Stream distinct matching IDs first,
-    // avoiding one correlated genre lookup for every title in the database.
-    const bool genreScan = search.empty() && !filter.genre.empty();
-    const std::string source = genreScan ?
-        "(SELECT DISTINCT id FROM genres NOT INDEXED WHERE lower(genre)=?3 ORDER BY id) g "
-        "CROSS JOIN titles t ON t.id=g.id" : search.empty() ?
-        (materialize ? "titles t NOT INDEXED" : "titles t") :
-        "temp.archive_search s CROSS JOIN titles t ON t.id=s.id";
-    // Add only selected predicates so SQLite can use its sort/type indices.
-    std::string where = " WHERE t.adult=0";
-    if (!filter.type.empty()) where += " AND t.kind=?1";
-    if (!filter.genre.empty() && !genreScan) where += " AND EXISTS(SELECT 1 FROM genres g WHERE g.id=t.id AND lower(g.genre)=?3)";
-    if (filter.yearFrom) where += " AND t.year>=?4";
-    if (filter.yearTo) where += " AND t.year>0 AND t.year<=?5";
-    if (filter.minRating) where += " AND t.rating>=?6";
-    if (filter.minVotes) where += " AND t.votes>=?7";
-    auto bind = [&](Statement& stmt) {
-        if (!filter.type.empty()) stmt.text(1, filter.type);
-        if (!filter.genre.empty()) stmt.text(3, lower(filter.genre));
-        if (filter.yearFrom) stmt.number(4, filter.yearFrom);
-        if (filter.yearTo) stmt.number(5, filter.yearTo);
-        if (filter.minRating) stmt.real(6, filter.minRating);
-        if (filter.minVotes) stmt.number(7, filter.minVotes);
-    };
-    const bool sameFilter = resultReady && search == lower(cachedFilter.search) &&
-        filter.type == cachedFilter.type && filter.genre == cachedFilter.genre &&
-        filter.yearFrom == cachedFilter.yearFrom && filter.yearTo == cachedFilter.yearTo &&
-        filter.minRating == cachedFilter.minRating && filter.minVotes == cachedFilter.minVotes;
-    if (sameFilter) result.total = cachedTotal;
-    else {
-        resultReady = false;
-        if (materialize) {
-            // Raw rating is different from the Bayesian score sort key. With
-            // rating>=9 SQLite otherwise scans a non-covering sort index and
-            // seeks every title just to count matches, then does it again for
-            // the page. Read title rows sequentially once and cache the full
-            // filtered subset on disk for all page/sort/Random requests.
-            exec(db, "CREATE TEMP TABLE IF NOT EXISTS archive_results("
-                "id TEXT PRIMARY KEY,kind TEXT,name TEXT,year INTEGER,"
-                "rating REAL,votes INTEGER,score REAL) WITHOUT ROWID;"
-                "DELETE FROM temp.archive_results;");
-            Statement collect(db, "INSERT INTO temp.archive_results "
-                "SELECT t.id,t.kind,t.name,t.year,t.rating,t.votes,t.score FROM " + source + where);
-            bind(collect); collect.run();
-            result.total = sqlite3_changes(db);
-        } else if (where == " WHERE t.adult=0") result.total = count;
-        else {
-            Statement total(db, "SELECT count(*) FROM " + source + where); bind(total);
-            if (total.row()) result.total = total.number(0);
+    // Bit-sliced >= comparator: no title records, numeric sort, or value scan.
+    Bits atLeast(const char* field, unsigned width, uint64_t threshold, QueryMetrics& metrics, const IndexCancel& cancel) {
+        Bits equal = universe(count), greater(equal.size());
+        if (threshold >= (uint64_t(1) << width)) return greater;
+        for (unsigned b = width; b-- > 0;) {
+            checkCancel(cancel);
+            const auto& plane = facet(std::string(field) + ":" + std::to_string(b), metrics);
+            for (size_t i = 0; i < equal.size(); ++i) {
+                if ((threshold >> b) & 1) equal[i] &= plane[i];
+                else { greater[i] |= equal[i] & plane[i]; equal[i] &= ~plane[i]; }
+            }
+            metrics.facetWords += equal.size();
         }
-        cachedFilter = filter;
-        cachedTotal = result.total;
-        resultReady = true;
+        for (size_t i = 0; i < equal.size(); ++i) greater[i] |= equal[i];
+        return greater;
     }
-    if (!result.total) return result;
-    // Count + one uniformly sampled offset avoids random-sort of the whole DB.
-    if (random) {
-        static std::mt19937 engine(static_cast<uint32_t>(timestamp()));
-        offset = std::uniform_int_distribution<size_t>(0, result.total - 1)(engine);
-        limit = 1;
+    void loadSort(const std::string& name, const IndexCancel& cancel, QueryMetrics& metrics) {
+        if (name == loadedSort) return;
+        checkCancel(cancel);
+        // Release previous arrays before loading another order; four arrays
+        // exist on disk, only one (+ tie boundaries) resides in the heap.
+        std::vector<uint32_t>().swap(order); std::vector<uint32_t>().swap(ends);
+        loadedSort.clear();
+        if (name != "id") {
+            Statement row(db, "SELECT keys,ends FROM sort_orders WHERE name=?", &metrics); row.text(1, name);
+            if (!row.row()) throw std::runtime_error("Missing Archive sort");
+            order = decode<uint32_t>(row.stmt, 0); ends = decode<uint32_t>(row.stmt, 1);
+            if (order.size() != count || ends.empty() || ends.back() != count || ends.front() == 0 ||
+                !std::is_sorted(ends.begin(), ends.end()) || std::adjacent_find(ends.begin(), ends.end()) != ends.end())
+                throw std::runtime_error("Invalid Archive sort");
+        }
+        checkCancel(cancel);
+        loadedSort = name;
     }
-    std::string order;
-    std::string sortIndex;
-    switch (filter.sort) {
-        case Sort::Name: order = "lower(t.name)"; sortIndex = "name"; break;
-        case Sort::Rating: order = "t.score"; sortIndex = "rating"; break;
-        case Sort::Votes: order = "t.votes"; sortIndex = "votes"; break;
-        case Sort::Added: case Sort::Updated: order = "t.id"; break;
-        default: order = "t.year"; sortIndex = "year"; break;
+
+};
+ImdbIndex::ImdbIndex(const std::string& path) : engine(std::make_unique<Engine>()) {
+    Database connection(path, SQLITE_OPEN_READONLY);
+    if (setting(connection.db, "version") != 2 || !setting(connection.db, "complete"))
+        throw std::runtime_error("Archive format requires rebuild");
+    engine->count = setting(connection.db, "browsable");
+    if (!engine->count || engine->count > maxTitles) throw std::runtime_error("Invalid Archive count");
+    engine->refreshed = setting(connection.db, "refreshed");
+    static std::atomic<uint64_t> next{1};
+    engine->generation = next.fetch_add(1);
+    Statement genres(connection.db, "SELECT name FROM genre_options ORDER BY name");
+    while (genres.row()) engine->genres.push_back(genres.text(0));
+    if (engine->genres.size() > maxGenres) throw std::runtime_error("Too many Archive genres");
+    engine->db = connection.db; connection.db = nullptr;
+}
+ImdbIndex::~ImdbIndex() = default;
+
+IndexResult ImdbIndex::query(const Filter& filter, const Cursor& cursor, size_t limit, bool random, const IndexCancel& cancel) {
+    auto& e = *engine;
+    IndexResult result;
+    result.indexed = e.count; result.refreshed = e.refreshed; result.genres = e.genres;
+    if (!limit && !random) return result;
+    const auto started = Clock::now();
+    checkCancel(cancel);
+    QueryCancellation cancellation(e.db, cancel);
+    const auto filterStarted = Clock::now();
+    std::shared_ptr<const MatchState> match;
+    if (cursor.matches) {
+        if (cursor.generation != e.generation || cursor.matches->generation != e.generation ||
+            !samePredicates(cursor.matches->filter, filter) || cursor.sort != static_cast<int>(filter.sort) ||
+            cursor.descending != filter.descending || cursor.position > e.count)
+            throw std::runtime_error("Invalid Archive cursor");
+        match = cursor.matches;
+    } else if (e.lastMatch && samePredicates(e.lastMatch->filter, filter)) match = e.lastMatch;
+    result.metrics.reusedMatches = bool(match);
+    if (!match) {
+        // One active UI session. Drop the cache before building a different set.
+        e.lastMatch.reset();
+        auto next = std::make_shared<MatchState>();
+        next->generation = e.generation; next->filter = filter;
+        next->bits = universe(e.count);
+        auto intersect = [&](const Bits& bits, bool invert = false) {
+            checkCancel(cancel);
+            for (size_t i = 0; i < bits.size(); ++i) next->bits[i] &= invert ? ~bits[i] : bits[i];
+            result.metrics.facetWords += bits.size();
+        };
+        if (!filter.country.empty() || !filter.service.empty() || !filter.addon.empty() || filter.minViews || filter.other == 2)
+            std::fill(next->bits.begin(), next->bits.end(), 0);
+        if (!filter.type.empty()) {
+            if (filter.type != "movie" && filter.type != "series") std::fill(next->bits.begin(), next->bits.end(), 0);
+            else intersect(e.facet("type:" + filter.type, result.metrics));
+        }
+        if (!filter.genre.empty()) {
+            const auto wanted = lower(filter.genre);
+            auto found = std::find_if(e.genres.begin(), e.genres.end(), [&](const std::string& s) { return lower(s) == wanted; });
+            if (found == e.genres.end()) std::fill(next->bits.begin(), next->bits.end(), 0);
+            else intersect(e.facet("genre:" + wanted, result.metrics));
+        }
+        if (filter.yearFrom) intersect(e.atLeast("year", 16, std::max<int64_t>(0, filter.yearFrom), result.metrics, cancel));
+        if (filter.yearTo) {
+            intersect(e.atLeast("year", 16, 1, result.metrics, cancel)); // unknown year excluded
+            intersect(e.atLeast("year", 16, filter.yearTo < 0 ? 0 : uint64_t(filter.yearTo) + 1, result.metrics, cancel), true);
+        }
+        if (filter.minRating) {
+            const double threshold = std::ceil(filter.minRating * 10 - 1e-9);
+            intersect(e.atLeast("rating", 7, !std::isfinite(threshold) || threshold > 127 ? 128 : std::max(0.0, threshold), result.metrics, cancel));
+        }
+        if (filter.minVotes) intersect(e.atLeast("votes", 32, std::max<int64_t>(0, filter.minVotes), result.metrics, cancel));
+        const auto search = lower(filter.search);
+        if (!search.empty()) {
+            const auto searchStarted = Clock::now();
+            auto terms = grams(search, std::min<size_t>(3, search.size()));
+            std::vector<std::pair<size_t, std::string>> ranked;
+            Statement sizes(e.db, "SELECT count FROM search_terms WHERE term=?", &result.metrics);
+            for (const auto& term : terms) {
+                sizes.text(1, term);
+                auto n = sizes.row() ? sizes.number(0) : 0;
+                ranked.emplace_back(n, term);
+                sqlite3_reset(sizes.stmt); sqlite3_clear_bindings(sizes.stmt);
+            }
+            std::sort(ranked.begin(), ranked.end());
+            std::vector<uint32_t> candidates;
+            bool first = true;
+            for (const auto& term : ranked) {
+                checkCancel(cancel);
+                if (!first && candidates.empty()) break;
+                std::vector<uint32_t> selected;
+                selected.reserve(first ? std::min(term.first, e.count) : candidates.size());
+                Statement postings(e.db, "SELECT data FROM search_postings WHERE term=? ORDER BY chunk", &result.metrics);
+                postings.text(1, term.second);
+                size_t at = 0;
+                while (postings.row()) {
+                    checkCancel(cancel);
+                    auto keys = decode<uint32_t>(postings.stmt, 0);
+                    result.metrics.searchPostings += keys.size();
+                    for (auto key : keys) {
+                        if (key >= e.count) throw std::runtime_error("Invalid Archive posting");
+                        if (!hasBit(next->bits, key)) continue;
+                        if (!first) {
+                            while (at < candidates.size() && candidates[at] < key) ++at;
+                            if (at == candidates.size() || candidates[at] != key) continue;
+                        }
+                        selected.push_back(key);
+                    }
+                }
+                candidates.swap(selected); first = false;
+            }
+            Bits searched(next->bits.size());
+            // Verify contiguous occurrence in bounded sequential text blocks,
+            // not one SQLite/name seek per candidate. Buckets cover 256 keys;
+            // even a very common query needs ~N/256 seeks rather than N.
+            Bits wanted(next->bits.size());
+            for (auto key : candidates) setBit(wanted, key);
+            result.metrics.searchCandidates = candidates.size();
+            if (search.size() <= 3) searched.swap(wanted);
+            else {
+                Statement verify(e.db, "SELECT data FROM search_text WHERE bucket=? ORDER BY chunk", &result.metrics);
+                size_t at = 0;
+                while (at < candidates.size()) {
+                    checkCancel(cancel);
+                    const auto bucket = candidates[at] / 256;
+                    verify.number(1, bucket);
+                    bool blockFound = false;
+                    while (verify.row()) {
+                        checkCancel(cancel); blockFound = true;
+                        const auto size = sqlite3_column_bytes(verify.stmt, 0);
+                        auto data = static_cast<const unsigned char*>(sqlite3_column_blob(verify.stmt, 0));
+                        if (!data || size < 0 || size > 1024 * 1024) throw std::runtime_error("Invalid Archive text block");
+                        size_t position = 0;
+                        auto word = [&] {
+                            if (position + 4 > size_t(size)) throw std::runtime_error("Truncated Archive text block");
+                            uint32_t value = 0;
+                            for (unsigned b = 0; b < 4; ++b) value |= uint32_t(data[position++]) << (8 * b);
+                            return value;
+                        };
+                        while (position < size_t(size)) {
+                            const auto key = word(), length = word();
+                            if (key >= e.count || key / 256 != bucket || length > 4096 || length > size_t(size) - position)
+                                throw std::runtime_error("Invalid Archive text reference");
+                            if (hasBit(wanted, key) && !hasBit(searched, key) &&
+                                std::string_view(reinterpret_cast<const char*>(data + position), length).find(search) != std::string_view::npos)
+                                setBit(searched, key);
+                            position += length;
+                        }
+                    }
+                    if (!blockFound) throw std::runtime_error("Missing Archive text block");
+                    sqlite3_reset(verify.stmt); sqlite3_clear_bindings(verify.stmt);
+                    while (at < candidates.size() && candidates[at] / 256 == bucket) ++at;
+                }
+            }
+            next->bits.swap(searched);
+            result.metrics.searchMs = elapsed(searchStarted);
+        }
+        // Enumerate set bits, not title records. Cached for total + uniform Random.
+        size_t matched = 0;
+        for (auto word : next->bits) matched += __builtin_popcountll(word);
+        next->keys.reserve(matched);
+        for (size_t w = 0; w < next->bits.size(); ++w) {
+            if (!(w % 1024)) checkCancel(cancel);
+            auto word = next->bits[w];
+            while (word) {
+                unsigned bit = __builtin_ctzll(word);
+                const auto key = w * 64 + bit;
+                if (key >= e.count) throw std::runtime_error("Invalid Archive facet padding");
+                next->keys.push_back(static_cast<uint32_t>(key));
+                word &= word - 1;
+            }
+        }
+        checkCancel(cancel);
+        match = next; e.lastMatch = match;
     }
-    // Without a type constraint SQLite can choose a kind/name covering index
-    // for adult=0, then read and sort every title before returning 60 cards.
-    // Select the matching ordered index so LIMIT can stop after one page.
-    if (random) { order = "t.id"; sortIndex.clear(); }
-    const std::string index = materialize || sortIndex.empty() ? "" :
-        " INDEXED BY title_" + (filter.type.empty() ? std::string{} : "kind_") + sortIndex;
-    const auto rowSource = materialize ? "temp.archive_results t" : source;
-    const auto rowWhere = materialize ? "" : where;
-    Statement rows(db, "SELECT t.id,t.kind,t.name,t.year,t.rating,t.votes FROM " + rowSource + index + rowWhere +
-        " ORDER BY " + order + (filter.descending ? " DESC" : " ASC") + ",t.id ASC LIMIT ?8 OFFSET ?9");
-    if (!materialize) bind(rows);
-    rows.number(8, limit); rows.number(9, offset);
-    while (rows.row()) {
+    result.metrics.filterMs = elapsed(filterStarted) - result.metrics.searchMs;
+    result.total = match->keys.size();
+    result.cursor = {match, e.generation, cursor.position, static_cast<int>(filter.sort), filter.descending};
+    std::vector<uint32_t> visible;
+    const auto sortStarted = Clock::now();
+    if (random && result.total) {
+        // Predictable platform support: OpenOrbis need not expose /dev/urandom.
+        static std::mt19937 rng(static_cast<uint32_t>(timestamp()));
+        visible.push_back(match->keys[std::uniform_int_distribution<size_t>(0, result.total - 1)(rng)]);
+    } else if (result.total) {
+        e.loadSort(sortName(filter.sort), cancel, result.metrics);
+        size_t group = e.ends.size(), groupStart = 0, groupEnd = 0;
+        if (filter.descending && e.loadedSort != "id" && result.cursor.position < e.count) {
+            group = std::upper_bound(e.ends.begin(), e.ends.end(), e.count - 1 - result.cursor.position) - e.ends.begin();
+            groupEnd = e.ends[group]; groupStart = group ? e.ends[group - 1] : 0;
+        }
+        while (result.cursor.position < e.count && visible.size() < limit) {
+            if (!(result.metrics.sortEntries % 1024)) checkCancel(cancel);
+            const auto position = result.cursor.position++;
+            uint32_t key;
+            if (e.loadedSort == "id") key = filter.descending ? e.count - 1 - position : position;
+            else if (!filter.descending) key = e.order[position];
+            else {
+                // Reverse groups, preserve IMDb-ID tie order. One boundary
+                // lookup per page, then sequential array traversal per group.
+                if (position >= e.count - groupStart) {
+                    --group; groupEnd = e.ends[group]; groupStart = group ? e.ends[group - 1] : 0;
+                }
+                key = e.order[groupStart + position - (e.count - groupEnd)];
+            }
+            ++result.metrics.sortEntries;
+            if (key >= e.count) throw std::runtime_error("Invalid Archive sort key");
+            if (hasBit(match->bits, key)) visible.push_back(key);
+        }
+    } else result.cursor.position = e.count;
+    result.metrics.sortMs = elapsed(sortStarted);
+    const auto metadataStarted = Clock::now();
+    Statement rows(e.db, "SELECT id,kind,name,year,rating,votes FROM records WHERE title_key=?", &result.metrics);
+    for (auto key : visible) {
+        checkCancel(cancel); rows.number(1, key);
+        if (!rows.row()) throw std::runtime_error("Missing Archive metadata");
         Record record;
         record.meta = {{"id", rows.text(0)}, {"type", rows.text(1)}, {"name", rows.text(2)},
             {"year", std::to_string(rows.number(3))}, {"releaseInfo", std::to_string(rows.number(3))},
             {"imdbRating", rows.real(4)}, {"votes", rows.number(5)},
             {"poster", "https://images.metahub.space/poster/small/" + rows.text(0) + "/img"}};
-        record.added = record.updated = refreshed;
-        result.records.push_back(std::move(record));
+        record.added = record.updated = e.refreshed;
+        result.records.push_back(std::move(record)); ++result.metrics.metadataRows;
+        sqlite3_reset(rows.stmt); sqlite3_clear_bindings(rows.stmt);
     }
+    result.metrics.metadataMs = elapsed(metadataStarted); result.metrics.totalMs = elapsed(started);
     return result;
 }
 
+namespace {
+void buildLog(const std::string& phase, size_t titles, const std::string& index, Clock::time_point start) {
+#if defined(__PS4__)
+    ps4diag::write("archive build phase=" + phase + " titles=" + std::to_string(titles) +
+        " index=" + index + " elapsed-ms=" + std::to_string(elapsed(start)));
+#else
+    (void)phase; (void)titles; (void)index; (void)start;
+#endif
+}
+void buildDerived(sqlite3* db, const IndexCancel& cancel, const std::function<void(size_t)>& progress) {
+    const auto started = Clock::now();
+    exec(db, "DROP TABLE IF EXISTS records; DROP TABLE IF EXISTS facets; DROP TABLE IF EXISTS genre_options;"
+        "DROP TABLE IF EXISTS sort_orders; DROP TABLE IF EXISTS title_search; DROP TABLE IF EXISTS search_pairs;"
+        "DROP TABLE IF EXISTS search_terms; DROP TABLE IF EXISTS search_postings; DROP TABLE IF EXISTS search_text;"
+        "CREATE TABLE records(title_key INTEGER PRIMARY KEY,id TEXT UNIQUE,kind TEXT,name TEXT,year INTEGER,rating REAL,votes INTEGER,score REAL);"
+        "CREATE TABLE facets(name TEXT PRIMARY KEY,data BLOB) WITHOUT ROWID;"
+        "CREATE TABLE genre_options(name TEXT PRIMARY KEY) WITHOUT ROWID;"
+        "CREATE TABLE sort_orders(name TEXT PRIMARY KEY,keys BLOB,ends BLOB) WITHOUT ROWID;"
+        "CREATE TABLE title_search(title_key INTEGER,name TEXT,PRIMARY KEY(title_key,name)) WITHOUT ROWID;"
+        "CREATE TABLE search_pairs(term TEXT,title_key INTEGER,PRIMARY KEY(term,title_key)) WITHOUT ROWID;"
+        "CREATE TABLE search_terms(term TEXT PRIMARY KEY,count INTEGER) WITHOUT ROWID;"
+        "CREATE TABLE search_text(bucket INTEGER,chunk INTEGER,data BLOB,PRIMARY KEY(bucket,chunk)) WITHOUT ROWID;"
+        "CREATE TABLE search_postings(term TEXT,chunk INTEGER,data BLOB,PRIMARY KEY(term,chunk)) WITHOUT ROWID;"
+        "INSERT INTO genre_options SELECT DISTINCT genre FROM genres g JOIN titles t ON t.id=g.id WHERE t.adult=0;");
+    Statement total(db, "SELECT count(*) FROM titles WHERE adult=0"); total.row();
+    const auto count = static_cast<size_t>(total.number(0));
+    if (!count || count > maxTitles) throw std::runtime_error("Archive title budget exceeded");
+    std::map<std::string, Bits> facets;
+    auto addFacet = [&](const std::string& name) { facets.emplace(name, Bits((count + 63) / 64)); };
+    for (auto type : {"movie", "series"}) addFacet(std::string("type:") + type);
+    for (auto spec : {std::make_pair("year", 16), {"rating", 7}, {"votes", 32}})
+        for (int bit = 0; bit < spec.second; ++bit) addFacet(std::string(spec.first) + ":" + std::to_string(bit));
+    Statement genreList(db, "SELECT name FROM genre_options ORDER BY name");
+    size_t genreCount = 0;
+    while (genreList.row()) { addFacet("genre:" + lower(genreList.text(0))); ++genreCount; }
+    if (genreCount > maxGenres) throw std::runtime_error("Archive genre budget exceeded");
+    Statement titles(db, "SELECT id,kind,name,year,rating,votes,score FROM titles WHERE adult=0 ORDER BY id");
+    Statement insert(db, "INSERT INTO records VALUES(?,?,?,?,?,?,?,?)");
+    Statement genres(db, "SELECT genre FROM genres WHERE id=?");
+    Statement aliases(db, "SELECT name FROM aliases WHERE id=?");
+    Statement search(db, "INSERT OR IGNORE INTO title_search VALUES(?,?)");
+    Statement pair(db, "INSERT OR IGNORE INTO search_pairs VALUES(?,?)");
+    uint32_t key = 0;
+    buildLog("derive", count, "facets+search-pairs", started);
+    exec(db, "BEGIN");
+    try {
+        while (titles.row()) {
+            checkCancel(cancel);
+            const auto year = titles.number(3), votes = titles.number(5);
+            const auto rating = titles.real(4);
+            if (year < 0 || year > 65535 || votes < 0 || uint64_t(votes) > UINT32_MAX ||
+                !std::isfinite(rating) || rating < 0 || rating > 10 || std::abs(rating * 10 - std::round(rating * 10)) > 1e-6)
+                throw std::runtime_error("Invalid Archive numeric value");
+            insert.number(1, key);
+            for (int i = 0; i < 3; ++i) insert.text(i + 2, titles.text(i));
+            insert.number(5, year); insert.real(6, rating); insert.number(7, votes); insert.real(8, titles.real(6)); insert.run();
+            setBit(facets.at("type:" + titles.text(1)), key);
+            const std::array<std::pair<const char*, uint64_t>, 3> values{{
+                {"year", uint64_t(year)}, {"rating", uint64_t(std::llround(rating * 10))}, {"votes", uint64_t(votes)}}};
+            for (const auto& spec : values) {
+                auto value = spec.second;
+                for (unsigned bit = 0; value; ++bit, value >>= 1)
+                    if (value & 1) setBit(facets.at(std::string(spec.first) + ":" + std::to_string(bit)), key);
+            }
+            genres.text(1, titles.text(0));
+            while (genres.row()) setBit(facets.at("genre:" + lower(genres.text(0))), key);
+            sqlite3_reset(genres.stmt); sqlite3_clear_bindings(genres.stmt);
+            std::set<std::string> terms;
+            auto addName = [&](const std::string& name) {
+                if (name.size() > 4096) throw std::runtime_error("Archive name budget exceeded");
+                search.number(1, key); search.text(2, lower(name)); search.run();
+                for (size_t width = 1; width <= 3; ++width)
+                    for (const auto& term : grams(lower(name), width)) {
+                        terms.insert(term);
+                        if (terms.size() > 65536) throw std::runtime_error("Archive title search budget exceeded");
+                    }
+            };
+            addName(titles.text(2));
+            aliases.text(1, titles.text(0));
+            while (aliases.row()) addName(aliases.text(0));
+            sqlite3_reset(aliases.stmt); sqlite3_clear_bindings(aliases.stmt);
+            for (const auto& term : terms) { pair.text(1, term); pair.number(2, key); pair.run(); }
+            if (++key % 2000 == 0) {
+                exec(db, "COMMIT"); if (progress) progress(key); exec(db, "BEGIN");
+            }
+        }
+        exec(db, "COMMIT");
+        if (progress) progress(key);
+    } catch (...) { sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr); throw; }
+    Statement facet(db, "INSERT INTO facets VALUES(?,?)");
+    exec(db, "BEGIN");
+    try {
+        for (const auto& item : facets) {
+            checkCancel(cancel); facet.text(1, item.first); blob(facet, 2, encode(item.second)); facet.run();
+        }
+        exec(db, "COMMIT");
+    } catch (...) { sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr); throw; }
+    facets.clear();
+    buildLog("derive", count, "facets-complete", started);
+    // Build all order arrays once, disk-backed SQLite sort during staging only.
+    Statement saveSort(db, "INSERT INTO sort_orders VALUES(?,?,?)");
+    for (auto name : {"year", "rating", "votes", "name"}) {
+        const auto column = std::string(name) == "rating" ? "score" : std::string(name) == "name" ? "lower(name)" : name;
+        Statement sorted(db, "SELECT title_key," + std::string(column) + " FROM records ORDER BY " + column + ",id");
+        std::vector<uint32_t> keys, ends;
+        keys.reserve(count);
+        std::string last;
+        double lastNumber = 0;
+        const bool textOrder = std::string(name) == "name";
+        while (sorted.row()) {
+            if (!(keys.size() % 1024)) checkCancel(cancel);
+            auto value = sorted.text(1); // SQLite's canonical value, equality only
+            if (!keys.empty() && (textOrder ? value != last : sorted.real(1) != lastNumber)) ends.push_back(keys.size());
+            keys.push_back(sorted.number(0)); last = std::move(value); lastNumber = sorted.real(1);
+        }
+        ends.push_back(keys.size());
+        if (keys.size() != count) throw std::runtime_error("Invalid Archive sort count");
+        Bits seen((count + 63) / 64);
+        for (auto key : keys) {
+            if (key >= count || hasBit(seen, key)) throw std::runtime_error("Invalid Archive sort reference");
+            setBit(seen, key);
+        }
+        saveSort.text(1, name); blob(saveSort, 2, encode(keys)); blob(saveSort, 3, encode(ends)); saveSort.run();
+        buildLog("derive", count, name, started);
+    }
+    buildLog("derive", count, "search-compress", started);
+    // Pack searchable names into bounded blobs, indexed by key/256. This is
+    // staging-only sequential work; strings remain on disk during browsing.
+    {
+        Statement names(db, "SELECT title_key,name FROM title_search ORDER BY title_key,name");
+        Statement save(db, "INSERT INTO search_text VALUES(?,?,?)");
+        std::vector<unsigned char> data;
+        size_t bucket = 0, chunk = 0, titleBytes = 0;
+        uint32_t previousKey = UINT32_MAX;
+        auto flush = [&] {
+            if (data.empty()) return;
+            save.number(1, bucket); save.number(2, chunk++); blob(save, 3, data); save.run(); data.clear();
+        };
+        auto number = [&](uint32_t value) {
+            for (unsigned b = 0; b < 4; ++b) data.push_back(value >> (8 * b));
+        };
+        while (names.row()) {
+            checkCancel(cancel);
+            const auto key = static_cast<uint32_t>(names.number(0));
+            const auto name = names.text(1);
+            if (key != previousKey) { titleBytes = 0; previousKey = key; }
+            titleBytes += name.size() + 8;
+            if (titleBytes > 256 * 1024) throw std::runtime_error("Archive title names budget exceeded");
+            if (key / 256 != bucket) { flush(); bucket = key / 256; chunk = 0; }
+            if (data.size() + name.size() + 8 > 1024 * 1024) flush();
+            number(key); number(name.size()); data.insert(data.end(), name.begin(), name.end());
+        }
+        flush();
+    }
+    buildLog("derive", count, "search-text", started);
+    // Compress each sorted posting into fixed-size little-endian chunks.
+    Statement pairs(db, "SELECT term,title_key FROM search_pairs ORDER BY term,title_key");
+    Statement savePosting(db, "INSERT INTO search_postings VALUES(?,?,?)");
+    Statement saveTerm(db, "INSERT INTO search_terms VALUES(?,?)");
+    std::string term;
+    std::vector<uint32_t> keys;
+    size_t chunk = 0, n = 0, written = 0, committed = 0;
+    auto flush = [&] {
+        if (keys.empty()) return;
+        savePosting.text(1, term); savePosting.number(2, chunk++); blob(savePosting, 3, encode(keys)); savePosting.run(); keys.clear();
+    };
+    auto finish = [&] {
+        if (!n) return;
+        flush(); saveTerm.text(1, term); saveTerm.number(2, n); saveTerm.run();
+    };
+    exec(db, "BEGIN");
+    try {
+        while (pairs.row()) {
+            if (!(written++ % 4096)) checkCancel(cancel);
+            auto next = pairs.text(0);
+            if (next != term) { finish(); term = std::move(next); chunk = n = 0; }
+            keys.push_back(pairs.number(1)); ++n;
+            if (keys.size() == postingChunk) flush();
+            if (written - committed >= 262144) {
+                // Bound cancellation rollback I/O to ~1 MiB of postings.
+                flush(); exec(db, "COMMIT"); exec(db, "BEGIN"); committed = written;
+            }
+        }
+        finish(); exec(db, "COMMIT");
+    } catch (...) { sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr); throw; }
+    buildLog("validate", count, "all", started);
+    // Validate every reference and array before marking complete or publishing.
+    Statement integrity(db, "PRAGMA quick_check");
+    if (!integrity.row() || integrity.text(0) != "ok" || key != count) throw std::runtime_error("Archive validation failed");
+    Statement searchCount(db, "SELECT count(*),min(title_key),max(title_key) FROM title_search");
+    if (!searchCount.row() || searchCount.number(0) < int64_t(count) || searchCount.number(1) < 0 ||
+        searchCount.number(2) >= int64_t(count)) throw std::runtime_error("Invalid Archive search references");
+    Statement postingCounts(db, "SELECT coalesce(sum(count),0) FROM search_terms");
+    if (!postingCounts.row() || postingCounts.number(0) != int64_t(written)) throw std::runtime_error("Invalid Archive posting counts");
+    setting(db, "browsable", count);
+    setting(db, "derived_ms", static_cast<int64_t>(elapsed(started)));
+}
+} // namespace
+
 bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const DatasetDownload& download,
         const std::function<void(size_t)>& progress) {
+    const auto buildStarted = Clock::now();
     const auto staging = path + ".building";
+    // Old staged schemas cannot resume into a new index format.
+    if (cancel && cancel->load()) return false;
+    if (std::ifstream(staging).good()) {
+        // A read/write probe lets SQLite recover a hot journal after process
+        // termination before deciding whether this staging schema can resume.
+        Database old(staging, SQLITE_OPEN_READWRITE);
+        Statement schema(old.db, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='settings'");
+        const bool hasSettings = schema.row() && schema.number(0);
+        sqlite3_reset(schema.stmt);
+        if (!hasSettings || setting(old.db, "version") != 2) {
+            sqlite3_finalize(schema.stmt); schema.stmt = nullptr;
+            sqlite3_close(old.db); old.db = nullptr;
+            std::remove(staging.c_str()); std::remove((staging + "-journal").c_str());
+        }
+    }
     try {
     {
         Database connection(staging, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
@@ -335,15 +753,17 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
             return static_cast<std::atomic_bool*>(value)->load() ? 1 : 0;
         }, cancel.get());
         exec(db, "PRAGMA cache_size=-4096; PRAGMA temp_store=FILE; PRAGMA journal_mode=DELETE;"
-            "CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value INTEGER);"
+            "CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value INTEGER);");
+        if (!setting(db, "version")) setting(db, "version", 2);
+        if (!setting(db, "derived_ready") && !setting(db, "complete")) exec(db,
             "CREATE TABLE IF NOT EXISTS ratings(id TEXT PRIMARY KEY,rating REAL,votes INTEGER) WITHOUT ROWID;"
             "CREATE TABLE IF NOT EXISTS titles(id TEXT PRIMARY KEY,kind TEXT,name TEXT,year INTEGER,"
             "rating REAL,votes INTEGER,adult INTEGER,score REAL) WITHOUT ROWID;"
             "CREATE TABLE IF NOT EXISTS aliases(id TEXT,name TEXT,PRIMARY KEY(id,name)) WITHOUT ROWID;"
             "CREATE TABLE IF NOT EXISTS genres(id TEXT,genre TEXT,PRIMARY KEY(id,genre)) WITHOUT ROWID;");
-        if (!setting(db, "version")) setting(db, "version", 1);
         const std::array<const char*, 3> datasets{"title.ratings.tsv.gz", "title.basics.tsv.gz", "title.akas.tsv.gz"};
         for (int phase = static_cast<int>(setting(db, "phase")); phase < 3; ++phase) {
+            buildLog("import", setting(db, "indexed"), datasets[phase], buildStarted);
             if (cancel->load()) return false;
             const auto gzipPath = path + "." + datasets[phase];
             if (!std::ifstream(gzipPath, std::ios::binary).good()) {
@@ -439,31 +859,29 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
             } catch (...) { sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr); throw; }
         }
         if (cancel->load()) return false;
-        // Keep the TV box's Bayesian rating order; the displayed rating stays raw.
+        // Derived indexes are restartable, never exposed during their build.
         if (!setting(db, "complete")) {
-        exec(db, "BEGIN");
-        exec(db, "UPDATE titles SET score=(votes*rating+25000*coalesce((SELECT avg(rating) FROM titles WHERE votes>=1000),6.5))/(votes+25000);"
-            "CREATE INDEX IF NOT EXISTS title_year ON titles(year,id);"
-            "CREATE INDEX IF NOT EXISTS title_rating ON titles(score,id);"
-            "CREATE INDEX IF NOT EXISTS title_votes ON titles(votes,id);"
-            "CREATE INDEX IF NOT EXISTS title_name ON titles(lower(name),id);"
-            "CREATE INDEX IF NOT EXISTS title_kind_year ON titles(kind,year,id) WHERE adult=0;"
-            "CREATE INDEX IF NOT EXISTS title_kind_rating ON titles(kind,score,id) WHERE adult=0;"
-            "CREATE INDEX IF NOT EXISTS title_kind_votes ON titles(kind,votes,id) WHERE adult=0;"
-            "CREATE INDEX IF NOT EXISTS title_kind_name ON titles(kind,lower(name),id) WHERE adult=0;"
-            "CREATE INDEX IF NOT EXISTS genre_lookup ON genres(genre,id);"
-            "DROP TABLE IF EXISTS ratings; DELETE FROM settings WHERE key LIKE 'it:%';");
-        if (!setting(db, "indexed")) throw std::runtime_error("Empty IMDb dataset");
-        Statement browsable(db, "SELECT count(*) FROM titles WHERE adult=0");
-        if (!browsable.row()) throw std::runtime_error("Empty IMDb dataset");
-        setting(db, "browsable", browsable.number(0));
-        setting(db, "complete", 1); setting(db, "refreshed", timestamp());
-        exec(db, "COMMIT");
+            if (!setting(db, "derived_ready")) {
+                exec(db, "UPDATE titles SET score=(votes*rating+25000*coalesce((SELECT avg(rating) FROM titles WHERE votes>=1000),6.5))/(votes+25000);");
+                buildDerived(db, cancel, progress);
+                checkCancel(cancel);
+                setting(db, "derived_ready", 1);
+            }
+            exec(db, "DROP TABLE IF EXISTS search_pairs; DROP TABLE IF EXISTS ratings;"
+                "DROP TABLE IF EXISTS aliases; DROP TABLE IF EXISTS genres; DROP TABLE IF EXISTS titles; DROP TABLE IF EXISTS title_search;"
+                "DELETE FROM settings WHERE key LIKE 'it:%';");
+            // Compact freed staging pages before publication, cancellable by
+            // SQLite's handler. Temporary peak disk is documented.
+            buildLog("compact", setting(db, "browsable"), "all", buildStarted);
+            exec(db, "VACUUM");
+            checkCancel(cancel);
+            setting(db, "refreshed", timestamp()); setting(db, "complete", 1);
         }
     }
     // Close every statement/connection before swapping; failed downloads/builds
     // leave the previously published database available for browsing.
     if (cancel->load()) return false;
+    buildLog("publish", 0, "v2", buildStarted);
     if (std::rename(staging.c_str(), path.c_str()) != 0) throw std::runtime_error("Cannot publish IMDb index");
     for (auto name : {"title.ratings.tsv.gz", "title.basics.tsv.gz", "title.akas.tsv.gz"})
         std::remove((path + "." + name).c_str());
@@ -476,6 +894,9 @@ bool buildImdbIndex(const std::string& path, const IndexCancel& cancel, const Da
         std::remove((staging + "-journal").c_str());
         for (auto name : {"title.ratings.tsv.gz", "title.basics.tsv.gz", "title.akas.tsv.gz"})
             std::remove((path + "." + name).c_str());
+        throw;
+    } catch (...) {
+        if (cancel && cancel->load()) return false;
         throw;
     }
 }
