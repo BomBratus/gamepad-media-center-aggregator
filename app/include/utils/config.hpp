@@ -7,6 +7,7 @@
 #include <atomic>
 #include <memory>
 #include <optional>
+#include <mutex>
 
 namespace media {
 class Backend;
@@ -131,7 +132,8 @@ public:
 
     template <typename T>
     T getItem(const Item item, T defaultValue) {
-        auto& o = settingMap[item];
+        std::lock_guard<std::recursive_mutex> guard(stateMutex);
+        const auto& o = settingMap.at(item);
         try {
             if (!setting.contains(o.key)) return defaultValue;
             return this->setting.at(o.key).get<T>();
@@ -143,7 +145,8 @@ public:
 
     template <typename T>
     void setItem(const Item item, T data) {
-        auto& o = settingMap[item];
+        std::lock_guard<std::recursive_mutex> guard(stateMutex);
+        const auto& o = settingMap.at(item);
         this->setting[o.key] = data;
         this->save();
     }
@@ -164,26 +167,31 @@ public:
     /// active url/token/profile or the backend/theme. Used to store the other
     bool removeServer(const std::string& id);
     bool removeUser(const std::string& id);
-    const std::string& getDeviceId() { return this->device; }
-    const std::string& getUserId() const { return this->user_id; }
-    const std::string& getUserName() const { return this->user->name; }
+    std::string getDeviceId() { std::lock_guard<std::recursive_mutex> guard(stateMutex); return this->device; }
+    std::string getUserId() const { std::lock_guard<std::recursive_mutex> guard(stateMutex); return this->user_id; }
+    std::string getUserName() const { std::lock_guard<std::recursive_mutex> guard(stateMutex); return this->user->name; }
     /// Active profile (name, avatar...) — valid after init()/checkLogin().
-    const AppUser& getUser() const { return *this->user; }
-    const std::string& getToken() const { return this->server_token; }
-    const std::string& getAccountToken() const { return this->user->access_token; }
-    const std::string& getUrl() const { return this->server_url; }
+    AppUser getUser() const { std::lock_guard<std::recursive_mutex> guard(stateMutex); return this->user == users.end() ? AppUser{} : *this->user; }
+    std::string getToken() const { std::lock_guard<std::recursive_mutex> guard(stateMutex); return this->server_token; }
+    std::string getAccountToken() const { std::lock_guard<std::recursive_mutex> guard(stateMutex); return this->user->access_token; }
+    std::string getUrl() const { std::lock_guard<std::recursive_mutex> guard(stateMutex); return this->server_url; }
     /// Stremio only: addon transport URLs of the active server (manifest URLs).
     /// Empty for other backends / when not logged in.
-    const std::vector<std::string>& getStremioAddons() const;
+    std::vector<std::string> getStremioAddons() const;
+    struct StremioAccount { std::string token, userId; AppUser user; std::vector<std::string> addons; };
+    StremioAccount getStremioAccount() const {
+        std::lock_guard<std::recursive_mutex> guard(stateMutex);
+        return {server_token, user_id, user == users.end() ? AppUser{} : *user, getStremioAddons()};
+    }
     /// Stremio only: replace the active server's addon list (after an account
     /// collection re-sync) and persist. No-op when unchanged or not logged in.
-    void setStremioAddons(const std::vector<std::string>& addons);
+    void setStremioAddons(const std::vector<std::string>& addons, const std::string& expectedToken = {});
     /// Active media backend (built lazily from the active server's type).
     /// The UI talks to this; it never formats a provider URL itself.
     media::Backend& backend();
-    const std::vector<AppServer>& getServers() const { return this->servers; }
+    std::vector<AppServer> getServers() const { std::lock_guard<std::recursive_mutex> guard(stateMutex); return this->servers; }
     /// All known connections (one AppUser = one server+profile pair).
-    const std::vector<AppUser>& getUsers() const { return this->users; }
+    std::vector<AppUser> getUsers() const { std::lock_guard<std::recursive_mutex> guard(stateMutex); return this->users; }
     /// Public so the connection switcher can tint each tile by its backend brand.
     static media::BackendType backendTypeFromString(const std::string& type);
 
@@ -207,6 +215,7 @@ private:
     /// Writes one palette variant onto the matching borealis Theme singleton.
     void applyThemeVariant(brls::ThemeVariant tv, const plenx::ThemePalette& p);
 
+    mutable std::recursive_mutex stateMutex;
     UserIter user;
     // owning raw pointer (forward-declared type): deleted in ~AppConfig/resetBackend
     media::Backend* activeBackend = nullptr;

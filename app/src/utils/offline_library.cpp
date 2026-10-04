@@ -7,6 +7,7 @@
 #include "utils/download.hpp"
 
 #include <fstream>
+#include "utils/serial_writer.hpp"
 
 std::string OfflineLibrary::metaDir() const { return AppConfig::instance().configDir() + "/downloads/meta"; }
 
@@ -59,13 +60,18 @@ void OfflineLibrary::rebuild() {
 }
 
 void OfflineLibrary::writeMeta(const media::Item& item) const {
-    try {
-        nlohmann::json j = item;
-        std::ofstream f(this->metaPath(item.ratingKey));
-        f << j.dump(2);
-    } catch (const std::exception& e) {
-        brls::Logger::error("OfflineLibrary: cannot write meta {}: {}", item.ratingKey, e.what());
-    }
+    const auto path = this->metaPath(item.ratingKey);
+    filePersistence().submit([path, item] {
+        try {
+            nlohmann::json j = item;
+            std::ofstream f(path + ".tmp");
+            f << j.dump(2); f.close();
+            if (!f || std::rename((path + ".tmp").c_str(), path.c_str()) != 0)
+                throw std::runtime_error("Cannot publish offline metadata");
+        } catch (const std::exception& e) {
+            brls::Logger::error("OfflineLibrary: cannot write meta {}: {}", item.ratingKey, e.what());
+        }
+    }, path);
 }
 
 void OfflineLibrary::putItem(const media::Item& item) {
@@ -134,17 +140,15 @@ bool OfflineLibrary::empty() const {
 
 void OfflineLibrary::removeItem(const std::string& ratingKey) {
     std::lock_guard<std::mutex> lock(this->mutex);
-    for (const auto& n : this->nodes) {
-        if (n.ratingKey != ratingKey) continue;
-        for (const auto& a : offline::assetPaths(n)) ImageCache::remove(a);
-        break;
-    }
-    try {
-        std::string path = this->metaPath(ratingKey);
-        if (fs::exists(path)) fs::remove(path);
-    } catch (const std::exception& e) {
-        brls::Logger::error("OfflineLibrary: cannot remove meta {}: {}", ratingKey, e.what());
-    }
+    std::vector<std::string> assets;
+    for (const auto& n : this->nodes)
+        if (n.ratingKey == ratingKey) { assets = offline::assetPaths(n); break; }
+    const auto path = metaPath(ratingKey);
+    filePersistence().submit([path, assets] {
+        try { if (fs::exists(path)) fs::remove(path); }
+        catch (const std::exception& e) { brls::Logger::warning("Offline removal: {}", e.what()); }
+        for (const auto& asset : assets) ImageCache::remove(asset);
+    });
     this->nodes.erase(std::remove_if(this->nodes.begin(), this->nodes.end(),
                           [&](const media::Item& n) { return n.ratingKey == ratingKey; }),
         this->nodes.end());
@@ -177,13 +181,12 @@ void OfflineLibrary::prune() {
             kept.push_back(std::move(n));
             continue;
         }
-        // pruned: drop meta + cached artwork
-        try {
-            std::string p = this->metaPath(n.ratingKey);
-            if (fs::exists(p)) fs::remove(p);
-        } catch (...) {
-        }
-        for (const auto& a : offline::assetPaths(n)) ImageCache::remove(a);
+        const auto path = this->metaPath(n.ratingKey);
+        const auto assets = offline::assetPaths(n);
+        filePersistence().submit([path, assets] {
+            try { if (fs::exists(path)) fs::remove(path); } catch (...) {}
+            for (const auto& asset : assets) ImageCache::remove(asset);
+        });
     }
     this->nodes = std::move(kept);
     this->rebuild();

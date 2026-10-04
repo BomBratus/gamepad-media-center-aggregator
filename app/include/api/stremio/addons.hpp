@@ -3,14 +3,16 @@
     configured transportUrl) and answers routing queries: which addons serve a
     given resource/type/id, what catalogs exist, and how to build a resource URL.
 
-    Loading is lazy and thread-safe: the backend verbs run on the brls::async
-    pool (multiple threads), and each calls ensureLoaded() inside its async body.
+    Loading is lazy and thread-safe: the backend verbs run on the Stremio network
+    orchestration executor, and each calls ensureLoaded() inside its async body.
     A std::mutex + `loaded` flag guarantees the manifests are fetched once.
 */
 
 #pragma once
 
 #include <mutex>
+#include <condition_variable>
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -57,6 +59,9 @@ public:
 private:
     mutable std::mutex mtx;
     bool loaded = false;
+    bool loading = false;
+    uint64_t generation = 0;
+    std::condition_variable changed;
     std::vector<Addon> addons;
 };
 

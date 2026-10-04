@@ -15,9 +15,16 @@
 namespace stremio {
 
 void AddonEngine::ensureLoaded() {
-    std::lock_guard<std::mutex> lock(mtx);
-    if (loaded) return;
-
+    for (;;) {
+    uint64_t version;
+    {
+        std::unique_lock<std::mutex> lock(mtx);
+        changed.wait(lock, [this] { return !loading; });
+        if (loaded) return;
+        loading = true;
+        version = generation;
+    }
+    try {
     // Re-sync the account's addon collection before loading manifests. Stremio
     // (re)configures an addon by REPLACING its transportUrl (e.g. Torrentio's
     // debrid apikey lives in the URL path) and the official clients pull the
@@ -26,11 +33,16 @@ void AddonEngine::ensureLoaded() {
     // failure (offline, expired key) keep the stored list; an empty collection
     // is ignored too (a live account always has the default addons) rather
     // than wiping a working list.
-    const std::string& authKey = AppConfig::instance().getToken();
+    const auto account = AppConfig::instance().getStremioAccount();
+    const auto& authKey = account.token;
+    auto transports = account.addons;
     if (!authKey.empty()) {
         try {
             std::vector<std::string> fresh = fetchAddonCollection(authKey);
-            if (!fresh.empty()) AppConfig::instance().setStremioAddons(fresh);
+            if (!fresh.empty()) {
+                transports = fresh;
+                AppConfig::instance().setStremioAddons(fresh, authKey);
+            }
         } catch (const std::exception& ex) {
             brls::Logger::warning("stremio: addon collection sync failed: {}", ex.what());
         }
@@ -38,15 +50,14 @@ void AddonEngine::ensureLoaded() {
 
     // AppConfig::instance().getStremioAddons() returns the configured list of
     // transportUrls (each ending in /manifest.json). Provided by the config layer.
-    const std::vector<std::string>& transports = AppConfig::instance().getStremioAddons();
 
     // Manifest requests are independent. Register them as a lazy bounded batch
     // before consuming them in collection order below. The first getSync starts
     // the batch; parsing/error handling remains exactly as before.
     requests::registerBatch(transports);
 
-    addons.clear();
-    addons.reserve(transports.size());
+    std::vector<Addon> next;
+    next.reserve(transports.size());
     for (const auto& transport : transports) {
         try {
             nlohmann::json j = getSync(transport);
@@ -58,17 +69,36 @@ void AddonEngine::ensureLoaded() {
             a.transportUrl = transport;
             a.base = baseFromTransport(transport);
             a.manifest = parseManifest(j);
-            addons.push_back(std::move(a));
+            next.push_back(std::move(a));
         } catch (const std::exception& ex) {
             brls::Logger::warning("stremio: manifest load failed {}: {}", redactUrlForLog(transport), ex.what());
         }
     }
-    loaded = true;
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        loading = false;
+        if (version == generation) {
+            addons = std::move(next);
+            loaded = true;
+        }
+        changed.notify_all();
+        if (loaded) return;
+    }
+    } catch (...) {
+        std::lock_guard<std::mutex> lock(mtx);
+        loading = false;
+        changed.notify_all();
+        throw;
+    }
+    } // invalidation during loading retries without publishing stale manifests
 }
 
 void AddonEngine::invalidate() {
-    std::lock_guard<std::mutex> lock(mtx);
-    loaded = false;
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        ++generation;
+        loaded = false;
+    }
     requests::clear();
 }
 

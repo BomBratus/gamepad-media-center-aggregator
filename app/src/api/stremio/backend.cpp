@@ -84,10 +84,9 @@ AsyncPlaybackHistory& playbackHistory() {
 }
 
 std::string playbackScope() {
-    if (accountKey().empty()) return {};
-    const auto& config = AppConfig::instance();
-    const auto& user = config.getUser();
-    return nlohmann::json::array({user.server_id, config.getUserId()}).dump();
+    const auto account = AppConfig::instance().getStremioAccount();
+    if (account.token.empty()) return {};
+    return nlohmann::json::array({account.user.server_id, account.userId}).dump();
 }
 
 void clearSavedPlayback(const std::string& id) {

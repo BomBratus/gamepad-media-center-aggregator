@@ -21,6 +21,7 @@ constexpr uint32_t MINIMUM_WINDOW_HEIGHT = 360;
 #include <borealis/core/cache_helper.hpp>
 #include <algorithm>
 #include <mutex>
+#include "utils/serial_writer.hpp"
 #include <borealis/views/edit_text_dialog.hpp>
 #include "api/backend.hpp"
 #include "api/stremio/backend.hpp"
@@ -551,26 +552,32 @@ bool AppConfig::init() {
 }
 
 void AppConfig::save() {
-    static std::mutex saveMutex;
-    std::lock_guard<std::mutex> lock(saveMutex);
-    try {
-        nlohmann::json snapshot = this->persisted;
-        snapshot.update(nlohmann::json(*this));
-        if (!writeConfigAtomic(this->configDir() + "/config.json", snapshot.dump(2)))
-            brls::Logger::warning("AppConfig: could not save configuration");
-    } catch (const std::exception& ex) {
-        brls::Logger::warning("AppConfig save: {}", ex.what());
-    }
+    // Snapshot and FIFO publication share one short state lock. The writer
+    // never acquires it: serialization and atomic disk I/O happen off the UI.
+    std::lock_guard<std::recursive_mutex> guard(stateMutex);
+    nlohmann::json snapshot = this->persisted;
+    snapshot.update(nlohmann::json(*this));
+    const auto path = configDir() + "/config.json";
+    filePersistence().submit([path, snapshot = std::move(snapshot)] {
+        try {
+            if (!writeConfigAtomic(path, snapshot.dump(2)))
+                brls::Logger::warning("AppConfig: could not save configuration");
+        } catch (const std::exception& ex) {
+            brls::Logger::warning("AppConfig save: {}", ex.what());
+        }
+    }, path);
 }
 
 AppConfig::~AppConfig() { delete this->activeBackend; }
 
 void AppConfig::resetBackend() {
+    std::lock_guard<std::recursive_mutex> guard(stateMutex);
     delete this->activeBackend;
     this->activeBackend = nullptr;
 }
 
 media::Backend& AppConfig::backend() {
+    std::lock_guard<std::recursive_mutex> guard(stateMutex);
     if (!this->activeBackend) this->activeBackend = new stremio::StremioBackend();
     return *this->activeBackend;
 }
@@ -580,7 +587,8 @@ media::BackendType AppConfig::backendTypeFromString(const std::string& type) {
     return media::BackendType::Stremio;
 }
 
-const std::vector<std::string>& AppConfig::getStremioAddons() const {
+std::vector<std::string> AppConfig::getStremioAddons() const {
+    std::lock_guard<std::recursive_mutex> guard(stateMutex);
     static const std::vector<std::string> empty;
     if (this->user == this->users.end()) return empty;
     for (auto& s : this->servers)
@@ -588,7 +596,9 @@ const std::vector<std::string>& AppConfig::getStremioAddons() const {
     return empty;
 }
 
-void AppConfig::setStremioAddons(const std::vector<std::string>& addons) {
+void AppConfig::setStremioAddons(const std::vector<std::string>& addons, const std::string& expectedToken) {
+    std::lock_guard<std::recursive_mutex> guard(stateMutex);
+    if (!expectedToken.empty() && server_token != expectedToken) return;
     if (this->user == this->users.end()) return;
     for (auto& s : this->servers) {
         if (s.id != this->user->server_id || !supportedStremioAccount(s)) continue;
@@ -600,6 +610,7 @@ void AppConfig::setStremioAddons(const std::vector<std::string>& addons) {
 }
 
 bool AppConfig::checkLogin() {
+    std::lock_guard<std::recursive_mutex> guard(stateMutex);
     this->resetBackend();
     this->server_url.clear();
     this->server_token.clear();
@@ -634,6 +645,7 @@ void AppConfig::checkRestart(char* argv[]) {
 }
 
 int AppConfig::getOptionIndex(const Item item, int default_index) const {
+    std::lock_guard<std::recursive_mutex> guard(stateMutex);
     auto it = settingMap.find(item);
     if (setting.contains(it->second.key)) {
         try {
@@ -648,6 +660,7 @@ int AppConfig::getOptionIndex(const Item item, int default_index) const {
 }
 
 int AppConfig::getValueIndex(const Item item, int default_index) const {
+    std::lock_guard<std::recursive_mutex> guard(stateMutex);
     auto it = settingMap.find(item);
     if (setting.contains(it->second.key)) {
         try {
@@ -662,6 +675,7 @@ int AppConfig::getValueIndex(const Item item, int default_index) const {
 }
 
 bool AppConfig::addServer(const AppServer& s) {
+    std::lock_guard<std::recursive_mutex> guard(stateMutex);
     if (!supportedStremioAccount(s)) return false;
     if (s.urls.size() > 0) {
         this->server_url = s.urls.front();
@@ -693,6 +707,7 @@ bool AppConfig::addServer(const AppServer& s) {
 }
 
 void AppConfig::addUser(const AppUser& u, const std::string& url) {
+    std::lock_guard<std::recursive_mutex> guard(stateMutex);
     const auto* server = selectedStremioServer(this->servers, u.server_id);
     if (!server) return;
     AppUser account = u;
@@ -724,6 +739,7 @@ void AppConfig::addUser(const AppUser& u, const std::string& url) {
 }
 
 bool AppConfig::removeServer(const std::string& id) {
+    std::lock_guard<std::recursive_mutex> guard(stateMutex);
     for (auto it = this->servers.begin(); it != this->servers.end(); ++it) {
         if (it->id == id && supportedStremioAccount(*it)) {
             this->servers.erase(it);
@@ -735,9 +751,11 @@ bool AppConfig::removeServer(const std::string& id) {
 }
 
 bool AppConfig::removeUser(const std::string& id) {
+    std::lock_guard<std::recursive_mutex> guard(stateMutex);
     for (auto it = this->users.begin(); it != this->users.end(); ++it) {
         if (it->id == id && selectedStremioServer(this->servers, it->server_id)) {
             this->users.erase(it);
+            this->user = std::find_if(users.begin(), users.end(), [this](const auto& profile) { return profile.id == user_id; });
             this->save();
             return true;
         }
