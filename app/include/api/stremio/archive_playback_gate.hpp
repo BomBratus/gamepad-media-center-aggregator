@@ -81,7 +81,7 @@ public:
             const auto mode = modeLocked();
             if (mode == Mode::Stopped || cancel->load()) return;
             if (mode == Mode::Foreground) {
-                burst = {}; networkUntil = {};
+                burst = {}; cpuUntil = {}; networkUntil = {};
                 job->second = false;
                 return;
             }
@@ -90,7 +90,7 @@ public:
             if (mode == Mode::Parked) {
                 // Periodically reevaluate the stable-playback grace period.
                 changed.wait_for(lock, std::chrono::milliseconds(100));
-                burst = {}; networkUntil = {};
+                burst = {}; cpuUntil = {}; networkUntil = {};
                 continue;
             }
             const auto now = Clock::now();
@@ -99,15 +99,20 @@ public:
                     std::chrono::microseconds(uint64_t(bytes) * 1000000 / (256 * 1024));
                 bytes = 0;
             }
-            if (burst == Clock::time_point{}) burst = now;
-            const auto cpuUntil = now - burst >= std::chrono::milliseconds(2)
-                ? burst + std::chrono::milliseconds(40) : now;
+            if (burst != Clock::time_point{} && now - burst >= std::chrono::milliseconds(2)) {
+                // Include overruns (e.g. a slow filesystem call), then persist
+                // the rest deadline across wakeups. A past window must never
+                // leave the writer running without further throttling.
+                cpuUntil = now + (now - burst) * 19;
+                burst = {};
+            }
             const auto until = std::max(cpuUntil, networkUntil);
             if (until > now) {
+                burst = {}; // waiting is not part of the next work burst
                 changed.wait_until(lock, until);
-                if (Clock::now() >= burst + std::chrono::milliseconds(40)) burst = {};
                 continue;
             }
+            if (burst == Clock::time_point{}) burst = now;
             job->second = false;
             return;
         }
@@ -127,7 +132,7 @@ private:
     uint64_t nextPlayer = 0;
     bool stopped = false;
     std::chrono::milliseconds grace;
-    Clock::time_point burst{}, networkUntil{};
+    Clock::time_point burst{}, cpuUntil{}, networkUntil{};
 };
 
 } // namespace stremio::archive

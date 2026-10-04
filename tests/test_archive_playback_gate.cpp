@@ -38,6 +38,19 @@ int main() {
     while (PlaybackGate::Clock::now() - cpuStart < 3ms) {}
     gate.checkpoint(job);
     assert(PlaybackGate::Clock::now() - cpuStart >= 25ms);
+    // A slow disk call may exceed an entire 40ms window. It must still yield,
+    // including after an unrelated notification wakes the condition variable.
+    gate.checkpoint(job);
+    std::this_thread::sleep_for(45ms);
+    worker = std::async(std::launch::async, [&] { gate.checkpoint(job); });
+    assert(worker.wait_for(30ms) == std::future_status::timeout);
+    gate.playbackState(next, true); // notification must not shorten the rest
+    assert(worker.wait_for(30ms) == std::future_status::timeout);
+    gate.endPlayback(next); // foreground restores speed without waiting ~855ms
+    assert(worker.wait_for(2s) == std::future_status::ready);
+    next = gate.beginPlayback();
+    gate.playbackState(next, true);
+    gate.checkpoint(job);
     gate.playbackState(next, false); // buffering parks without cancelling
     worker = std::async(std::launch::async, [&] { gate.checkpoint(job); });
     gate.wait();
