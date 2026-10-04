@@ -53,7 +53,10 @@ void OfflineLibrary::load() {
     }
 }
 
-void OfflineLibrary::rebuild() { this->derived = offline::synthesizeAncestors(this->nodes); }
+void OfflineLibrary::rebuild() {
+    ++this->revision;
+    this->derived = offline::synthesizeAncestors(this->nodes);
+}
 
 void OfflineLibrary::writeMeta(const media::Item& item) const {
     try {
@@ -149,12 +152,23 @@ void OfflineLibrary::removeItem(const std::string& ratingKey) {
 }
 
 void OfflineLibrary::prune() {
-    // NOTE: must NOT be called while holding DownloadManager's lock — it queries
-    // DownloadManager::isDownloaded (its own lock) while holding ours.
-    auto& dm = DownloadManager::instance();
-    std::lock_guard<std::mutex> lock(this->mutex);
-    auto keep =
-        offline::survivors(this->nodes, [&dm](const std::string& k) { return dm.isDownloaded(k); });
+    // Never call DownloadManager under our mutex. Publish against the same
+    // local revision that was inspected, retrying if a concurrent put/remove
+    // changed the tree while we queried file state.
+    std::unique_lock<std::mutex> lock(this->mutex, std::defer_lock);
+    std::unordered_set<std::string> keep;
+    for (;;) {
+        lock.lock();
+        const auto version = this->revision;
+        const auto snapshot = this->nodes;
+        lock.unlock();
+        keep = offline::survivors(snapshot, [](const std::string& k) {
+            return DownloadManager::instance().isDownloaded(k);
+        });
+        lock.lock();
+        if (version == this->revision) break;
+        lock.unlock();
+    }
 
     std::vector<media::Item> kept;
     kept.reserve(this->nodes.size());

@@ -136,7 +136,12 @@ void Image::with(brls::Image* view, const std::string& url, int width, int heigh
 #endif
     }
 
-    if (shouldSubmit) ThreadPool::instance().submit([item](HTTP& s) { item->doRequest(s); });
+    if (shouldSubmit && !ThreadPool::instance().trySubmit(TaskPriority::Normal,
+            [item](HTTP& s) { item->doRequest(s); })) {
+        // Enqueue runs on the UI thread: release the view lifetime immediately
+        // on backpressure. Scroll recycling already cancels group transfers.
+        Image::clear(view);
+    }
 }
 #if defined(__PS4__)
 void Image::withLocal(brls::Image* view, const std::string& localPath, int width, int height) {
@@ -193,7 +198,12 @@ void Image::withLocal(brls::Image* view, const std::string& localPath, int width
 #endif
     }
 
-    if (shouldSubmit) ThreadPool::instance().submit([item](HTTP& s) { item->doRequest(s); });
+    if (shouldSubmit && !ThreadPool::instance().trySubmit(TaskPriority::Normal,
+            [item](HTTP& s) { item->doRequest(s); })) {
+        // Enqueue runs on the UI thread: release the view lifetime immediately
+        // on backpressure. Scroll recycling already cancels group transfers.
+        Image::clear(view);
+    }
 }
 #endif
 

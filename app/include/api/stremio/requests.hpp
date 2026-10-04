@@ -141,7 +141,7 @@ inline void startBatch(const std::shared_ptr<Batch>& batch) {
         std::string url = request.url;
         std::shared_ptr<Result> result = request.result;
         long timeout = batch->timeout;
-        ThreadPool::instance().submit([url, result, timeout](HTTP&) {
+        bool accepted = ThreadPool::instance().trySubmit(TaskPriority::Interactive, [url, result, timeout](HTTP&) {
             std::string body;
             std::exception_ptr error;
             try {
@@ -158,6 +158,14 @@ inline void startBatch(const std::shared_ptr<Batch>& batch) {
             }
             result->cv.notify_all();
         });
+        if (!accepted) {
+            {
+                std::lock_guard<std::mutex> lock(result->mutex);
+                result->error = std::make_exception_ptr(std::runtime_error("Stremio scheduler unavailable"));
+                result->done = true;
+            }
+            result->cv.notify_all();
+        }
     }
 }
 
