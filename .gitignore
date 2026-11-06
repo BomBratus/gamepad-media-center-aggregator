@@ -36,3 +36,6 @@ plezy/
 
 # Local staging directories used by PS4 CI caches.
 .ps4-cache/
+
+# Python bytecode caches from the UI test harness.
+__pycache__/
