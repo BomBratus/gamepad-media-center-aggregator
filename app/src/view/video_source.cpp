@@ -6,6 +6,7 @@
 #include "api/stremio/types.hpp"
 #include "api/stremio/backend.hpp"
 #include "api/stremio/playback_resume.hpp"
+#include "api/stremio/source_label.hpp"
 #include "tab/media_collection.hpp"
 #include "tab/media_series.hpp"
 #include "tab/media_movie.hpp"
@@ -62,7 +63,7 @@ void showStremioResumeSourcePicker(const media::Item& card, int64_t seekMs, bool
             for (size_t i = 0; i < detail.media.size(); ++i) {
                 const auto& source = detail.media[i];
                 if (!source.playable()) continue;
-                choices.push_back(source.detail.empty() ? source.label : source.label + " - " + source.detail);
+                choices.push_back(stremio::sourcePickerLabel(source));
                 playable.push_back((int)i);
             }
             if (playable.empty()) {
